@@ -1,0 +1,361 @@
+#!/usr/bin/env perl
+use warnings;
+use strict;
+#
+# Copyright (C) 2023 Hamish Coleman
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Requires
+#   libjson-perl
+#
+
+# Magic Markers
+#
+#%# family=auto
+#%# capabilities=autoconf suggest
+
+package JsonRPC;
+use warnings;
+use strict;
+
+use IO::Socket::IP;
+use JSON;
+
+sub new {
+    my $class = shift;
+    my $port = shift || 5644;
+    my $self = {};
+    bless($self, $class);
+
+    $self->{sock} = IO::Socket::IP->new(
+        PeerHost => '::1',
+        PeerPort => $port,
+        Type => SOCK_STREAM,
+    );
+    $self->{json} = JSON->new->utf8->relaxed->pretty->canonical;
+    $self->{tag} = 0;
+    $self->{debug} = 0;
+    return $self;
+}
+
+sub _tx {
+    my $self = shift;
+    my $msgline = shift;
+    if ($self->{debug}) {
+        print($msgline);
+    }
+    return $self->{sock}->send($msgline);
+}
+
+sub _rx {
+    my $self = shift;
+    my $tag = shift;
+
+    my $reply;
+    $self->{sock}->recv($reply,16384);
+    # TODO: we assume reply is smaller than this
+
+    my ($head, $body) = split(/\r\n\r\n/, $reply);
+    if (!defined($body)) {
+        return undef;
+    }
+
+    for (split(/\r\n/, $head)) {
+        if (m%^HTTP/\d+.\d+ (\d+)%) {
+            if ($1 != 200) {
+                # An error reply
+                return undef;
+            }
+        }
+        if (m%^Content-Length: (\d+)%) {
+            if (length($body) != $1) {
+                # our buffer overflowed
+                return undef;
+            }
+        }
+    }
+
+    if ($self->{debug}) {
+        print($body);
+    }
+
+    my $msg = $self->{json}->decode($body);
+
+    if ($msg->{id} != $tag) {
+        # mismatch message id
+        return undef;
+    }
+
+    if (!defined($msg->{result})) {
+        # must be an error
+        # TODO: an error channel
+        return undef;
+    }
+
+    return $msg->{result};
+}
+
+sub call {
+    my $self = shift;
+    my $method = shift;
+    my $tag = $self->{tag}++;
+
+    # TODO:
+    # Add a read cache
+
+    my $data = {
+        jsonrpc => "2.0",
+        id => $tag,
+        method => $method,
+        # params = xyzzy
+    };
+    my $data_str = $self->{json}->encode($data);
+    my $content_length = length($data_str);
+    my $msg = sprintf(
+        "POST /v1 HTTP/1.1\r\nContent-Length: %i\r\n\r\n%s",
+        $content_length,
+        $data_str
+    );
+
+    $self->_tx($msg);
+    return $self->_rx($tag);
+}
+
+1;
+
+package main;
+use warnings;
+use strict;
+
+my $config = {
+    edge_pkts => {
+        p2p_tx_pkt => {
+            label => 'Peer to Peer tx rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        p2p_rx_pkt => {
+            label => 'Peer to Peer rx rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        super_tx_pkt => {
+            label => 'Peer to Supernode tx rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        super_rx_pkt => {
+            label => 'Peer to Supernode rx rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        super_broadcast_tx_pkt => {
+            label => 'Broadcast to Supernode tx rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        super_broadcast_rx_pkt => {
+            label => 'Broadcast to Supernode rx rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        transop_tx_pkt => {
+            label => 'Transform tx rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        transop_rx_pkt => {
+            label => 'Transform rx rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+    },
+    edge_counts => {
+        edges => {
+            label => 'Current known peers',
+            type  => 'GAUGE',
+        },
+        supernodes => {
+            label => 'Current known supernodes',
+            type  => 'GAUGE',
+        },
+    },
+    supernode_pkts => {
+        errors_tx_pkt => {
+            label => 'Error rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        reg_super_tx_pkt => {
+            label => 'Connect rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        reg_super_nak => {
+            label => 'Connect error rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        forward_tx_pkt => {
+            label => 'Packets forwarded rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+        broadcast_tx_pkt => {
+            label => 'Broadcast packet rate',
+            type  => 'DERIVE',
+            min   => 0,
+        },
+    },
+    supernode_counts => {
+        edges => {
+            label => 'Current known edges',
+            type  => 'GAUGE',
+        },
+        communities => {
+            label => 'Current known communities',
+            type  => 'GAUGE',
+        },
+    },
+};
+
+my $fetchinfo = {
+    edge_pkts => {
+        port => 5644,
+        method => "get_packetstats",
+    },
+    edge_counts => {
+        port => 5644,
+        count => [
+            "get_edges",
+            "get_supernodes",
+        ],
+    },
+    supernode_pkts => {
+        port => 5645,
+        method => "get_packetstats",
+        rename_type => {
+            sn_fwd => "forward",
+            sn_broadcast => "broadcast",
+            sn_reg => "reg_super",
+            sn_errors => "errors",
+        },
+    },
+    supernode_counts => {
+        port => 5645,
+        count => [
+            "get_edges",
+            "get_communities",
+        ],
+    },
+};
+
+sub do_config {
+    my $rpc = shift;
+    my $name = shift;
+
+    print("graph_title n3n $name status\n");
+    print("graph_category network\n");
+    my @names;
+    while (my ($fieldname, $field) = each(%{$config->{$name}})) {
+        push @names, $fieldname;
+        while (my ($key, $val) = each(%{$field})) {
+            print($fieldname.'.'.$key," ",$val,"\n");
+        }
+    }
+
+    # Ensure stable order
+    print("graph_order ", join(' ', sort(@names)), "\n");
+}
+
+sub do_fetch {
+    my $rpc = shift;
+    my $name = shift;
+    my $db;
+
+    my $method = $fetchinfo->{$name}->{method};
+    if (defined($method)) {
+        $db = $rpc->call($method);
+        for my $row (@$db) {
+            my $type = $row->{type};
+            delete $row->{type};
+
+            $type = $fetchinfo->{$name}->{rename_type}->{$type};
+            next if (!defined($type));
+
+            while (my ($key, $val) = each(%{$row})) {
+                my $metricname = $type."_".$key;
+                print($metricname,".value ",$val,"\n");
+            }
+        }
+    }
+
+    my $count_tables = $fetchinfo->{$name}->{count};
+    if (defined($count_tables)) {
+        for my $table (@{$count_tables}) {
+            $db = $rpc->call($table);
+            print($table,".value ", scalar(@$db), "\n");
+        }
+    }
+}
+
+sub do_autoconf {
+    # quick check to see if this plugin should be enabled
+    if (`pgrep supernode`) {
+        print("yes\n");
+    } elsif (`pgrep edge`) {
+        print("yes\n");
+    } else {
+        print("no - neither edge nor supernode are running\n");
+    }
+}
+
+sub do_suggest {
+    my $ports = {};
+    if (`pgrep supernode`) {
+        $ports->{5645}=1;
+    }
+    if (`pgrep edge`) {
+        $ports->{5644}=1;
+    }
+
+    while (my ($name, $info) = each(%{$fetchinfo})) {
+        my $port = $info->{port};
+        next if (!defined($port)); # this not a real fetchinfo
+        next if (!defined($ports->{$port})); # not linked to a running daemon
+        print($name,"\n");
+    }
+}
+
+my $subc = {
+    'fetch' => \&do_fetch,
+    'config' => \&do_config,
+    'autoconf' => \&do_autoconf,
+    'suggest' => \&do_suggest,
+};
+
+sub main() {
+    my $name = $ARGV[1] || $0;
+    $name =~ s%^.*/n[23]n_([^/]+)%$1%;
+
+    # TODO:
+    # - support a unix domain socket here
+    # - including session name discovery and settting
+    #
+    my $port = $fetchinfo->{$name}->{port};
+    my $rpc = JsonRPC->new($port);
+
+    my $cmd = $ARGV[0];
+    if (!defined($cmd)) {
+        $cmd = 'fetch';
+    }
+
+    my $func = $subc->{$cmd};
+    if (!defined($func)) {
+        die("bad sub command");
+    }
+
+    return $func->($rpc, $name);
+}
+main();
+

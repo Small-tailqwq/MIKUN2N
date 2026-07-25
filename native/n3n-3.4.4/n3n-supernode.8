@@ -1,0 +1,105 @@
+.TH n3n-supernode 8  "5 Jan 2024" "version 3" "USER COMMANDS"
+.SH NAME
+n3n-supernode \- n3n supernode daemon
+.SH SYNOPSIS
+.B n3n-supernode
+[\fIoptions..\fR] [command] [\fIcommand args\fR]
+.br
+.B n3n-supernode start
+[\fIsessionname\fR]
+.br
+.B n3n-supernode --help
+.SH DESCRIPTION
+N3N is a peer-to-peer VPN system - it is the LAN you have when you have noLAN.
+
+The Supernode is a node introduction registry, broadcast conduit and packet
+relay node for the n3n system.
+
+Once it has the full config loaded, the supernode begins listening on the
+specified UDP port for node registrations, and other packets to route. The
+supernode can service any number of communities and routes packets only between
+members of the same community. The supernode does not hold the community
+encryption key and so cannot snoop or inject packets into the community.
+
+Supernode can service a number of n3n communities concurrently. Traffic does
+not cross between communities.
+
+All logging goes to stdout.
+
+.SH OPTIONS
+Some of the most common options also have a shortcut version and you can see
+all of them with:
+
+.RS
+.B n3n-supernode help options
+.RE
+.TP
+.SH OPTIONS
+.TP
+\fB\-O \fR<\fIsection\fR>.<\fIoption\fR>=<\fIvalue\fR>
+Sets any config option value.
+.TP
+\fB\-h\fR, \fB\--help\fR
+Show some quick usage notes.
+.TP
+\fB\-d\fR, \fB\-\-daemon\fR
+Fork and run as a daemon, instead of the default of running in foreground.
+This is ignored on windows.
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+increase logging verbosity
+
+.SH ALLOWED COMMUNITIES FILE
+Specified with \fB\-Osupernode.community_file=\fR option (or in a config file)
+This file is a plain text file.  Comments are introduced with a hash at the
+beginning of the line.  A line that begins with an asterisk is a user
+authentication definition and adds an allowed user to the most recently defined
+community.  Allowed communities can be specified with a regular expression.
+.PP
+Example community file:
+.PP
+.nf
+.RS
+# List of allowed communities
+mynetwork
+netleo
+* logan nHWum+r42k1qDXdIeH-WFKeylK5UyLStRzxofRNAgpG
+* sister HwHpPrdMft+38tFDDiunUds6927t0+zhCMMkQdJafcC
+.RE
+.fi
+.PP
+More details on creating the allowed communities file are found in the
+Communities.md and Authentication.md documentation included with this package.
+.SH ENVIRONMENT
+.TP
+.B N3N_FEDERATION
+set the federation name so it is not visible at the command line
+.SH EXAMPLES
+.TP
+.B n3n-supernode start -v
+Start supernode listening on default UDP port (7654) with verbose output.
+.PP
+.SH RESTART
+When supernode restarts it loses all registration information from associated
+edge nodes. It can take up to five minutes for the edge nodes to re-register
+and normal traffic flow to resume.
+.SH EXIT STATUS
+supernode is a daemon and any exit is an error
+.SH AUTHORS
+.TP
+Hamish Coleman
+hamish (at) zot.org - n3n maintainer
+.TP
+Luca Deri
+deri (at) ntop.org
+.TP
+Richard Andrews
+andrews (at) ntop.org
+.TP
+Don Bindner
+.SH SEE ALSO
+ifconfig(8) edge(8)
+.br
+the documentation contained in the source code
+.br
+the extensive documentation found in n3n's \fBdoc/\fR folder

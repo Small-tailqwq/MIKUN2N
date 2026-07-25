@@ -1,0 +1,17 @@
+[Unit]
+Description=n3n supernode process
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=n3n
+Group=n3n
+RuntimeDirectory=n3n
+ExecStart=/usr/sbin/n3n-supernode start
+Restart=on-abnormal
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+Alias=

@@ -1,0 +1,137 @@
+.TH "n3n_v3" 7 "Sep 27, 2021" "version 3" "Background"
+.SH NAME
+n3n-edge, n3nctl, n3n-supernode \- the n3n decentralised peer-to-peer network
+overlay VPN
+.SH DESCRIPTION
+n3n is a peer-to-peer network overlay or VPN system that provides layer 2 over
+layer 3 encapsulation with data transform capabilities such as encryption and
+compression. This guide also discusses the differences of version 3 of n3n from
+version 2.
+.SH PROTOCOLS
+n3n is aiming to remain protocol compatible with n2n-3.  n2n-3, in turn
+basically uses the same set of messages to communicate with edges and
+supernodes. However, due to slight packet format changes, the n2n-3 messages
+are not compatible with n2n-2. There is no backward compatibility for n2n-2.
+.SH ENCRYPTION
+n3n offers four different ciphers for payload encryption as well as optional
+header encryption. Earlier versions of n3n provided a mechanism using a key
+schedule which has been removed in n3n. A basic user authentication scheme
+relying on asymmetric cryptography has been added to n3n.
+
+n3n provides the following ciphers to chose from for payload encryption; more
+can be added as required:
+.TP
+.B (1) NULL
+Data is encapsulated unchanged. Useful for testing and high-performance, low
+sensitivity applications.
+.TP
+.B (2) TF-CTS
+Twofish AES candidate in CTS mode.
+.TP
+.B (3) AES-CTS
+AES in CTS mode with up to 256-bit key.
+.TP
+.B (4) CHACHA20
+ChaCha20, a well known stream cipher developped by Daniel J. Bernstein.
+.TP
+.B (5) SPECK-CTR
+A fast block cipher developped by the NSA used as stream cipher in CTR mode.
+.TP
+Full Header Encyption
+The optional full header encryption also encrypts packets' header which include
+some administrative data. In addition, it adds replay protection.
+.TP
+User Password Authentication
+n3n implements an optional user-password authentication scheme. A key
+generator assists in generating user's public keys to be stored at the
+supernode side.
+.SH COMPRESSION
+LZO for payload compression is an always available option at n3n. If compiled with
+zstdlib support, ZSTD is at optional service as well.
+.SH EXTENSIBILITY
+n3n decouples the data transform system from the core of the edge
+operation. This allows for easier addition of new data transform
+operations. n3n reserves some standard transform identifiers (such as TwoFish
+encryption) but allocates transform identifiers for user-defined
+transforms. This allows anyone to add to n3n new private transforms without
+breaking compatibility with the standard offering.
+.SH FEDERATED SUPERNODES
+n3n incorporates the capability of multiple supernodes to be federated.
+Federation acts transparently and balances the workload evenly among the
+federated supernodes. Supernodes keep track of edges connected to different
+supernodes and forward packets as required. This feature naturally supports
+fail-over and this increases redundancy and resilience.
+.P
+Information on additional supernodes is propagated to all edges. In addition,
+the n3n edge implementation allows multiple supernodes to be specified on the
+command line. Edges monitor the current supernode for responses to
+REGISTER_SUPER as well as PING messages. After three responses from current
+supernode are missed or when a better supernode in terms of significant lower workload
+is found, the edge tries to connect to another supernode. It cycles through the list
+f supernodes which over and over again is sorted according to reported workload.
+
+.SH MANAGEMENT CONSOLE
+Edge and supernode in n3n provide a JsonRPC management API. On a unix system,
+they both create Unix domain sockets in /run/n3n based on the session name
+given to the running daemon.  The script n3nctl can be used to query these, as
+well as generic curl commands, or - by enabling the TCP port - any web browser.
+
+.SH SUPERNODE AUTHENTICATION
+The supernode federation name serves as private key shared between the supernodes only.
+The corresponding public key can be provided to the edges.
+
+.SH MESSAGE SUMMARY
+The following message types work within n3n.
+.TP
+REGISTER_SUPER
+Sent from an edge to its local supernode to register its MAC with the community.
+Also, federated supernodes use this packet format to register to each other.
+.TP
+REGISTER_SUPER_ACK
+Sent from a supernode to an edge to confirm registration. This also carries the
+definition of the edge socket as seen at the supernode so NAT can be detected
+and described. Furthermore, it carries information about additional federated
+supernodes.
+.TP
+REGISTER_SUPER_NAK
+Supernode refusing to register an edge.
+.TP
+PACKET
+Encapsulated ethernet packets sent between edges. Supernodes forward or
+broadcast these and edges send them direct in peer-to-peer mode.
+.TP
+REGISTER
+A peer-to-peer mode registration request from one edge to another. Supernodes
+forward these to facilitate NAT crossing introductions.
+.TP
+REGISTER_ACK
+Complete peer-to-peer mode setup between two edges. These messages need to
+travel direct between edges.
+.TP
+QUERY_PEER
+Queries a supernode about another edge, especially its public socket in case of
+no peer-to-peer communication can be established. Additionally, it serves as PING
+to query supernodes about themselves.
+.TP
+PEER_INFO
+Answers the QUERY_PEER; it also covers the special case of the PING query, internally
+called PONG.
+.SH AUTHORS
+.TP
+Hamish Coleman
+hamish (at) zot.org - n3n maintainer
+.TP
+Richard Andrews
+andrews (at) ntop.org - n2n-1 maintainer and main author of n2n-2
+.TP
+Luca Deri
+deri (at) ntop.org - original author of n2n
+.TP
+Don Bindner
+(--) - significant contributions to n2n-1
+.SH SEE ALSO
+ifconfig(8) n3n-edge(8) n3n-supernode(8)
+.br
+the documentation contained in the source code
+.br
+the extensive documentation found in n3n's \fBdoc/\fR folder

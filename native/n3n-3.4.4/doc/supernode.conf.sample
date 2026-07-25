@@ -1,0 +1,21 @@
+#
+# The configuration file is basically an INI file, with multiple sections
+# and one option per line.  An equal sign '=' is used between the option
+# name and the value.
+#
+# This file contains a basic configuration example, please refer to the
+# help (edge help config) for the full description of all options.
+#
+
+[connection]
+#        Sets the UDP listening port.
+bind=7777
+
+[supernode]
+#        Optionally specifies the allowed communities as listed in community.list file.
+#community_file=/etc/n3n/community.list
+
+# If multiple supernodes ("supernode federation") is desired, the following
+# two options are needed:
+# federation = yoursecret
+# peer = other.node:7777

@@ -1,0 +1,31 @@
+INSTALL
+
+To build the programs:
+
+$ ./autogen.sh
+$ ./configure
+$ make
+
+To install the programs and man pages:
+
+$ make install
+
+or
+
+$ make CONFIG_PREFIX=/usr install
+
+Debian Package
+--------------
+
+1. ./autogen.sh
+2. ./configure
+3. make dpkg
+
+RPM Package
+-----------
+
+These steps should work with RPM based Linux distributions since rpmbuild was
+split from the rpm utility (c RedHat 9).
+
+1. cd packages/rpm/
+2. make

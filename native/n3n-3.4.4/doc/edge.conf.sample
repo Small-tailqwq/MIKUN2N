@@ -1,0 +1,41 @@
+#
+# The configuration file is basically an INI file, with multiple sections
+# and one option per line.  An equal sign '=' is used between the option
+# name and the value.
+#
+# This file contains a basic configuration example, please refer to the
+# help (edge help config) for the full description of all options.
+#
+
+[tuntap]
+# Specifies the name of the TUN interface.
+name=n3n0
+
+# Specifies the MAC address for the TAP interface (random otherwise).
+macaddr=DE:AD:BE:EF:99:99
+
+# Sets the interface address.
+#
+address=1.2.3.4
+
+# For DHCP use:
+#       address_mode=dhcp
+# and also
+#       [filter]
+#       allow_routing=true
+
+[community]
+# Specifies the n3n community name the edge belongs to.
+name=mynetwork
+
+# Sets the encryption key (ASCII). The environment variable N3N_KEY=<key>
+# can be used and will take precedence over the config file.
+key=mypassword
+
+
+# Specifies the supernode IP and port.
+supernode=7.8.9.0:7777
+
+[connection]
+# Sets the local UDP port to a fixed port.
+bind=50001

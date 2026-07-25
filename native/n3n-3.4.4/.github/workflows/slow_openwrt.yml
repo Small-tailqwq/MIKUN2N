@@ -1,0 +1,105 @@
+---
+name: Slow full Openwrt Build
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    branches:
+      - openwrt
+
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ipkg
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: openwrt
+
+    steps:
+      - name: Checkout openwrt
+        uses: actions/checkout@v4
+        with:
+          path: openwrt
+          repository: openwrt/openwrt
+
+      - name: Set openwrt ref
+        run: |
+          echo "OPENWRT_REF=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          git rev-parse --short HEAD
+
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          path: src
+          fetch-depth: 0
+
+      - name: Fix Checkout
+        run: |
+          git fetch --force --tags
+        working-directory: src
+
+      - name: Set ref
+        run: |
+          echo "N3N_REF=$(./scripts/version.sh)" >> $GITHUB_ENV
+          ./scripts/version.sh
+        working-directory: src
+
+      - name: Copy src package definition into openwrt
+        run: |
+          cp -r src/packages/openwrt openwrt/package/n3n
+        working-directory: ./
+
+      - name: Cache openwrt source downloads
+        uses: actions/cache@v3
+        with:
+          path: openwrt/dl
+          key: openwrt-dl-${{ env.OPENWRT_REF }}
+
+      - name: Setup openwrt config and environment
+        run: |
+          echo "CONFIG_TARGET_x86=y" >.config
+          echo "CONFIG_TARGET_x86_64=y" >>.config
+
+      - name: Add package to openwrt config
+        run: |
+          echo "CONFIG_PACKAGE_n3n-edge=m" >>.config
+          echo "CONFIG_PACKAGE_n3n-supernode=m" >>.config
+
+      - name: Build a full config from our stub file
+        run: |
+          make defconfig
+
+      - name: Download openwrt sources
+        run: |
+          make download
+
+      - name: Build openwrt build environment
+        run: |
+          make -j `nproc` tools/install toolchain/install
+
+      - name: Build dependancies
+        run: |
+          make -j `nproc` package/libs/libpcap/compile
+
+      - name: Build openwrt packages
+        env:
+          PKG_VERSION: ${{ env.N3N_REF }}
+        run: |
+          echo "Build for $PKG_VERSION"
+          export PKG_VERSION
+          make package/n3n/clean V=s
+          make package/n3n/prepare USE_SOURCE_DIR=$GITHUB_WORKSPACE/n3n V=s
+          make package/n3n/compile V=s
+
+# FIXME: add a way to run the test suite!
+#      - name: Run embedded tests
+#        run: make test
+
+      - name: Upload built artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: built-ipkgs
+          path: openwrt/bin/packages/*/base/*.ipk
