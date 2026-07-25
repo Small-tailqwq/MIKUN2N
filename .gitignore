@@ -1,0 +1,16 @@
+bin/
+obj/
+publish/
+dist/
+artifacts/
+logs/
+*.log
+*.user
+*.suo
+.vs/
+.claude/
+*.zip
+
+# Runtime/ ships third-party binaries intentionally (see CLAUDE.md) — do not ignore it.
+!Runtime/
+!Runtime/**

@@ -1,0 +1,20 @@
+[Unit]
+Description=MikuN2N dedicated n3n supernode
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/n3n/mikun2n-supernode.env
+ExecStart=/opt/mikun2n/n3n-3.4.4/sbin/n3n-supernode start mikun2n-supernode
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/n3n
+RuntimeDirectory=n3n/mikun2n-supernode
+
+[Install]
+WantedBy=multi-user.target

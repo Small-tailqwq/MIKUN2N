@@ -1,0 +1,604 @@
+using System.Net;
+using System.Text;
+using System.Diagnostics;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
+using MikuN2N.Models;
+using MikuN2N.Services;
+using Application = System.Windows.Application;
+using Brush = System.Windows.Media.Brush;
+using Color = System.Windows.Media.Color;
+using MessageBox = System.Windows.MessageBox;
+
+namespace MikuN2N;
+
+public partial class MainWindow : Window
+{
+    private static readonly Brush Gray = new SolidColorBrush(Color.FromRgb(170, 177, 192));
+    private static readonly Brush Blue = new SolidColorBrush(Color.FromRgb(67, 132, 235));
+    private static readonly Brush Amber = new SolidColorBrush(Color.FromRgb(230, 158, 52));
+    private static readonly Brush Green = new SolidColorBrush(Color.FromRgb(44, 180, 125));
+    private static readonly Brush Red = new SolidColorBrush(Color.FromRgb(226, 82, 89));
+    private static readonly Brush Nat1 = new SolidColorBrush(Color.FromRgb(44, 180, 125));
+    private static readonly Brush Nat2 = new SolidColorBrush(Color.FromRgb(53, 184, 197));
+    private static readonly Brush Nat12 = new SolidColorBrush(Color.FromRgb(42, 177, 158));
+    private static readonly Brush Nat3 = new SolidColorBrush(Color.FromRgb(230, 158, 52));
+    private static readonly Brush Nat4 = new SolidColorBrush(Color.FromRgb(226, 82, 89));
+    private static readonly Brush Nat1Soft = new SolidColorBrush(Color.FromArgb(42, 44, 180, 125));
+    private static readonly Brush Nat2Soft = new SolidColorBrush(Color.FromArgb(42, 53, 184, 197));
+    private static readonly Brush Nat12Soft = new SolidColorBrush(Color.FromArgb(42, 42, 177, 158));
+    private static readonly Brush Nat3Soft = new SolidColorBrush(Color.FromArgb(42, 230, 158, 52));
+    private static readonly Brush Nat4Soft = new SolidColorBrush(Color.FromArgb(42, 226, 82, 89));
+
+    private readonly SettingsStore _settingsStore = new();
+    private readonly EdgeController _edgeController = new();
+    private readonly TrayIconService _trayIcon;
+    private readonly EasterEggManager _easterEggs;
+    private readonly EasterEggVisualController _easterEggVisuals;
+    private AppSettings _settings;
+    private ConnectionSnapshot _lastSnapshot = new(
+        ConnectionState.Disconnected,
+        "尚未连接",
+        "填写昵称后点击连接，即可加入朋友们的虚拟局域网。");
+    private bool _allowClose;
+    private bool _closeInProgress;
+    private bool _shownTrayTip;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        Icon = AppIconService.Icon;
+        _easterEggs = ((App)Application.Current).EasterEggs;
+        _easterEggVisuals = new EasterEggVisualController(this, EasterEggOverlay, _easterEggs);
+        _easterEggs.JackpotActivated += EasterEggs_JackpotActivated;
+        Closed += (_, _) => _easterEggs.JackpotActivated -= EasterEggs_JackpotActivated;
+        SourceInitialized += (_, _) => ((App)Application.Current).ThemeManager.ApplyWindow(this);
+        VersionBadgeText.Text = $"v{BuildIdentity.Version}";
+        VersionBadgeText.ToolTip = $"MikuN2N 构建版本：{BuildIdentity.Version}";
+        _settings = _settingsStore.Load();
+        if (!Guid.TryParseExact(_settings.NodeId, "N", out _))
+        {
+            _settings.NodeId = Guid.NewGuid().ToString("N");
+        }
+        if (string.Equals(_settings.Server, "vps.example.com:3075", StringComparison.OrdinalIgnoreCase))
+        {
+            _settings.Server = "vps.example.com:3076";
+        }
+        ServerBox.Text = string.IsNullOrWhiteSpace(_settings.Server)
+            ? "vps.example.com:3076"
+            : _settings.Server;
+        CommunityBox.Text = string.IsNullOrWhiteSpace(_settings.Community)
+            ? "mygroup"
+            : _settings.Community;
+        NicknameBox.Text = _settings.Nickname;
+        RememberKeyBox.IsChecked = _settings.RememberKey;
+        KeyBox.Password = _settingsStore.LoadKey(_settings);
+
+        _edgeController.SnapshotChanged += EdgeController_SnapshotChanged;
+        _edgeController.LogReceived += EdgeController_LogReceived;
+        _trayIcon = new TrayIconService();
+        _trayIcon.ShowRequested += (_, _) => Dispatcher.InvokeAsync(ShowFromTray);
+        _trayIcon.SettingsRequested += (_, _) => Dispatcher.InvokeAsync(OpenSettings);
+        _trayIcon.ConnectionRequested += (_, _) => Dispatcher.InvokeAsync(() =>
+        {
+            ShowFromTray();
+            ConnectButton_Click(ConnectButton, new RoutedEventArgs());
+        });
+        _trayIcon.ExitRequested += (_, _) => Dispatcher.InvokeAsync(ExitApplicationAsync);
+        _trayIcon.Update(_lastSnapshot, false);
+        Closing += MainWindow_Closing;
+        UpdateTapAvailability();
+    }
+
+    private void CommunityBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (RoomNameText is null)
+        {
+            return;
+        }
+
+        var roomName = CommunityBox.Text.Trim();
+        RoomNameText.Text = $"房间：{(roomName.Length == 0 ? "—" : roomName)}";
+    }
+
+    private async void ConnectButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_edgeController.IsRunning)
+        {
+            ConnectButton.IsEnabled = false;
+            await _edgeController.StopAsync();
+            SetInputsEnabled(true);
+            ConnectButton.Content = "连接";
+            ConnectButton.IsEnabled = true;
+            return;
+        }
+
+        if (!TryValidate(out var error))
+        {
+            MessageBox.Show(this, error, "请检查连接信息", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var conflictingProcesses = EdgeController.FindConflictingEdgeProcesses();
+        if (conflictingProcesses.Count > 0)
+        {
+            var confirmation = new ConflictingProcessDialog(conflictingProcesses)
+            {
+                Owner = this
+            };
+            if (confirmation.ShowDialog() != true)
+            {
+                return;
+            }
+
+            ConnectButton.IsEnabled = false;
+            try
+            {
+                await EdgeController.TerminateConflictingEdgeProcessesAsync(
+                    conflictingProcesses.Select(process => process.ProcessId).ToArray());
+                LogBox.AppendText(
+                    $"[{DateTime.Now:HH:mm:ss}] 已结束 {conflictingProcesses.Count} 个确认的旧 n2n/n3n 进程。{Environment.NewLine}");
+            }
+            catch (Exception exception)
+            {
+                MessageBox.Show(
+                    this,
+                    exception.Message,
+                    "无法清理旧进程",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                return;
+            }
+            finally
+            {
+                ConnectButton.IsEnabled = true;
+            }
+        }
+
+        SaveSettings();
+        LogBox.AppendText($"{Environment.NewLine}===== 开始新的连接 {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====={Environment.NewLine}");
+        SetInputsEnabled(false);
+        ConnectButton.Content = "取消连接";
+
+        try
+        {
+            await _edgeController.StartAsync(
+                ServerBox.Text.Trim(),
+                CommunityBox.Text.Trim(),
+                NicknameBox.Text.Trim(),
+                _settings.NodeId,
+                KeyBox.Password);
+        }
+        catch (Exception exception)
+        {
+            SetInputsEnabled(true);
+            ConnectButton.Content = "重新连接";
+            ApplySnapshot(new ConnectionSnapshot(
+                ConnectionState.Error,
+                "无法开始连接",
+                exception.Message));
+        }
+    }
+
+    private bool TryValidate(out string error)
+    {
+        if (!EdgeController.HasTapAdapter())
+        {
+            TapWarningBorder.Visibility = Visibility.Visible;
+            error = "尚未安装 n2n 所需的虚拟网卡。请先点击“安装网络组件”，安装完成后再连接。";
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(NicknameBox.Text))
+        {
+            error = "请填写一个昵称，朋友们会用它辨认你。";
+            return false;
+        }
+        if (Encoding.UTF8.GetByteCount(NicknameBox.Text.Trim()) > 31)
+        {
+            error = "昵称太长，请缩短到 31 个英文字符或大约 10 个汉字以内。";
+            return false;
+        }
+        if (!TryParseServer(ServerBox.Text.Trim()))
+        {
+            error = "服务器格式不正确，应类似 vps.example.com:3075。";
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(CommunityBox.Text) ||
+            Encoding.UTF8.GetByteCount(CommunityBox.Text.Trim()) > 20 ||
+            CommunityBox.Text.Any(char.IsWhiteSpace))
+        {
+            error = "小组名称不能为空、不能包含空格，且最长为 20 个英文字符。";
+            return false;
+        }
+        if (KeyBox.Password.Any(character => character > 127))
+        {
+            error = "n2n 联机密钥只能使用英文、数字和常见英文符号。";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private async void InstallTapButton_Click(object sender, RoutedEventArgs e)
+    {
+        var installerPath = Path.Combine(AppContext.BaseDirectory, "Runtime", "tap-windows-installer.exe");
+        if (!File.Exists(installerPath))
+        {
+            MessageBox.Show(this, "程序包中缺少 TAP-Windows 安装器。", "程序包不完整",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        InstallTapButton.IsEnabled = false;
+        TapStatusText.Text = "安装程序正在运行，请按提示完成安装。";
+        try
+        {
+            using var installer = Process.Start(new ProcessStartInfo(installerPath)
+            {
+                UseShellExecute = true,
+                Verb = "runas"
+            });
+            if (installer is not null)
+            {
+                await installer.WaitForExitAsync();
+            }
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, $"无法启动安装程序：{exception.Message}", "安装失败",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            InstallTapButton.IsEnabled = true;
+            UpdateTapAvailability();
+        }
+    }
+
+    private void UpdateTapAvailability()
+    {
+        var installed = EdgeController.HasTapAdapter();
+        TapWarningBorder.Visibility = installed ? Visibility.Collapsed : Visibility.Visible;
+        TapStatusText.Text = installed
+            ? "虚拟网卡已就绪。"
+            : "首次使用请先安装，完成后就不需要重复操作。";
+    }
+
+    private static bool TryParseServer(string value)
+    {
+        var separator = value.LastIndexOf(':');
+        if (separator <= 0 || separator == value.Length - 1 ||
+            !int.TryParse(value[(separator + 1)..], out var port) || port is < 1 or > 65535)
+        {
+            return false;
+        }
+        var host = value[..separator];
+        return IPAddress.TryParse(host, out _) ||
+               Uri.CheckHostName(host) is UriHostNameType.Dns;
+    }
+
+    private void SaveSettings()
+    {
+        _settings = new AppSettings
+        {
+            Server = ServerBox.Text.Trim(),
+            Community = CommunityBox.Text.Trim(),
+            Nickname = NicknameBox.Text.Trim(),
+            NodeId = _settings.NodeId,
+            RememberKey = RememberKeyBox.IsChecked == true,
+            Theme = _settings.Theme,
+            CloseBehavior = _settings.CloseBehavior,
+            LogRetentionDays = _settings.LogRetentionDays
+        };
+        _settingsStore.Save(_settings, KeyBox.Password);
+    }
+
+    private void EdgeController_SnapshotChanged(object? sender, ConnectionSnapshot snapshot)
+    {
+        Dispatcher.InvokeAsync(() => ApplySnapshot(snapshot));
+    }
+
+    private void EdgeController_LogReceived(object? sender, string line)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            LogBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {line}{Environment.NewLine}");
+            LogBox.ScrollToEnd();
+        });
+    }
+
+    private void ApplySnapshot(ConnectionSnapshot snapshot)
+    {
+        _lastSnapshot = snapshot;
+        _trayIcon.Update(snapshot, _edgeController.IsRunning);
+        StatusTitle.Text = snapshot.Summary;
+        StatusDetail.Text = snapshot.Detail;
+        VirtualIpText.Text = snapshot.VirtualIp;
+        PeerCountText.Text = snapshot.State == ConnectionState.Connected && snapshot.PeerCount >= 0
+            ? snapshot.PeerCount.ToString()
+            : "—";
+        DirectCountText.Text = snapshot.State == ConnectionState.Connected && snapshot.DirectPeerCount >= 0
+            ? snapshot.DirectPeerCount.ToString()
+            : "—";
+        UpdateNatIndicator(snapshot);
+        UptimeText.Text = snapshot.Uptime is { } uptime
+            ? $"{(int)uptime.TotalHours:00}:{uptime.Minutes:00}:{uptime.Seconds:00}"
+            : "—";
+        var displayPeers = snapshot.Peers?.ToList() ?? [];
+        if (_easterEggs.IsJackpot && displayPeers.All(peer => peer.NodeId != "mikun2n-easter-isaac"))
+        {
+            displayPeers.Insert(0, new PeerSnapshot(
+                "mikun2n-easter-isaac",
+                "Isaac",
+                string.Empty,
+                _easterEggs.IsaacLatency,
+                DateTimeOffset.Now,
+                PeerConnectionMode.LanDirect));
+        }
+        PeersGrid.ItemsSource = displayPeers;
+        PeersEmptyText.Visibility = displayPeers.Count > 0
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
+        (StatusIndicator.Background, StatusGlyph.Text) = snapshot.State switch
+        {
+            ConnectionState.Connecting => (Blue, "…"),
+            ConnectionState.Reconnecting => (Amber, "↻"),
+            ConnectionState.Connected => (Green, "✓"),
+            ConnectionState.Error => (Red, "!"),
+            _ => (Gray, "○")
+        };
+
+        if (snapshot.State == ConnectionState.Reconnecting)
+        {
+            ConnectButton.Content = "断开";
+            SetInputsEnabled(false);
+        }
+        else if (snapshot.State == ConnectionState.Error)
+        {
+            ConnectButton.Content = _edgeController.IsRunning ? "断开并重试" : "重新连接";
+            SetInputsEnabled(!_edgeController.IsRunning);
+        }
+        else if (snapshot.State == ConnectionState.Disconnected)
+        {
+            ConnectButton.Content = "连接到 mygroup";
+        }
+
+        if (_easterEggs.IsJackpot)
+        {
+            Dispatcher.InvokeAsync(
+                () => _easterEggs.ApplyRainbow(this),
+                System.Windows.Threading.DispatcherPriority.Loaded);
+        }
+    }
+
+    private void PeerModeText_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement element ||
+            element.DataContext is not PeerSnapshot peer ||
+            peer.ConnectionMode is not (
+                PeerConnectionMode.Direct or
+                PeerConnectionMode.Relayed or
+                PeerConnectionMode.ForcedRelayed or
+                PeerConnectionMode.Punching))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var forceRelay = peer.ConnectionMode != PeerConnectionMode.ForcedRelayed;
+        var menuItem = new MenuItem
+        {
+            Header = forceRelay ? "强制使用 pSp 中继" : "取消强制中继，恢复自动 P2P",
+            IsCheckable = true,
+            IsChecked = !forceRelay
+        };
+        menuItem.Click += async (_, _) =>
+        {
+            menuItem.IsEnabled = false;
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await _edgeController.SetPeerRelayAsync(peer.VirtualIp, forceRelay, timeout.Token);
+            }
+            catch (Exception exception)
+            {
+                MessageBox.Show(
+                    this,
+                    $"无法切换该用户的链路：{exception.Message}",
+                    "链路切换失败",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+        };
+
+        var menu = new ContextMenu
+        {
+            PlacementTarget = element
+        };
+        menu.Items.Add(menuItem);
+        element.ContextMenu = menu;
+        menu.IsOpen = true;
+    }
+
+    private void UpdateNatIndicator(ConnectionSnapshot snapshot)
+    {
+        var natType = snapshot.State == ConnectionState.Connected
+            ? snapshot.NatType
+            : "—";
+        NatTypeText.Text = natType;
+
+        var selectedRanks = natType switch
+        {
+            "NAT1" => new[] { 1 },
+            "NAT2" => new[] { 2 },
+            "NAT1/2" => new[] { 1, 2 },
+            "NAT3" => new[] { 3 },
+            "NAT4" => new[] { 4 },
+            _ => []
+        };
+        var selected = selectedRanks.ToHashSet();
+        var legends = new[]
+        {
+            (Rank: 1, Border: Nat1LegendBorder, Overlay: Nat1MutedOverlay),
+            (Rank: 2, Border: Nat2LegendBorder, Overlay: Nat2MutedOverlay),
+            (Rank: 3, Border: Nat3LegendBorder, Overlay: Nat3MutedOverlay),
+            (Rank: 4, Border: Nat4LegendBorder, Overlay: Nat4MutedOverlay)
+        };
+        foreach (var legend in legends)
+        {
+            var isCurrent = selected.Contains(legend.Rank);
+            legend.Overlay.Visibility = isCurrent ? Visibility.Collapsed : Visibility.Visible;
+            legend.Border.BorderThickness = new Thickness(isCurrent ? 2 : 1);
+            legend.Border.Opacity = selected.Count == 0 ? 0.62 : 1;
+        }
+
+        (NatTypeBadge.Background, NatTypeBadge.BorderBrush, NatTypeText.Foreground, NatHealthDot.Foreground) =
+            natType switch
+            {
+                "NAT1" => (Nat1Soft, Nat1, Nat1, Nat1),
+                "NAT2" => (Nat2Soft, Nat2, Nat2, Nat2),
+                "NAT1/2" => (Nat12Soft, Nat12, Nat12, Nat12),
+                "NAT3" => (Nat3Soft, Nat3, Nat3, Nat3),
+                "NAT4" => (Nat4Soft, Nat4, Nat4, Nat4),
+                _ => (FindResource("SurfaceAlt") as Brush ?? Gray,
+                      FindResource("Border") as Brush ?? Gray,
+                      FindResource("TextMuted") as Brush ?? Gray,
+                      FindResource("TextMuted") as Brush ?? Gray)
+            };
+
+    }
+
+    private void EasterEggs_JackpotActivated(string result) =>
+        Dispatcher.InvokeAsync(() => ApplySnapshot(_lastSnapshot));
+
+    private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    private void OpenSettings()
+    {
+        ShowFromTray();
+        var window = new SettingsWindow(_settings) { Owner = this };
+        if (window.ShowDialog() != true)
+        {
+            return;
+        }
+
+        _settings.Theme = window.SelectedTheme;
+        _settings.CloseBehavior = window.SelectedCloseBehavior;
+        _settings.LogRetentionDays = window.SelectedLogRetentionDays;
+        ((App)Application.Current).ThemeManager.Apply(_settings.Theme);
+        ((App)Application.Current).LogCleanup.Configure(_settings.LogRetentionDays);
+        SaveSettings();
+    }
+
+    private void ShowFromTray()
+    {
+        // WPF throws from Show()/Visibility while a Closing event is in flight, even
+        // when that event cancelled the close. The window is already on screen in that
+        // case, so there is nothing to restore.
+        if (!IsVisible)
+        {
+            Show();
+        }
+        ShowInTaskbar = true;
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+        Activate();
+        Topmost = true;
+        Topmost = false;
+        Focus();
+    }
+
+    private void HideToTray()
+    {
+        ShowInTaskbar = false;
+        Hide();
+        if (!_shownTrayTip)
+        {
+            _shownTrayTip = true;
+            _trayIcon.ShowMinimizedTip();
+        }
+    }
+
+    private void SetInputsEnabled(bool enabled)
+    {
+        NicknameBox.IsEnabled = enabled;
+        KeyBox.IsEnabled = enabled;
+        RememberKeyBox.IsEnabled = enabled;
+        ServerBox.IsEnabled = enabled;
+        CommunityBox.IsEnabled = enabled;
+    }
+
+    private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_allowClose)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        if (_closeInProgress)
+        {
+            return;
+        }
+
+        var action = _settings.CloseBehavior;
+        if (action == ClosePreference.Ask)
+        {
+            var dialog = new CloseBehaviorDialog { Owner = this };
+            if (dialog.ShowDialog() != true)
+            {
+                return;
+            }
+            action = dialog.Selection;
+            _settings.CloseBehavior = action;
+            SaveSettings();
+        }
+
+        if (action == ClosePreference.MinimizeToTray)
+        {
+            HideToTray();
+            return;
+        }
+
+        // Let WPF finish cancelling this close before the teardown runs; window state
+        // changes are not allowed while the Closing event is still on the stack.
+        await Dispatcher.Yield(DispatcherPriority.Normal);
+        await ExitApplicationAsync();
+    }
+
+    private async Task ExitApplicationAsync()
+    {
+        if (_closeInProgress)
+        {
+            return;
+        }
+        _closeInProgress = true;
+        // Anything thrown from here would escape an async void handler and take the
+        // process down before n3n-edge is stopped, leaving it orphaned on the TAP
+        // adapter and blocking the next launch.
+        try
+        {
+            // Deliberately do not restore the window here. Exiting from the tray menu
+            // must not pull a minimized window back on screen just to close it.
+            IsEnabled = false;
+            await _edgeController.DisposeAsync();
+            _trayIcon.Dispose();
+        }
+        catch (Exception exception)
+        {
+            CrashLogService.Record("退出流程", exception, fatal: false);
+            EdgeController.KillLaunchedEdgeProcesses();
+        }
+
+        _allowClose = true;
+        Application.Current.Shutdown();
+    }
+}

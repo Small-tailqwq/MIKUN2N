@@ -1,0 +1,93 @@
+<Window x:Class="MikuN2N.ConflictingProcessDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="清理旧的联机进程"
+        Width="570" SizeToContent="Height" MaxHeight="620"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        ShowInTaskbar="False" Background="{DynamicResource WindowBackground}">
+  <Grid Margin="28">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="52" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+      <Border Width="42" Height="42" CornerRadius="21"
+              Background="{DynamicResource WarningSoft}"
+              BorderBrush="{DynamicResource Warning}" BorderThickness="1"
+              HorizontalAlignment="Left" VerticalAlignment="Top">
+        <TextBlock Text="!" FontSize="23" FontWeight="Bold"
+                   Foreground="{DynamicResource Warning}"
+                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+      </Border>
+      <StackPanel Grid.Column="1">
+        <TextBlock Text="发现仍在运行的联机进程" FontSize="21" FontWeight="Bold" />
+        <TextBlock Text="它们可能是上次异常退出后留下的，也可能属于另一个正在使用的客户端。"
+                   TextWrapping="Wrap" Margin="0,6,0,0" FontSize="12"
+                   Foreground="{DynamicResource TextSecondary}" />
+      </StackPanel>
+    </Grid>
+
+    <Border Grid.Row="1" Style="{StaticResource CardStyle}"
+            Padding="0" CornerRadius="12" Margin="0,20,0,0">
+      <ScrollViewer MaxHeight="190" VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding Processes}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Grid Margin="16,12">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                  <Border Width="30" Height="30" CornerRadius="9"
+                          Background="{DynamicResource AccentSoft}" Margin="0,0,10,0">
+                    <TextBlock Text="↯" FontSize="15" FontWeight="Bold"
+                               Foreground="{DynamicResource Accent}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                  </Border>
+                  <StackPanel>
+                    <TextBlock Text="{Binding ProcessName, StringFormat={}{0}.exe}"
+                               FontWeight="SemiBold" FontSize="13" />
+                    <TextBlock Text="{Binding StartedAt, StringFormat=启动于 {0:HH:mm:ss}}"
+                               FontSize="11" Margin="0,2,0,0"
+                               Foreground="{DynamicResource TextMuted}" />
+                  </StackPanel>
+                </StackPanel>
+                <Border Grid.Column="1" Background="{DynamicResource SurfaceAlt}"
+                        BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                        CornerRadius="8" Padding="9,4" VerticalAlignment="Center">
+                  <TextBlock Text="{Binding ProcessId, StringFormat=PID {0}}"
+                             FontFamily="Cascadia Mono, Consolas" FontSize="11"
+                             Foreground="{DynamicResource TextSecondary}" />
+                </Border>
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <Border Grid.Row="2" Background="{DynamicResource WarningSoft}"
+            BorderBrush="{DynamicResource Warning}" BorderThickness="1"
+            CornerRadius="10" Padding="13,10" Margin="0,14,0,0">
+      <TextBlock Text="结束这些进程会立即断开它们当前的虚拟网络连接。只有确认不再使用它们时才继续。"
+                 TextWrapping="Wrap" FontSize="12" />
+    </Border>
+
+    <StackPanel Grid.Row="3" Orientation="Horizontal"
+                HorizontalAlignment="Right" Margin="0,20,0,0">
+      <Button Content="取消" Width="92" Margin="0,0,10,0"
+              IsCancel="True" Click="Cancel_Click" />
+      <Button Content="结束旧进程并继续" MinWidth="168"
+              Style="{StaticResource PrimaryButton}"
+              IsDefault="True" Click="Confirm_Click" />
+    </StackPanel>
+  </Grid>
+</Window>
