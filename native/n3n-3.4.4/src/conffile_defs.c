@@ -179,7 +179,33 @@ static struct n3n_conf_option section_connection[] = {
                 "should be set as nat level + 1. For example, if we have 2 "
                 "layer nat in local, we should set it to 3.  In modern "
                 "networks, you may not be awwre of all the nat levels, so "
-                "this value should be set with caution.",
+                 "this value should be set with caution.",
+    },
+    {
+        .name = "mikun2n_punch",
+        .type = n3n_conf_bool,
+        .offset = offsetof(n2n_edge_conf_t, mikun2n_punch),
+        .desc = "Enable MikuN2N's bounded Tier 1 P2P fallback.",
+        .help = "Keeps native n3n P2P first, then runs a bounded layered "
+                "REGISTER spray only for peers still using pSp.",
+    },
+    {
+        .name = "mikun2n_punch_grace",
+        .type = n3n_conf_uint32,
+        .offset = offsetof(n2n_edge_conf_t, mikun2n_punch_grace),
+        .desc = "Seconds reserved for native n3n P2P before Tier 1.",
+    },
+    {
+        .name = "mikun2n_punch_budget",
+        .type = n3n_conf_uint32,
+        .offset = offsetof(n2n_edge_conf_t, mikun2n_punch_budget),
+        .desc = "Maximum Tier 1 duration per pSp peer in seconds.",
+    },
+    {
+        .name = "mikun2n_punch_max_packets",
+        .type = n3n_conf_uint32,
+        .offset = offsetof(n2n_edge_conf_t, mikun2n_punch_max_packets),
+        .desc = "Maximum Tier 1 REGISTER packets per pSp peer.",
     },
     {
         .name = "supernode_selection",

@@ -28,6 +28,67 @@ static HANDLE open_tap_device (const char *adapterid) {
                       0, OPEN_EXISTING, FILE_ATTRIBUTE_SYSTEM | FILE_FLAG_OVERLAPPED, 0));
 }
 
+/* MikuN2N: "netsh interface set interface ... enabled" only queues the request;
+ * the adapter needs seconds to re-initialize. Running the next netsh command
+ * straight away raced the adapter and aborted the edge on a freshly installed
+ * TAP, which initializes slower than a warm one. Retry instead of giving up. */
+static int mikun2n_system_retry (const char *cmd, int attempts, int delay_ms) {
+    int i, rc = -1;
+
+    for(i = 0; i < attempts; i++) {
+        rc = system(cmd);
+        if(rc == 0)
+            return 0;
+        Sleep(delay_ms);
+    }
+    return rc;
+}
+
+static HANDLE mikun2n_open_tap_retry (const char *adapterid, int attempts, int delay_ms) {
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    int i;
+
+    for(i = 0; i < attempts; i++) {
+        handle = open_tap_device(adapterid);
+        if(handle != INVALID_HANDLE_VALUE)
+            return handle;
+        Sleep(delay_ms);
+    }
+    return handle;
+}
+
+/* Returns 1 when the adapter registry entry already carries this MAC, so the
+ * disable/enable cycle can be skipped entirely. Rotating the MAC on every
+ * connect made Windows re-classify the TAP as a brand new (public) network,
+ * which silently re-blocked inbound ICMP. */
+static int mikun2n_reg_value_matches (HKEY key, const char *name, const char *mac_buf) {
+    char current[64] = {0};
+    unsigned long len = sizeof(current) - 1;
+
+    if(RegQueryValueEx(key, name, 0, 0, (unsigned char *)current, &len))
+        return 0;
+    return !_stricmp(current, mac_buf);
+}
+
+static int mikun2n_registry_mac_matches (const char *adapter_info_reg, const char *mac_buf) {
+    HKEY key;
+    int match;
+
+    if(RegOpenKeyEx(HKEY_LOCAL_MACHINE, (LPCSTR)adapter_info_reg, 0, KEY_READ, &key))
+        return 0;
+    /* Both names have to agree, because we always write both (see below). */
+    match = mikun2n_reg_value_matches(key, "MAC", mac_buf) &&
+            mikun2n_reg_value_matches(key, "NetworkAddress", mac_buf);
+    RegCloseKey(key);
+    return match;
+}
+
+static int mikun2n_name_is_blank (const char *name) {
+    while(*name == ' ' || *name == '\t')
+        name++;
+    return *name == '\0';
+}
+
 /* ***************************************************** */
 
 static void iterate_win_network_adapters (
@@ -68,6 +129,10 @@ static void iterate_win_network_adapters (
         if(err)
             continue;
 
+        /* An adapter whose connection name is blank cannot be driven through
+         * netsh, so never select it - fall through to the next candidate. */
+        if(mikun2n_name_is_blank(adapter.adaptername))
+            continue;
 
         adapter.handle = open_tap_device(adapter.adapterid);
 
@@ -163,20 +228,47 @@ static void set_interface_mac (struct tuntap_dev *device, const char *mac_str) {
         exit(EXIT_FAILURE);
     }
 
+    /* Nothing to apply when the adapter already carries this MAC. Skipping
+     * spares the adapter a disable/enable cycle on every single connect. */
+    if(mikun2n_registry_mac_matches(adapter_info_reg, mac_buf))
+        return;
+
+    /* "MAC" is a non-standard value name that only some TAP forks honour; the
+     * stock OpenVPN tap-windows driver reads the standard NDIS "NetworkAddress".
+     * Upstream wrote only "MAC", so on a stock TAP the requested address was
+     * silently ignored and the edge kept registering under the adapter's built-in
+     * MAC - which made MAC rotation (the way out of a supernode registration that
+     * has not been released yet) a no-op there. Write both. */
     _snprintf(cmd, sizeof(cmd),
               "reg add HKEY_LOCAL_MACHINE\\%s /v MAC /d %s /f > nul", adapter_info_reg, mac_buf);
+    system(cmd);
+    _snprintf(cmd, sizeof(cmd),
+              "reg add HKEY_LOCAL_MACHINE\\%s /v NetworkAddress /d %s /f > nul",
+              adapter_info_reg, mac_buf);
     system(cmd);
 
     /* Put down then up again to apply */
     CloseHandle(device->device_handle);
     _snprintf(cmd, sizeof(cmd), "netsh interface set interface \"%s\" disabled > nul", device->ifName);
-    system(cmd);
+    mikun2n_system_retry(cmd, 3, 500);
     _snprintf(cmd, sizeof(cmd), "netsh interface set interface \"%s\" enabled > nul", device->ifName);
-    system(cmd);
+    mikun2n_system_retry(cmd, 3, 500);
 
-    device->device_handle = open_tap_device(device->device_name);
+    /* Wait for the adapter to finish re-initializing before anyone touches it. */
+    device->device_handle = mikun2n_open_tap_retry(device->device_name, 20, 500);
+    if(device->device_handle == INVALID_HANDLE_VALUE) {
+        /* The enable may have been rejected (some systems refuse the netsh name
+         * that Get-NetAdapter reports). Try once more before giving up, and never
+         * leave the adapter disabled behind us. */
+        printf("Reopening TAP device \"%s\" failed, retrying enable\n", device->device_name);
+        fflush(stdout);
+        _snprintf(cmd, sizeof(cmd), "netsh interface set interface \"%s\" enabled > nul", device->ifName);
+        mikun2n_system_retry(cmd, 3, 1000);
+        device->device_handle = mikun2n_open_tap_retry(device->device_name, 20, 500);
+    }
     if(device->device_handle == INVALID_HANDLE_VALUE) {
         printf("Reopening TAP device \"%s\" failed\n", device->device_name);
+        fflush(stdout);
         exit(EXIT_FAILURE);
     }
 }
@@ -214,6 +306,11 @@ int open_wintap (struct tuntap_dev *device,
     char cmd[256];
     DWORD len;
     ULONG status = TRUE;
+
+    /* stdout is a pipe when the edge runs as a managed child process, so it is
+     * fully buffered and every diagnostic below is lost if this function aborts.
+     * Unbuffer it: the adapter setup messages are the only clue we get. */
+    setvbuf(stdout, NULL, _IONBF, 0);
 
     memset(device, 0, sizeof(struct tuntap_dev));
     device->device_handle = INVALID_HANDLE_VALUE;
@@ -287,6 +384,19 @@ int open_wintap (struct tuntap_dev *device,
 
     /* ****************** */
 
+    /* Set driver media status to 'connected' (i.e. bring the interface up) BEFORE
+     * configuring the address. Upstream did this last, so netsh had to configure a
+     * media-disconnected adapter: it applied the address but returned a non-zero
+     * exit code, and GetAdaptersInfo omitted the adapter entirely. A TAP kept alive
+     * by a third-party service happened to work; a freshly installed one never did. */
+    if(!DeviceIoControl(device->device_handle, TAP_IOCTL_SET_MEDIA_STATUS,
+                        &status, sizeof (status),
+                        &status, sizeof (status), &len, NULL)) {
+        printf("ERROR: Unable to enable TAP adapter\n");
+        fflush(stdout);
+        return -1;
+    }
+
     if(address_mode == TUNTAP_IP_MODE_DHCP) {
         _snprintf(cmd, sizeof(cmd),
                   "netsh interface ip set address \"%s\" dhcp > nul",
@@ -303,10 +413,15 @@ int open_wintap (struct tuntap_dev *device,
         );
     }
 
-    if(system(cmd) == 0) {
+    /* The adapter is already media-connected by now, so a couple of retries are
+     * only there to ride out a freshly installed TAP still settling. A persistent
+     * failure here is real - most often the address is still assigned to another
+     * adapter ("The object already exists"), which the supervisor resolves. */
+    if(mikun2n_system_retry(cmd, 6, 500) == 0) {
         device->ip_addr = v4subnet.net_addr;
     } else {
         printf("ERROR: Unable to set IP address [%s]\n", cmd);
+        fflush(stdout);
         return -1;
     }
 
@@ -356,6 +471,13 @@ int open_wintap (struct tuntap_dev *device,
 
         // set new value
         Row->Metric = metric;
+        /* MikuN2N: without clearing this the requested metric is silently discarded -
+         * Windows keeps deriving the metric from link speed while UseAutomaticMetric
+         * is set. It matters because 224.0.0.0/4 and 255.255.255.255/32 exist on every
+         * interface with the same route metric, and the tie is broken by the interface
+         * metric: at the automatic value the physical NIC wins and LAN game discovery
+         * broadcasts leave through it instead of the tunnel. */
+        Row->UseAutomaticMetric = FALSE;
 
         // store
         Row->SitePrefixLength = 0; /* if not set to zero, following function call fails... */
@@ -367,14 +489,6 @@ int open_wintap (struct tuntap_dev *device,
 
     /* ****************** */
 
-
-    /* set driver media status to 'connected' (i.e. set the interface up) */
-    if(!DeviceIoControl(device->device_handle, TAP_IOCTL_SET_MEDIA_STATUS,
-                        &status, sizeof (status),
-                        &status, sizeof (status), &len, NULL)) {
-        printf("ERROR: Unable to enable TAP adapter\n");
-        return -1;
-    }
 
     /*
      * Initialize overlapped structures
@@ -474,6 +588,9 @@ void tuntap_close (struct tuntap_dev *tuntap) {
 
         // restore original value
         Row->Metric = tuntap->metric_original;
+        /* Hand the interface back to Windows' automatic metric, or it would stay
+         * pinned to the original number after the tunnel is gone. */
+        Row->UseAutomaticMetric = TRUE;
 
         // store
         Row->SitePrefixLength = 0; /* if not set to zero, following function call fails... */

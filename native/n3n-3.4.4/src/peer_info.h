@@ -18,6 +18,11 @@
 /* flag used in add_sn_to_list_by_mac_or_sock */
 enum skip_add {SN_ADD = 0, SN_ADD_SKIP = 1, SN_ADD_ADDED = 2};
 
+#define MIKUN2N_PUNCH_ROLE_NONE 0
+#define MIKUN2N_PUNCH_ROLE_ANCHOR 1
+#define MIKUN2N_PUNCH_ROLE_SCANNER 2
+#define MIKUN2N_PUNCH_ROLE_LAYERED 3
+
 struct peer_info {
     n2n_mac_t mac_addr;
     bool purgeable;
@@ -39,6 +44,17 @@ struct peer_info {
     char *hostname;
     time_t uptime;
     n2n_version_t version;
+    time_t punch_started;
+    uint64_t punch_last_ms;
+    uint32_t punch_attempt;
+    uint32_t punch_packets;
+    uint16_t punch_observed_port;
+    int16_t punch_drift;
+    uint8_t punch_exhausted;
+    uint8_t punch_role;
+    uint16_t punch_band_lo;
+    uint16_t punch_band_hi;
+    uint8_t force_relay;
 
     UT_hash_handle hh;     /* makes this structure hashable */
 };

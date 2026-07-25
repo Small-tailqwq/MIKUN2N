@@ -466,6 +466,10 @@ typedef struct n2n_edge_conf {
     char                     *encrypt_key;
     uint32_t register_interval;                      /**< Interval for supernode registration, also used for UDP NAT hole punching. */
     uint32_t register_ttl;                           /**< TTL for registration packet when UDP NAT hole punching through supernode. */
+    bool mikun2n_punch;                              /**< Enable the bounded MikuN2N Tier 1 fallback. */
+    uint32_t mikun2n_punch_grace;                    /**< Native n3n P2P grace period in seconds. */
+    uint32_t mikun2n_punch_budget;                   /**< Tier 1 fallback duration in seconds. */
+    uint32_t mikun2n_punch_max_packets;              /**< Per-peer Tier 1 packet budget. */
     struct sockaddr *bind_address;                   /**< The address to bind to if provided */
     n2n_sock_t preferred_sock;                       /**< propagated local sock for better p2p in LAN (-e) */
     uint32_t mgmt_port;     // TODO: ports are actually uint16_t
@@ -539,6 +543,28 @@ typedef struct n2n_tcp_connection {
 
 typedef struct slots slots_t;
 
+typedef struct mikun2n_nat_state {
+    char type[24];
+    char mapping[32];
+    char filtering[32];
+    char public_ip[64];
+    uint16_t public_port;
+    uint16_t observed_port_a;
+    uint16_t observed_port_b;
+    uint8_t probe_mask;
+    uint8_t cross_reply;
+    uint8_t complete;
+    uint8_t unavailable;
+    uint8_t multi_public_ip;
+    uint8_t cross_probe_attempts;
+    time_t started_at;
+    time_t last_probe_at;
+    time_t cross_probe_at;
+    uint32_t probe_round;
+} mikun2n_nat_state_t;
+
+#define MIKUN2N_FORCED_RELAY_MAX 64
+
 struct n3n_runtime_data {
     n2n_edge_conf_t conf;
 
@@ -582,6 +608,10 @@ struct n3n_runtime_data {
     time_t last_sn_fwd;       /* Time when last message was forwarded. */
     time_t last_sn_reg;       /* Time when last REGISTER_SUPER was received. */
     time_t start_time;                                                   /**< For calculating uptime */
+    mikun2n_nat_state_t mikun2n_nat;                                     /**< MikuN2N data-socket NAT behavior probe. */
+    in_addr_t mikun2n_forced_relay_ips[MIKUN2N_FORCED_RELAY_MAX];         /**< Session-local forced relay policy. */
+    n2n_mac_t mikun2n_forced_relay_macs[MIKUN2N_FORCED_RELAY_MAX];        /**< Same policy keyed by edge MAC; a peer learned from a data packet has no known virtual IPv4, but always has a MAC. */
+    uint8_t mikun2n_forced_relay_count;
 
 
 

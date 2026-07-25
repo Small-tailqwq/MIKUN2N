@@ -428,6 +428,121 @@ static void jsonrpc_stop (char *id, struct n3n_runtime_data *eee, conn_t *conn, 
     jsonrpc_1uint(id, conn, *eee->keep_running);
 }
 
+/* Does this peer entry carry either key of the requested policy? A peer entry
+ * created from a data PACKET has no dev_addr - only a REGISTER carries one - so
+ * matching on the virtual IPv4 alone silently misses exactly the peers a manual
+ * pSp request is aimed at, leaving the relay one-sided. */
+static int mikun2n_relay_target_matches (const struct peer_info *peer,
+                                         uint32_t target,
+                                         const n2n_mac_t mac,
+                                         int have_mac) {
+    if(peer->dev_addr.net_addr != 0 && peer->dev_addr.net_addr == target)
+        return 1;
+    if(have_mac && !memcmp(peer->mac_addr, mac, sizeof(n2n_mac_t)))
+        return 1;
+    return 0;
+}
+
+static void jsonrpc_set_peer_relay (char *id, struct n3n_runtime_data *eee, conn_t *conn, const char *params) {
+    char address[64] = {0};
+    char enabled[8] = {0};
+    char mac_text[32] = {0};
+    struct peer_info *peer, *tmp;
+    in_addr_t network_address;
+    n2n_mac_t mac = {0};
+    int have_mac = 0;
+    uint32_t target;
+    uint32_t changed = 0;
+    int force_relay;
+    uint8_t policy_index;
+
+    if(!auth_check(eee, conn)) {
+        auth_request(conn);
+        return;
+    }
+    /* The MAC is optional so an older caller keeps working, but MikuN2N always
+     * sends it: it reads the peer's MAC straight out of get_edges, which is the
+     * one identifier every peer entry is guaranteed to have. */
+    if(!params ||
+       (sscanf(params, " [ \"%63[0-9.]\" , %7[a-z] , \"%31[0-9a-fA-F:]\" ]",
+               address, enabled, mac_text) != 3 &&
+        sscanf(params, " [ \"%63[0-9.]\" , %7[a-z] ]", address, enabled) != 2) ||
+       (strcmp(enabled, "true") && strcmp(enabled, "false"))) {
+        jsonrpc_error(id, conn, 400, "expected [IPv4, boolean, MAC?]", 0);
+        return;
+    }
+
+    network_address = inet_addr(address);
+    if(network_address == INADDR_NONE) {
+        jsonrpc_error(id, conn, 400, "invalid IPv4 address", 0);
+        return;
+    }
+    target = ntohl(network_address);
+    force_relay = !strcmp(enabled, "true");
+    /* str2mac reads a fixed 17-char layout without validating it, so check the
+     * length here rather than letting it walk past a short string. */
+    if(strlen(mac_text) == 17 && str2mac(mac, mac_text) == 0 && !is_null_mac(mac))
+        have_mac = 1;
+
+    for(policy_index = 0; policy_index < eee->mikun2n_forced_relay_count; policy_index++) {
+        if(eee->mikun2n_forced_relay_ips[policy_index] == target)
+            break;
+        if(have_mac && !memcmp(eee->mikun2n_forced_relay_macs[policy_index], mac, sizeof(n2n_mac_t)))
+            break;
+    }
+    if(force_relay && policy_index == eee->mikun2n_forced_relay_count) {
+        if(eee->mikun2n_forced_relay_count >= MIKUN2N_FORCED_RELAY_MAX) {
+            jsonrpc_error(id, conn, 507, "forced relay list is full", 0);
+            return;
+        }
+        eee->mikun2n_forced_relay_ips[eee->mikun2n_forced_relay_count] = target;
+        memcpy(eee->mikun2n_forced_relay_macs[eee->mikun2n_forced_relay_count],
+               mac, sizeof(n2n_mac_t));
+        eee->mikun2n_forced_relay_count++;
+    } else if(force_relay) {
+        /* Refresh both keys: the supernode hands out a new virtual IPv4 on
+         * reconnect, and a peer that restarts comes back on a different MAC. */
+        eee->mikun2n_forced_relay_ips[policy_index] = target;
+        if(have_mac)
+            memcpy(eee->mikun2n_forced_relay_macs[policy_index], mac, sizeof(n2n_mac_t));
+    } else if(policy_index < eee->mikun2n_forced_relay_count) {
+        eee->mikun2n_forced_relay_count--;
+        eee->mikun2n_forced_relay_ips[policy_index] =
+            eee->mikun2n_forced_relay_ips[eee->mikun2n_forced_relay_count];
+        memcpy(eee->mikun2n_forced_relay_macs[policy_index],
+               eee->mikun2n_forced_relay_macs[eee->mikun2n_forced_relay_count],
+               sizeof(n2n_mac_t));
+    }
+
+    HASH_ITER(hh, eee->pending_peers, peer, tmp) {
+        if(!mikun2n_relay_target_matches(peer, target, mac, have_mac))
+            continue;
+        peer->force_relay = force_relay;
+        if(!force_relay) {
+            peer->punch_started = 0;
+            peer->punch_last_ms = 0;
+            peer->punch_attempt = 0;
+            peer->punch_packets = 0;
+            peer->punch_exhausted = 0;
+            peer->punch_role = MIKUN2N_PUNCH_ROLE_NONE;
+        }
+        changed++;
+    }
+    HASH_ITER(hh, eee->known_peers, peer, tmp) {
+        if(!mikun2n_relay_target_matches(peer, target, mac, have_mac))
+            continue;
+        peer->force_relay = force_relay;
+        changed++;
+    }
+    /* Report the real match count. The policy list itself is always updated, so
+     * zero only means no peer entry carries either key yet - the caller needs to
+     * see that to tell a recorded policy from an effective one. */
+    traceEvent(TRACE_NORMAL, "MikuN2N peer %s%s%s forced relay=%s (%u peer entries updated)",
+               address, have_mac ? "/" : "", have_mac ? mac_text : "",
+               force_relay ? "on" : "off", changed);
+    jsonrpc_1uint(id, conn, changed);
+}
+
 static bool jsonrpc_error_overflow (char *id, conn_t *conn, int count) {
     if(!sb_overflowed(conn->request)) {
         // Nothing to do
@@ -579,11 +694,45 @@ static void jsonrpc_get_communities (char *id, struct n3n_runtime_data *eee, con
     jsonrpc_result_tail(conn, 200);
 }
 
+static int mikun2n_peer_forced_relay (const struct n3n_runtime_data *eee,
+                                      const struct peer_info *peer) {
+    uint8_t i;
+
+    for(i = 0; i < eee->mikun2n_forced_relay_count; i++) {
+        if(peer->dev_addr.net_addr != 0 &&
+           eee->mikun2n_forced_relay_ips[i] == peer->dev_addr.net_addr)
+            return 1;
+        if(!is_null_mac(eee->mikun2n_forced_relay_macs[i]) &&
+           !memcmp(peer->mac_addr, eee->mikun2n_forced_relay_macs[i], sizeof(n2n_mac_t)))
+            return 1;
+    }
+    return 0;
+}
+
 static void jsonrpc_get_edges_row (strbuf_t **reply, struct peer_info *peer, const char *mode, const char *community) {
     macstr_t mac_buf;
     n2n_sock_str_t sockbuf;
     n2n_sock_str_t sockbuf2;
     dec_ip_bit_str_t ip_bit_str = {'\0'};
+    const char *punch_state = "native";
+    const char *punch_role = "none";
+    uint32_t punch_elapsed = 0;
+
+    if(peer->force_relay) {
+        punch_state = "forced_relay";
+    } else if(!strcmp(mode, "p2p")) {
+        punch_state = "direct";
+    } else if(peer->punch_exhausted) {
+        punch_state = "relay";
+    } else if(peer->punch_started) {
+        punch_state = "punching";
+        punch_elapsed = (uint32_t)max(0, (int)(time(NULL) - peer->punch_started));
+    }
+    switch(peer->punch_role) {
+        case MIKUN2N_PUNCH_ROLE_ANCHOR: punch_role = "anchor"; break;
+        case MIKUN2N_PUNCH_ROLE_SCANNER: punch_role = "scanner"; break;
+        case MIKUN2N_PUNCH_ROLE_LAYERED: punch_role = "layered"; break;
+    }
 
     sb_reprintf(reply,
                 "{"
@@ -602,7 +751,15 @@ static void jsonrpc_get_edges_row (strbuf_t **reply, struct peer_info *peer, con
                 "\"time_alloc\":%u,"
                 "\"last_p2p\":%u,"
                 "\"last_sent_query\":%u,"
-                "\"last_seen\":%u},",
+                "\"last_seen\":%u,"
+                "\"punch_state\":\"%s\","
+                "\"punch_elapsed\":%u,"
+                "\"punch_attempt\":%u,"
+                "\"punch_packets\":%u,"
+                "\"punch_role\":\"%s\","
+                "\"punch_band_lo\":%u,"
+                "\"punch_band_hi\":%u,"
+                "\"force_relay\":%s},",
                 mode,
                 community,
                 (peer->dev_addr.net_addr == 0) ? "" : ip_subnet_to_str(ip_bit_str, &peer->dev_addr),
@@ -618,7 +775,15 @@ static void jsonrpc_get_edges_row (strbuf_t **reply, struct peer_info *peer, con
                 (uint32_t)peer->time_alloc,
                 (uint32_t)peer->last_p2p,
                 (uint32_t)peer->last_sent_query,
-                (uint32_t)peer->last_seen
+                (uint32_t)peer->last_seen,
+                punch_state,
+                punch_elapsed,
+                peer->punch_attempt,
+                peer->punch_packets,
+                punch_role,
+                peer->punch_band_lo,
+                peer->punch_band_hi,
+                peer->force_relay ? "true" : "false"
     );
 
     // TODO: add a proto: TCP|UDP item to the output
@@ -638,6 +803,7 @@ static void jsonrpc_get_edges (char *id, struct n3n_runtime_data *eee, conn_t *c
 
     // dump nodes with forwarding through supernodes
     HASH_ITER(hh, eee->pending_peers, peer, tmpPeer) {
+        peer->force_relay = mikun2n_peer_forced_relay(eee, peer);
         if(index < offset) {
             index++;
             continue;
@@ -662,6 +828,7 @@ static void jsonrpc_get_edges (char *id, struct n3n_runtime_data *eee, conn_t *c
 
     // dump peer-to-peer nodes
     HASH_ITER(hh, eee->known_peers, peer, tmpPeer) {
+        peer->force_relay = mikun2n_peer_forced_relay(eee, peer);
         if(index < offset) {
             index++;
             continue;
@@ -671,7 +838,7 @@ static void jsonrpc_get_edges (char *id, struct n3n_runtime_data *eee, conn_t *c
         jsonrpc_get_edges_row(
             &conn->request,
             peer,
-            "p2p",
+            peer->force_relay ? "pSp" : "p2p",
             eee->conf.community_name
         );
 
@@ -713,6 +880,50 @@ static void jsonrpc_get_edges (char *id, struct n3n_runtime_data *eee, conn_t *c
 
     jsonrpc_listend_hack(conn, "]");
     jsonrpc_result_tail(conn, 200);
+}
+
+static void jsonrpc_get_nat (char *id, struct n3n_runtime_data *eee, conn_t *conn, const char *params) {
+    mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
+    const char *strategy = "native-first";
+
+    if(nat->complete && !strcmp(nat->type, "NAT4"))
+        strategy = "tier1-cone-escape";
+    else if(nat->complete)
+        strategy = "tier1-layered-scan";
+
+    jsonrpc_result_head(id, conn);
+    sb_reprintf(
+        &conn->request,
+        "[{"
+        "\"type\":\"%s\","
+        "\"mapping\":\"%s\","
+        "\"filtering\":\"%s\","
+        "\"public_ip\":\"%s\","
+        "\"public_port\":%u,"
+        "\"observed_port_a\":%u,"
+        "\"observed_port_b\":%u,"
+        "\"available\":%s,"
+        "\"complete\":%s,"
+        "\"probe_mask\":%u,"
+        "\"probe_round\":%u,"
+        "\"cross_probe_attempts\":%u,"
+        "\"strategy\":\"%s\"}]",
+        nat->type[0] ? nat->type : "detecting",
+        nat->mapping[0] ? nat->mapping : "unknown",
+        nat->filtering[0] ? nat->filtering : "unknown",
+        nat->public_ip,
+        nat->public_port,
+        nat->observed_port_a,
+        nat->observed_port_b,
+        nat->unavailable ? "false" : "true",
+        nat->complete ? "true" : "false",
+        nat->probe_mask,
+        nat->probe_round,
+        nat->cross_probe_attempts,
+        strategy
+    );
+    jsonrpc_result_tail(conn, 200);
+    (void)params;
 }
 
 static void jsonrpc_get_info (char *id, struct n3n_runtime_data *eee, conn_t *conn, const char *params) {
@@ -981,6 +1192,7 @@ static const struct mgmt_jsonrpc_method jsonrpc_methods[] = {
     { "get_communities", jsonrpc_get_communities, "Show current communities" },
     { "get_edges", jsonrpc_get_edges, "List current edges/peers" },
     { "get_info", jsonrpc_get_info, "Provide basic edge information" },
+    { "get_nat", jsonrpc_get_nat, "Show MikuN2N NAT behavior probe" },
     { "get_mac", jsonrpc_get_mac, "Show known mac addresses" },
     { "get_packetstats", jsonrpc_get_packetstats, "traffic counters" },
     { "get_supernodes", jsonrpc_get_supernodes, "List current supernodes" },
@@ -990,6 +1202,7 @@ static const struct mgmt_jsonrpc_method jsonrpc_methods[] = {
     { "help.events", jsonrpc_help_events, "Show available event topics" },
     { "post.test", jsonrpc_post_test, "Send a test event" },
     { "reload_communities", jsonrpc_reload_communities, "Reloads communities and user's public keys" },
+    { "set_peer_relay", jsonrpc_set_peer_relay, "Force or release supernode relay for one peer" },
     { "set_verbose", jsonrpc_set_verbose, "Set logging verbosity" },
     { "stop", jsonrpc_stop, "Stop the daemon" },
     // get_last_event?

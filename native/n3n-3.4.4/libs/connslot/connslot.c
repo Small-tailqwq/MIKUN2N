@@ -109,7 +109,11 @@ void conn_read(conn_t *conn) {
     }
 
     if (size == -1) {
+#ifdef _WIN32
+        if (WSAGetLastError() == WSAEWOULDBLOCK) {
+#else
         if (errno == EWOULDBLOCK || errno == EAGAIN) {
+#endif
             conn->state = CONN_EMPTY;
             return;
         }
@@ -230,6 +234,18 @@ ssize_t conn_write(conn_t *conn) {
     }
     unsigned int end_pos = sb_len(conn->reply_header) + sb_len(conn->reply);
 #endif
+
+    if (sent == -1) {
+#ifdef _WIN32
+        if (WSAGetLastError() == WSAEWOULDBLOCK) {
+#else
+        if (errno == EWOULDBLOCK || errno == EAGAIN) {
+#endif
+            return 0;
+        }
+        conn->state = CONN_ERROR;
+        return sent;
+    }
 
     conn->reply_sendpos += sent;
 

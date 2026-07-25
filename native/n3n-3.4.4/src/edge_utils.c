@@ -92,7 +92,53 @@ static void check_known_peer_sock_change (struct n3n_runtime_data *eee,
                                           const n2n_sock_t *peer,
                                           time_t when);
 
+#define MIKUN2N_PROBE_PORT_A 21001
+#define MIKUN2N_PROBE_PORT_B 21002
+#define MIKUN2N_NATIVE_GRACE_SECS 5
+#define MIKUN2N_PUNCH_BUDGET_SECS 22
+#define MIKUN2N_PUNCH_TICK_MS 250
+#define MIKUN2N_PUNCH_MAX_PACKETS 12000
+#define MIKUN2N_CONE_ESCAPE_NEAR 64
+#define MIKUN2N_CONE_ESCAPE_BAND 192
+#define MIKUN2N_CONE_ESCAPE_TICKS 4
+#define MIKUN2N_LAYERED_ESCAPE_MAX 4096
+#define MIKUN2N_LAYERED_ESCAPE_TICKS 63
+#define MIKUN2N_PUNCH_COOKIE 0x0000C000
+#define MIKUN2N_PUNCH_COOKIE_MASK 0x0000C000
+#define MIKUN2N_PUNCH_OFFSET_MASK 0x00003FFF
+#define MIKUN2N_PUNCH_OFFSET_BIAS 8192
+
 /* ************************************** */
+
+static const char *mikun2n_punch_role_name (uint8_t role) {
+    switch(role) {
+        case MIKUN2N_PUNCH_ROLE_ANCHOR: return "anchor";
+        case MIKUN2N_PUNCH_ROLE_SCANNER: return "scanner";
+        case MIKUN2N_PUNCH_ROLE_LAYERED: return "layered";
+        default: return "none";
+    }
+}
+
+static int mikun2n_peer_force_relay (struct n3n_runtime_data *eee,
+                                     struct peer_info *peer) {
+    uint8_t i;
+
+    if(peer->force_relay)
+        return 1;
+    for(i = 0; i < eee->mikun2n_forced_relay_count; i++) {
+        /* Match on either key. A peer entry first learned from a data PACKET carries
+         * no dev_addr - only a REGISTER does - so an IPv4-only policy would never
+         * attach to it and the pSp agreement would hold on one side only. */
+        if((peer->dev_addr.net_addr != 0 &&
+            peer->dev_addr.net_addr == eee->mikun2n_forced_relay_ips[i]) ||
+           (!is_null_mac(eee->mikun2n_forced_relay_macs[i]) &&
+            !memcmp(peer->mac_addr, eee->mikun2n_forced_relay_macs[i], sizeof(n2n_mac_t)))) {
+            peer->force_relay = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static struct n3n_metrics_items_uint32 edge_utils_metrics_items1[] = {
     {
@@ -710,25 +756,39 @@ static void register_with_new_peer (struct n3n_runtime_data *eee,
              */
             if(eee->conf.register_ttl == 1) {
                 /* We are DMZ host or port is directly accessible. Just let peer to send back the ack */
-#ifndef _WIN32
             } else if(eee->conf.register_ttl > 1) {
-                /* Setting register_ttl usually implies that the edge knows the internal net topology
-                 * clearly, we can apply aggressive port prediction to support incoming Symmetric NAT
-                 */
-                int curTTL = 0;
-                socklen_t lenTTL = sizeof(int);
+                /* register_ttl > 1 enables a full-TTL REGISTER spray across a
+                 * window of the peer's supernode-observed port. Model (measured
+                 * on a real dual-gateway CGNAT): the symmetric side's fresh
+                 * mapping toward us lands either on the same NAT engine as its
+                 * supernode registration (port = seen port + small sequential
+                 * delta) or on a sibling engine whose counter offset drifts
+                 * unpredictably (hundreds of ports over hours). Only the
+                 * same-engine case is coverable, so spray a contiguous near
+                 * window; the cross-engine case is handled by the client
+                 * reconnecting with a fresh local port (rerolls the engine).
+                 *
+                 * Packets must carry full TTL: from a cone-NAT sender each
+                 * sprayed packet both opens our own NAT filter for that exact
+                 * peer port and, on a hit, is delivered inside the symmetric
+                 * peer's punched session, completing the handshake. The old
+                 * low-TTL trick (packets dying mid-path) would defeat both
+                 * effects, so the TTL value itself is deliberately not applied
+                 * to the socket anymore. */
                 n2n_sock_t sock = scan->sock;
-                int alter = 16; /* TODO: set by command line or more reliable prediction method */
+                int base_port = scan->sock.port;
+                int p;
 
-                getsockopt(eee->sock, IPPROTO_IP, IP_TTL, (void *) (char *) &curTTL, &lenTTL);
-                setsockopt(eee->sock, IPPROTO_IP, IP_TTL,
-                           (void *) (char *) &eee->conf.register_ttl,
-                           sizeof(eee->conf.register_ttl));
-                for(; alter > 0; alter--, sock.port++) {
+                static const int spray_lo = -8;
+                static const int spray_hi = 80;
+
+                for(p = base_port + spray_lo; p <= base_port + spray_hi; p++) {
+                    if(p < 1 || p > 65535) continue;
+                    sock.port = (uint16_t) p;
                     send_register(eee, &sock, mac, N2N_PORT_REG_COOKIE);
                 }
-                setsockopt(eee->sock, IPPROTO_IP, IP_TTL, (void *) (char *) &curTTL, sizeof(curTTL));
-#endif
+                /* keep the normal-path REGISTER to the exact seen port too */
+                send_register(eee, &(scan->sock), mac, N2N_REGULAR_REG_COOKIE);
             } else { /* eee->conf.register_ttl == 0 */
                 /* Normal STUN */
                 send_register(eee, &(scan->sock), mac, N2N_REGULAR_REG_COOKIE);
@@ -793,6 +853,17 @@ static void check_peer_registration_needed (struct n3n_runtime_data *eee,
         if(via_multicast)
             scan->local = 1;
 
+        /* MikuN2N: only a REGISTER carries the peer's virtual IPv4, so an entry first
+         * learned from a data PACKET keeps dev_addr zeroed forever - and the
+         * forced-relay policy, which is keyed on that address, then never matches it
+         * (management reports "0 peer entries updated" and the pSp request is lost on
+         * this side only). Adopt the address as soon as any packet does carry it. */
+        if(dev_addr != NULL && dev_addr->net_addr != 0 &&
+           scan->dev_addr.net_addr != dev_addr->net_addr) {
+            memcpy(&(scan->dev_addr), dev_addr, sizeof(n2n_ip_subnet_t));
+            mikun2n_peer_force_relay(eee, scan);
+        }
+
         if(((now - scan->last_seen) > 0 /* >= 1 sec */)
            ||(cookie > scan->last_cookie)) {
             /* Don't register too often */
@@ -850,6 +921,22 @@ static void peer_set_p2p_confirmed (struct n3n_runtime_data * eee,
         HASH_ADD_PEER(eee->known_peers, scan);
         scan->last_p2p = now;
         mgmt_event_post(N3N_EVENT_PEER,N3N_EVENT_PEER_P2P_ADD,scan);
+        if(scan->punch_started) {
+            int hit_offset = (cookie & MIKUN2N_PUNCH_COOKIE_MASK) == MIKUN2N_PUNCH_COOKIE
+                ? (int)(cookie & MIKUN2N_PUNCH_OFFSET_MASK) - MIKUN2N_PUNCH_OFFSET_BIAS
+                : 0;
+            const char *hit_lane = hit_offset == 0 ? "control" :
+                                   abs(hit_offset) <= 64 ? "low" :
+                                   abs(hit_offset) <= 256 ? "mid" : "far";
+            traceEvent(TRACE_NORMAL,
+                       "MikuN2N Tier 1 punch succeeded after %us/%u attempts/%u packets role=%s lane=%s offset=%d",
+                       (unsigned int)(now - scan->punch_started),
+                       scan->punch_attempt,
+                       scan->punch_packets,
+                       mikun2n_punch_role_name(scan->punch_role),
+                       hit_lane,
+                       hit_offset);
+        }
 
         traceEvent(TRACE_DEBUG, "p2p connection established: %s [%s]",
                    macaddr_str(mac_buf, mac),
@@ -1014,10 +1101,20 @@ static void check_known_peer_sock_change (struct n3n_runtime_data *eee,
                        macaddr_str(mac_buf, scan->mac_addr),
                        sock_to_cstr(sockbuf1, &(scan->sock)),
                        sock_to_cstr(sockbuf2, peer));
+            /* MikuN2N: this rebuilds the entry from scratch, and most callers have no
+             * dev_addr to hand (a data PACKET does not carry one). Dropping it would
+             * lose the virtual IPv4 that the forced-relay policy is keyed on, silently
+             * turning a two-sided pSp agreement back into a one-sided relay. Carry the
+             * address we already learned into the replacement entry. */
+            n2n_ip_subnet_t kept_addr = scan->dev_addr;
+
             /* The peer has changed public socket. It can no longer be assumed to be reachable. */
             HASH_DEL(eee->known_peers, scan);
             mgmt_event_post(N3N_EVENT_PEER,N3N_EVENT_PEER_P2P_CHANGED,scan);
             peer_info_free(scan);
+
+            if((dev_addr == NULL || dev_addr->net_addr == 0) && kept_addr.net_addr != 0)
+                dev_addr = &kept_addr;
 
             register_with_new_peer(eee, from_supernode, via_multicast, mac, dev_addr, dev_desc, peer);
         } else {
@@ -1184,6 +1281,192 @@ static void sendto_sock (struct n3n_runtime_data *eee, const void * buf,
     return;
 }
 
+
+/* ************************************** */
+
+static uint64_t mikun2n_now_ms (void) {
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
+}
+
+static int mikun2n_probe_source (const struct n3n_runtime_data *eee,
+                                 const n2n_sock_t *sender) {
+    if(!eee->curr_sn || sender->family != AF_INET ||
+       eee->curr_sn->sock.family != AF_INET ||
+       memcmp(sender->addr.v4, eee->curr_sn->sock.addr.v4, IPV4_SIZE) != 0)
+        return 0;
+
+    return sender->port == MIKUN2N_PROBE_PORT_A ||
+           sender->port == MIKUN2N_PROBE_PORT_B;
+}
+
+static void mikun2n_finish_nat_probe (struct n3n_runtime_data *eee) {
+    mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
+
+    if(nat->probe_mask != 3 || nat->complete)
+        return;
+
+    if(!nat->multi_public_ip &&
+       nat->observed_port_a == nat->observed_port_b) {
+        snprintf(nat->mapping, sizeof(nat->mapping), "endpoint-independent");
+        if(nat->cross_reply) {
+            snprintf(nat->type, sizeof(nat->type), "NAT1/2");
+            snprintf(nat->filtering, sizeof(nat->filtering), "endpoint-or-address-independent");
+        } else {
+            snprintf(nat->type, sizeof(nat->type), "NAT3");
+            snprintf(nat->filtering, sizeof(nat->filtering), "address-and-port-dependent");
+        }
+    } else {
+        snprintf(nat->mapping, sizeof(nat->mapping), "address-and-port-dependent");
+        snprintf(nat->type, sizeof(nat->type), "NAT4");
+        snprintf(nat->filtering, sizeof(nat->filtering), "%s",
+                 nat->cross_reply ? "address-dependent" : "address-and-port-dependent");
+    }
+    nat->complete = 1;
+    nat->unavailable = 0;
+
+    traceEvent(TRACE_NORMAL,
+               "MikuN2N NAT probe: type=%s mapping=%s filtering=%s external=%s:%u/%u",
+               nat->type, nat->mapping, nat->filtering, nat->public_ip,
+               nat->observed_port_a, nat->observed_port_b);
+}
+
+static void mikun2n_send_cross_probe (struct n3n_runtime_data *eee) {
+    mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
+    n2n_sock_t endpoint;
+    char request[128];
+
+    if(!eee->curr_sn || !nat->public_ip[0] || !nat->public_port)
+        return;
+
+    endpoint = eee->curr_sn->sock;
+    endpoint.port = MIKUN2N_PROBE_PORT_A;
+    snprintf(request, sizeof(request), "XPROBE %s %u",
+             nat->public_ip, nat->public_port);
+    sendto_sock(eee, request, strlen(request), &endpoint);
+    nat->cross_probe_attempts++;
+}
+
+static int mikun2n_handle_nat_probe (struct n3n_runtime_data *eee,
+                                     const n2n_sock_t *sender,
+                                     const uint8_t *udp_buf,
+                                     size_t udp_size,
+                                     time_t now) {
+    mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
+    char response[256];
+    char ip[64];
+    char label[16];
+    int port;
+
+    if(!mikun2n_probe_source(eee, sender) || udp_size == 0 ||
+       udp_size >= sizeof(response))
+        return 0;
+
+    memcpy(response, udp_buf, udp_size);
+    response[udp_size] = '\0';
+
+    if(!strcmp(response, "XREPLY")) {
+        /* A reply received only after we contacted B no longer proves that B
+         * could enter an unprimed mapping, so ignore such a late packet. */
+        if(!(nat->probe_mask & 2))
+            nat->cross_reply = 1;
+        return 1;
+    }
+
+    if(sscanf(response, "PROBED %63s %d %15s", ip, &port, label) != 3 ||
+       port < 1 || port > 65535)
+        return 0;
+
+    if(sender->port == MIKUN2N_PROBE_PORT_A && !nat->public_ip[0]) {
+        snprintf(nat->public_ip, sizeof(nat->public_ip), "%s", ip);
+        nat->public_port = (uint16_t)port;
+    }
+
+    if(sender->port == MIKUN2N_PROBE_PORT_A) {
+        nat->observed_port_a = (uint16_t)port;
+        nat->probe_mask |= 1;
+        if(!nat->cross_probe_at) {
+            nat->cross_probe_at = now;
+            mikun2n_send_cross_probe(eee);
+        }
+    } else {
+        if(nat->public_ip[0] && strcmp(nat->public_ip, ip))
+            nat->multi_public_ip = 1;
+        nat->observed_port_b = (uint16_t)port;
+        nat->probe_mask |= 2;
+    }
+
+    if(nat->probe_mask == 3)
+        mikun2n_finish_nat_probe(eee);
+
+    return 1;
+}
+
+static void mikun2n_reset_nat_probe (struct n3n_runtime_data *eee, time_t now) {
+    memset(&eee->mikun2n_nat, 0, sizeof(eee->mikun2n_nat));
+    snprintf(eee->mikun2n_nat.type, sizeof(eee->mikun2n_nat.type), "detecting");
+    snprintf(eee->mikun2n_nat.mapping, sizeof(eee->mikun2n_nat.mapping), "unknown");
+    snprintf(eee->mikun2n_nat.filtering, sizeof(eee->mikun2n_nat.filtering), "unknown");
+    eee->mikun2n_nat.started_at = now;
+}
+
+static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now) {
+    mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
+    n2n_sock_t endpoint;
+    static const char request[] = "PROBE";
+
+    if(eee->conf.connect_tcp || !eee->curr_sn || !eee->last_sup)
+        return;
+
+    if(!nat->started_at)
+        mikun2n_reset_nat_probe(eee, now);
+
+    if(nat->complete)
+        return;
+
+    if(nat->unavailable) {
+        if(now - nat->last_probe_at < 60)
+            return;
+        mikun2n_reset_nat_probe(eee, now);
+    }
+
+    if(nat->probe_mask == 3) {
+        mikun2n_finish_nat_probe(eee);
+        return;
+    }
+
+    if(now - nat->started_at >= 10) {
+        snprintf(nat->type, sizeof(nat->type), "unknown");
+        nat->unavailable = 1;
+        nat->last_probe_at = now;
+        traceEvent(TRACE_INFO, "MikuN2N NAT probe unavailable; will retry later");
+        return;
+    }
+
+    if(now == nat->last_probe_at)
+        return;
+
+    endpoint = eee->curr_sn->sock;
+    if(!(nat->probe_mask & 1)) {
+        endpoint.port = MIKUN2N_PROBE_PORT_A;
+    } else {
+        /* Do not contact B until its unprimed cross-port reply either arrived
+         * or timed out, otherwise an APDF NAT would be misreported as open. */
+        if(!nat->cross_reply && now - nat->cross_probe_at < 3) {
+            if(now != nat->last_probe_at && nat->cross_probe_attempts < 3) {
+                mikun2n_send_cross_probe(eee);
+                nat->last_probe_at = now;
+            }
+            return;
+        }
+        endpoint.port = MIKUN2N_PROBE_PORT_B;
+    }
+    sendto_sock(eee, request, sizeof(request) - 1, &endpoint);
+    nat->probe_round++;
+    nat->last_probe_at = now;
+}
 
 /* ************************************** */
 
@@ -1489,7 +1772,8 @@ static void send_register (struct n3n_runtime_data * eee,
     idx = 0;
     encode_REGISTER(pktbuf, &idx, &cmn, &reg);
 
-    traceEvent(TRACE_INFO, "send REGISTER to [%s]",
+    traceEvent((cookie & N2N_PORT_REG_COOKIE) ? TRACE_DEBUG : TRACE_INFO,
+               "send REGISTER to [%s]",
                sock_to_cstr(sockbuf, remote_peer));
 
     if(eee->conf.header_encryption == HEADER_ENCRYPTION_ENABLED)
@@ -1976,6 +2260,12 @@ static int find_peer_destination (struct n3n_runtime_data * eee,
     HASH_FIND_PEER(eee->known_peers, mac_address, scan);
 
     if(scan && (scan->last_seen > 0)) {
+        if(mikun2n_peer_force_relay(eee, scan)) {
+            memcpy(destination, &(eee->curr_sn->sock), sizeof(struct sockaddr_in));
+            traceEvent(TRACE_DEBUG, "peer %s is forced to use supernode",
+                       macaddr_str(mac_buf, mac_address));
+            return 0;
+        }
         if((now - scan->last_p2p) >= (scan->timeout / 2)) {
             /* Too much time passed since we saw the peer, need to register again
              * since the peer address may have changed. */
@@ -2323,6 +2613,9 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
 
     traceEvent(TRACE_DEBUG, "Rx N2N_UDP of size %d from [%s]",
                (signed int)udp_size, sock_to_cstr(sockbuf1, &sender));
+
+    if(mikun2n_handle_nat_probe(eee, &sender, udp_buf, udp_size, now))
+        return;
 
     if(eee->conf.header_encryption == HEADER_ENCRYPTION_ENABLED) {
         // match with static (1) or dynamic (2) ctx?
@@ -2898,16 +3191,21 @@ int fetch_and_eventually_process_data (struct n3n_runtime_data *eee, SOCKET sock
         bread = recvfrom(sock, (void *)pktbuf, N2N_PKT_BUF_SIZE, 0 /*flags*/,
                          sender_sock, &ss_size);
 
+#ifdef _WIN32
+        int socket_error = (bread < 0) ? WSAGetLastError() : 0;
+#endif
         if((bread < 0)
 #ifdef _WIN32
-           && (WSAGetLastError() != WSAECONNRESET)
+           /* Low-TTL UDP NAT probes can surface as WSAENETRESET on recvfrom(). */
+           && (socket_error != WSAECONNRESET)
+           && (socket_error != WSAENETRESET)
 #endif
         ) {
             /* For UDP bread of zero just means no data (unlike TCP). */
             /* The fd is no good now. Maybe we lost our interface. */
             traceEvent(TRACE_ERROR, "recvfrom() failed %d errno %d (%s)", bread, errno, strerror(errno));
 #ifdef _WIN32
-            traceEvent(TRACE_ERROR, "WSAGetLastError(): %u", WSAGetLastError());
+            traceEvent(TRACE_ERROR, "WSAGetLastError(): %u", socket_error);
 #endif
             return -1;
         }
@@ -2980,6 +3278,196 @@ void print_edge_stats (const struct n3n_runtime_data *eee) {
 
 /* ************************************** */
 
+static void mikun2n_punch_offset (struct n3n_runtime_data *eee,
+                                  struct peer_info *pp,
+                                  int base,
+                                  int offset) {
+    n2n_sock_t target = pp->sock;
+    int port = base + offset;
+
+    while(port < 1)
+        port += 65535;
+    while(port > 65535)
+        port -= 65535;
+
+    target.port = (uint16_t)port;
+    send_register(eee, &target, pp->mac_addr,
+                  MIKUN2N_PUNCH_COOKIE |
+                  ((offset + MIKUN2N_PUNCH_OFFSET_BIAS) & MIKUN2N_PUNCH_OFFSET_MASK));
+    pp->punch_packets++;
+}
+
+/* MikuN2N Tier 1 fallback. n3n's ordinary REGISTER exchange remains Tier 0.
+ * A peer that stays pSp is then scanned in synchronized 250 ms wall-clock
+ * slots. NAT4 senders use v7.3.1's cross-address cone escape: control, a
+ * symmetric near window, and a symmetric rotating band. Other senders retain
+ * the layered low/mid/far schedule. Strict time/packet budgets ensure a
+ * hard/fast CGNAT quickly settles on reliable relay. */
+static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
+                                struct peer_info *pp,
+                                time_t now,
+                                uint64_t now_ms) {
+    int i, base, delta;
+    int nat4_sender;
+    static const int anchor_offsets[] = {
+        0, 1, -1, 2, -2, 4, -4, 8, -8, 16, -16,
+        32, -32, 64, -64, 128, -128, 192, -192, 256, -256
+    };
+
+    if(pp->local || pp->sock.family != AF_INET)
+        return;
+    if(eee->curr_sn && sock_equal(&pp->sock, &eee->curr_sn->sock))
+        return;                                      /* never scan the supernode */
+    if((now - pp->last_p2p) < 5)                     /* p2p already established */
+        return;
+    if(memcmp(pp->mac_addr, eee->device.mac_addr, sizeof(n2n_mac_t)) == 0)
+        return;                                      /* don't punch our own echo */
+    if(mikun2n_peer_force_relay(eee, pp))
+        return;                                      /* user requested relay */
+
+    if(!eee->conf.mikun2n_punch)
+        return;
+
+    nat4_sender = eee->mikun2n_nat.complete &&
+                  !strcmp(eee->mikun2n_nat.type, "NAT4");
+
+    if(!pp->punch_started) {
+        if(now - pp->time_alloc < eee->conf.mikun2n_punch_grace)
+            return;
+        if(nat4_sender)
+            pp->punch_role =
+                memcmp(eee->device.mac_addr, pp->mac_addr, sizeof(n2n_mac_t)) < 0
+                ? MIKUN2N_PUNCH_ROLE_SCANNER
+                : MIKUN2N_PUNCH_ROLE_ANCHOR;
+        else
+            pp->punch_role = MIKUN2N_PUNCH_ROLE_LAYERED;
+        pp->punch_started = now;
+        pp->punch_observed_port = pp->sock.port;
+        traceEvent(TRACE_NORMAL,
+                   "MikuN2N Tier 1 punch started for peer port %u role=%s (budget %us/%u packets)",
+                   pp->sock.port, mikun2n_punch_role_name(pp->punch_role),
+                   eee->conf.mikun2n_punch_budget,
+                   eee->conf.mikun2n_punch_max_packets);
+    }
+
+    if(pp->punch_exhausted ||
+       now - pp->punch_started >= eee->conf.mikun2n_punch_budget ||
+       pp->punch_packets >= eee->conf.mikun2n_punch_max_packets) {
+        if(!pp->punch_exhausted) {
+            pp->punch_exhausted = 1;
+            traceEvent(TRACE_NORMAL,
+                       "MikuN2N Tier 1 punch exhausted after %us/%u packets; keeping pSp relay",
+                       (unsigned int)(now - pp->punch_started), pp->punch_packets);
+        }
+        return;
+    }
+
+    if(now_ms - pp->punch_last_ms < MIKUN2N_PUNCH_TICK_MS)
+        return;
+    pp->punch_last_ms = now_ms;
+
+    base = pp->sock.port;
+    if(pp->punch_observed_port && pp->punch_observed_port != pp->sock.port) {
+        delta = (int)pp->sock.port - (int)pp->punch_observed_port;
+        if(delta > 32767)
+            delta -= 65535;
+        else if(delta < -32767)
+            delta += 65535;
+        if(abs(delta) <= 4096)
+            pp->punch_drift = (int16_t)delta;
+        pp->punch_observed_port = pp->sock.port;
+    }
+
+    if(nat4_sender && pp->punch_role == MIKUN2N_PUNCH_ROLE_SCANNER) {
+        uint64_t common_slot = now_ms / MIKUN2N_PUNCH_TICK_MS;
+        uint32_t phase = (uint32_t)(common_slot % MIKUN2N_CONE_ESCAPE_TICKS);
+        uint32_t round = (uint32_t)((common_slot / MIKUN2N_CONE_ESCAPE_TICKS) % 22);
+        int band_lo = MIKUN2N_CONE_ESCAPE_NEAR +
+                      (int)round * MIKUN2N_CONE_ESCAPE_BAND + 1;
+        int band_hi = band_lo + MIKUN2N_CONE_ESCAPE_BAND - 1;
+        pp->punch_band_lo = (uint16_t)band_lo;
+        pp->punch_band_hi = (uint16_t)band_hi;
+
+        /* Equal A/B mappings only prove stability across two ports on the
+         * probe server. The real peer IP can still select a nearby mapping.
+         * Four shared wall-clock ticks cover all 128 near and 384 rotating
+         * candidates exactly, even when peers enter Tier 1 at different times. */
+        for(i = 0; i < 4 && pp->punch_packets < eee->conf.mikun2n_punch_max_packets; i++)
+            mikun2n_punch_offset(eee, pp, base, 0);
+        for(i = 0; i < 32 && pp->punch_packets < eee->conf.mikun2n_punch_max_packets; i++) {
+            int index = (int)phase * 32 + i;
+            int magnitude = 1 + index / 2;
+            mikun2n_punch_offset(eee, pp, base,
+                                 (index & 1) ? -magnitude : magnitude);
+        }
+        for(i = 0; i < 96; i++) {
+            int index = (int)phase * 96 + i;
+            int magnitude = band_lo + index / 2;
+            mikun2n_punch_offset(eee, pp, base,
+                                 (index & 1) ? -magnitude : magnitude);
+        }
+        if(pp->punch_drift)
+            mikun2n_punch_offset(eee, pp, base, pp->punch_drift);
+        if(phase == 0)
+            traceEvent(TRACE_NORMAL,
+                       "MikuN2N Tier 1 scanner shared_round=%u peer_control=%u near=+/-1..%d rotating=+/-%d..%d",
+                       round + 1, pp->sock.port, MIKUN2N_CONE_ESCAPE_NEAR,
+                       band_lo, band_hi);
+    } else if(nat4_sender && pp->punch_role == MIKUN2N_PUNCH_ROLE_ANCHOR) {
+        pp->punch_band_lo = 0;
+        pp->punch_band_hi = 256;
+        /* Keep a small, fixed mapping set alive while the complementary peer
+         * scans. Repetition is intentional: it avoids both NAT4 endpoints
+         * continuously allocating new mappings for hundreds of destinations. */
+        for(i = 0; i < (int)(sizeof(anchor_offsets) / sizeof(anchor_offsets[0])); i++) {
+            mikun2n_punch_offset(eee, pp, base, anchor_offsets[i]);
+            mikun2n_punch_offset(eee, pp, base, anchor_offsets[i]);
+        }
+        if(pp->punch_drift)
+            mikun2n_punch_offset(eee, pp, base, pp->punch_drift);
+        if((pp->punch_attempt & 3U) == 0)
+            traceEvent(TRACE_NORMAL,
+                       "MikuN2N Tier 1 anchor peer_control=%u stable_targets=%u range=+/-256",
+                       pp->sock.port,
+                       (unsigned int)(sizeof(anchor_offsets) / sizeof(anchor_offsets[0])));
+    } else {
+        uint32_t near_phase = pp->punch_attempt % 4;
+        uint32_t wide_phase = pp->punch_attempt % MIKUN2N_LAYERED_ESCAPE_TICKS;
+        pp->punch_band_lo = 1;
+        pp->punch_band_hi = MIKUN2N_LAYERED_ESCAPE_MAX;
+        /* A stable-mapping sender is the best scanner for a NAT4 peer. Keep
+         * the advertised endpoint alive while consecutive, non-skipping
+         * batches cover every positive and negative offset through +/-4096. */
+        for(i = 0; i < 4 && pp->punch_packets < eee->conf.mikun2n_punch_max_packets; i++)
+            mikun2n_punch_offset(eee, pp, base, 0);
+        for(i = 0; i < 32 && pp->punch_packets < eee->conf.mikun2n_punch_max_packets; i++) {
+            int index = (int)near_phase * 32 + i;
+            int magnitude = 1 + index / 2;
+            mikun2n_punch_offset(eee, pp, base,
+                                 (index & 1) ? -magnitude : magnitude);
+        }
+        for(i = 0; i < 128 && pp->punch_packets < eee->conf.mikun2n_punch_max_packets; i++) {
+            int index = (int)wide_phase * 128 + i;
+            int magnitude = MIKUN2N_CONE_ESCAPE_NEAR + 1 + index / 2;
+            mikun2n_punch_offset(eee, pp, base,
+                                 (index & 1) ? -magnitude : magnitude);
+        }
+        if(pp->punch_drift &&
+           pp->punch_packets < eee->conf.mikun2n_punch_max_packets)
+            mikun2n_punch_offset(eee, pp, base, pp->punch_drift);
+        if((wide_phase % 21U) == 0)
+            traceEvent(TRACE_NORMAL,
+                       "MikuN2N Tier 1 layered sequential_phase=%u peer_control=%u symmetric=+/-1..%u cycle=%ums",
+                       wide_phase + 1, pp->sock.port,
+                       MIKUN2N_LAYERED_ESCAPE_MAX,
+                       MIKUN2N_LAYERED_ESCAPE_TICKS * MIKUN2N_PUNCH_TICK_MS);
+    }
+
+    pp->punch_attempt++;
+}
+
+/* ************************************** */
+
 
 int run_edge_loop (struct n3n_runtime_data *eee) {
 
@@ -2987,6 +3475,7 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
     time_t lastIfaceCheck = 0;
     time_t last_purge_known = 0;
     time_t last_purge_pending = 0;
+    uint64_t last_punch_ms = 0;
 #ifdef HAVE_BRIDGING_SUPPORT
     time_t last_purge_host = 0;
 #endif
@@ -3060,8 +3549,13 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
         // work by /design/
 
         struct timeval wait_time;
-        wait_time.tv_sec = (eee->sn_wait) ? (SOCKET_TIMEOUT_INTERVAL_SECS / 10 + 1) : (SOCKET_TIMEOUT_INTERVAL_SECS);
-        wait_time.tv_usec = 0;
+        if(!eee->sn_wait && HASH_COUNT(eee->pending_peers) > 0) {
+            wait_time.tv_sec = 0;
+            wait_time.tv_usec = MIKUN2N_PUNCH_TICK_MS * 1000;
+        } else {
+            wait_time.tv_sec = (eee->sn_wait) ? (SOCKET_TIMEOUT_INTERVAL_SECS / 10 + 1) : (SOCKET_TIMEOUT_INTERVAL_SECS);
+            wait_time.tv_usec = 0;
+        }
         rc = select(max_sock + 1, &readers, &writers, NULL, &wait_time);
         now = time(NULL);
 
@@ -3151,6 +3645,7 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
 
         // finished processing select data
         update_supernode_reg(eee, now);
+        mikun2n_update_nat_probe(eee, now);
 
         numPurged = 0;
         // keep, i.e. do not purge, the known peers while no supernode supernode connection
@@ -3172,6 +3667,15 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
                 HASH_COUNT(eee->pending_peers),
                 HASH_COUNT(eee->known_peers)
             );
+        }
+
+        if((eee->conf.register_ttl > 1) &&
+           (mikun2n_now_ms() - last_punch_ms >= MIKUN2N_PUNCH_TICK_MS)) {
+            struct peer_info *pp, *pp_tmp;
+            uint64_t punch_now_ms = mikun2n_now_ms();
+            HASH_ITER(hh, eee->pending_peers, pp, pp_tmp)
+                mikun2n_punch_peer(eee, pp, now, punch_now_ms);
+            last_punch_ms = punch_now_ms;
         }
 
 #ifdef HAVE_BRIDGING_SUPPORT
@@ -3405,6 +3909,10 @@ void edge_init_conf_defaults (n2n_edge_conf_t *conf, char *sessionname) {
     conf->compression = N2N_COMPRESSION_ID_NONE;
     conf->allow_p2p = true;
     conf->register_interval = REGISTER_SUPER_INTERVAL_DFL;
+    conf->mikun2n_punch = true;
+    conf->mikun2n_punch_grace = MIKUN2N_NATIVE_GRACE_SECS;
+    conf->mikun2n_punch_budget = MIKUN2N_PUNCH_BUDGET_SECS;
+    conf->mikun2n_punch_max_packets = MIKUN2N_PUNCH_MAX_PACKETS;
 
 #ifdef _WIN32
     // TODO: more investigations in interface naming/renaming on windows
