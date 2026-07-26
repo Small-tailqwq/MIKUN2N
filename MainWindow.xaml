@@ -238,17 +238,47 @@
               <DataGrid x:Name="PeersGrid" AutoGenerateColumns="False" IsReadOnly="True"
                         CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False"
                         HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
-                        MinHeight="88" MaxHeight="228" RowHeight="38" ColumnHeaderHeight="34">
+                        MinHeight="88" MaxHeight="228" RowHeight="38" ColumnHeaderHeight="34"
+                        ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                        ScrollViewer.VerticalScrollBarVisibility="Hidden"
+                        VirtualizingPanel.IsVirtualizing="True"
+                        VirtualizingPanel.VirtualizationMode="Recycling">
                 <DataGrid.Columns>
-                  <DataGridTextColumn Header="昵称" Binding="{Binding Nickname}" Width="2*" />
-                  <DataGridTextColumn Header="虚拟 IP" Binding="{Binding VirtualIp}" Width="*" />
+                  <DataGridTemplateColumn Header="昵称" Width="2*" MaxWidth="240">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Nickname}" ToolTip="{Binding Nickname}"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTemplateColumn Header="虚拟 IP" Width="*" MinWidth="108">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding VirtualIp}" ToolTip="右键复制虚拟 IP"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                   MouseRightButtonUp="PeerIpText_MouseRightButtonUp" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
                   <DataGridTextColumn Header="延迟" Binding="{Binding LatencyText}" Width="*" />
                   <DataGridTemplateColumn Header="链路" Width="*">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate>
                         <TextBlock Text="{Binding ConnectionModeText}" VerticalAlignment="Center"
-                                   MouseRightButtonUp="PeerModeText_MouseRightButtonUp"
-                                   ToolTip="右键可让双方强制改用 pSp 中继；任一方均可再次右键恢复自动选择。" />
+                                   TextTrimming="CharacterEllipsis"
+                                   MouseRightButtonUp="PeerModeText_MouseRightButtonUp">
+                          <TextBlock.ToolTip>
+                            <ToolTip>
+                              <StackPanel MaxWidth="280">
+                                <TextBlock Text="{Binding ConnectionModeText}" FontWeight="SemiBold"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Text="右键：强制/取消 pSp 中继；打洞失败后可重新尝试打洞。"
+                                           TextWrapping="Wrap" Margin="0,3,0,0" Opacity="0.75" />
+                              </StackPanel>
+                            </ToolTip>
+                          </TextBlock.ToolTip>
+                        </TextBlock>
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                   </DataGridTemplateColumn>

@@ -72,9 +72,14 @@ uint64_t initial_time_stamp (void) {
 }
 
 void peer_info_init (struct peer_info *peer, const n2n_mac_t mac) {
+    int i;
+
     metrics.init++;
     peer->purgeable = true;
     peer->last_valid_time_stamp = initial_time_stamp();
+    peer->punch_data_sock = MIKUN2N_INVALID_SOCKET;
+    for(i = 0; i < MIKUN2N_BANK_WORKERS; i++)
+        peer->punch_workers[i].socket_fd = MIKUN2N_INVALID_SOCKET;
     memcpy(peer->mac_addr, mac, sizeof(n2n_mac_t));
 }
 
@@ -93,7 +98,15 @@ struct peer_info* peer_info_malloc (const n2n_mac_t mac) {
 }
 
 void peer_info_free (struct peer_info *p) {
+    int i;
+
     metrics.free++;
+    for(i = 0; i < MIKUN2N_BANK_WORKERS; i++) {
+        if(p->punch_workers[i].socket_fd != MIKUN2N_INVALID_SOCKET) {
+            closesocket(p->punch_workers[i].socket_fd);
+            p->punch_workers[i].socket_fd = MIKUN2N_INVALID_SOCKET;
+        }
+    }
     free(p->hostname);
     free(p);
 }

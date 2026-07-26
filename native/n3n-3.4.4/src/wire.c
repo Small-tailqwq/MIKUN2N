@@ -774,6 +774,28 @@ int encode_PEER_INFO (uint8_t *base,
     retval += encode_uint32(base, idx, (uint32_t)pkt->load);
     retval += encode_uint32(base, idx, (uint32_t)pkt->uptime);
     retval += encode_buf(base, idx, pkt->version, sizeof(n2n_version_t));
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_NAT) {
+        retval += encode_uint8(base, idx, pkt->mikun2n_nat_kind);
+        retval += encode_uint8(base, idx, pkt->mikun2n_eim_matches);
+        retval += encode_uint8(base, idx, pkt->mikun2n_eim_samples);
+        retval += encode_uint32(base, idx, pkt->mikun2n_punch_nonce);
+    }
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_PUNCH_PLAN) {
+        retval += encode_uint8(base, idx, pkt->mikun2n_punch_role);
+        retval += encode_uint32(base, idx, pkt->mikun2n_punch_generation);
+        retval += encode_uint16(base, idx, pkt->mikun2n_punch_delay_ms);
+    }
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_BANK_MODEL) {
+        retval += encode_uint8(base, idx, pkt->mikun2n_bank_mode);
+        retval += encode_uint8(base, idx, (uint8_t)pkt->mikun2n_bank_direction);
+        retval += encode_uint8(base, idx, pkt->mikun2n_bank_workers);
+        retval += encode_uint8(base, idx, pkt->mikun2n_bank_reuse);
+        retval += encode_uint16(base, idx, pkt->mikun2n_bank1);
+        retval += encode_uint16(base, idx, pkt->mikun2n_bank2);
+        retval += encode_uint16(base, idx, pkt->mikun2n_bank_spread);
+        retval += encode_uint16(base, idx, pkt->mikun2n_bank_rate);
+        retval += encode_uint32(base, idx, pkt->mikun2n_bank_nonce);
+    }
 
     return retval;
 }
@@ -798,6 +820,30 @@ int decode_PEER_INFO (n2n_PEER_INFO_t *pkt,
     retval += decode_uint32(&pkt->load, base, rem, idx);
     retval += decode_uint32((uint32_t*)&pkt->uptime, base, rem, idx);
     retval += decode_buf((uint8_t*)pkt->version, sizeof(n2n_version_t), base, rem, idx);
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_NAT) {
+        retval += decode_uint8(&pkt->mikun2n_nat_kind, base, rem, idx);
+        retval += decode_uint8(&pkt->mikun2n_eim_matches, base, rem, idx);
+        retval += decode_uint8(&pkt->mikun2n_eim_samples, base, rem, idx);
+        retval += decode_uint32(&pkt->mikun2n_punch_nonce, base, rem, idx);
+    }
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_PUNCH_PLAN) {
+        retval += decode_uint8(&pkt->mikun2n_punch_role, base, rem, idx);
+        retval += decode_uint32(&pkt->mikun2n_punch_generation, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_punch_delay_ms, base, rem, idx);
+    }
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_BANK_MODEL) {
+        uint8_t direction = 0;
+        retval += decode_uint8(&pkt->mikun2n_bank_mode, base, rem, idx);
+        retval += decode_uint8(&direction, base, rem, idx);
+        pkt->mikun2n_bank_direction = (int8_t)direction;
+        retval += decode_uint8(&pkt->mikun2n_bank_workers, base, rem, idx);
+        retval += decode_uint8(&pkt->mikun2n_bank_reuse, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_bank1, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_bank2, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_bank_spread, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_bank_rate, base, rem, idx);
+        retval += decode_uint32(&pkt->mikun2n_bank_nonce, base, rem, idx);
+    }
 
     return retval;
 }
@@ -814,6 +860,24 @@ int encode_QUERY_PEER (uint8_t * base,
     retval += encode_mac(base, idx, pkt->srcMac);
     retval += encode_mac(base, idx, pkt->targetMac);
     retval += encode_uint16(base, idx, pkt->aflags);
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_NAT) {
+        retval += encode_uint8(base, idx, pkt->mikun2n_nat_kind);
+        retval += encode_uint8(base, idx, pkt->mikun2n_eim_matches);
+        retval += encode_uint8(base, idx, pkt->mikun2n_eim_samples);
+        retval += encode_uint32(base, idx, pkt->mikun2n_punch_nonce);
+    }
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_BANK_MODEL) {
+        retval += encode_uint8(base, idx, pkt->mikun2n_bank_mode);
+        retval += encode_uint8(base, idx, (uint8_t)pkt->mikun2n_bank_direction);
+        retval += encode_uint8(base, idx, pkt->mikun2n_bank_workers);
+        retval += encode_uint8(base, idx, pkt->mikun2n_bank_reuse);
+        retval += encode_uint16(base, idx, pkt->mikun2n_bank1);
+        retval += encode_uint16(base, idx, pkt->mikun2n_bank2);
+        retval += encode_uint16(base, idx, pkt->mikun2n_bank_spread);
+        retval += encode_uint16(base, idx, pkt->mikun2n_bank_rate);
+        retval += encode_uint32(base, idx, pkt->mikun2n_bank_nonce);
+        retval += encode_uint32(base, idx, pkt->mikun2n_bank_generation);
+    }
 
     return retval;
 }
@@ -830,6 +894,26 @@ int decode_QUERY_PEER (n2n_QUERY_PEER_t * pkt,
     retval += decode_mac(pkt->srcMac, base, rem, idx);
     retval += decode_mac(pkt->targetMac, base, rem, idx);
     retval += decode_uint16(&(pkt->aflags), base, rem, idx);
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_NAT) {
+        retval += decode_uint8(&pkt->mikun2n_nat_kind, base, rem, idx);
+        retval += decode_uint8(&pkt->mikun2n_eim_matches, base, rem, idx);
+        retval += decode_uint8(&pkt->mikun2n_eim_samples, base, rem, idx);
+        retval += decode_uint32(&pkt->mikun2n_punch_nonce, base, rem, idx);
+    }
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_BANK_MODEL) {
+        uint8_t direction = 0;
+        retval += decode_uint8(&pkt->mikun2n_bank_mode, base, rem, idx);
+        retval += decode_uint8(&direction, base, rem, idx);
+        pkt->mikun2n_bank_direction = (int8_t)direction;
+        retval += decode_uint8(&pkt->mikun2n_bank_workers, base, rem, idx);
+        retval += decode_uint8(&pkt->mikun2n_bank_reuse, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_bank1, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_bank2, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_bank_spread, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_bank_rate, base, rem, idx);
+        retval += decode_uint32(&pkt->mikun2n_bank_nonce, base, rem, idx);
+        retval += decode_uint32(&pkt->mikun2n_bank_generation, base, rem, idx);
+    }
 
     return retval;
 }

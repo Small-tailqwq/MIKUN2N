@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Diagnostics;
 using System.IO;
+using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -47,10 +48,15 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private bool _closeInProgress;
     private bool _shownTrayTip;
+    private readonly ObservableCollection<PeerSnapshot> _displayPeers = [];
+    private ContextMenu? _activePeerMenu;
+    private string? _activePeerMenuNodeId;
+    private PeerConnectionMode _activePeerMenuMode;
 
     public MainWindow()
     {
         InitializeComponent();
+        PeersGrid.ItemsSource = _displayPeers;
         Icon = AppIconService.Icon;
         _easterEggs = ((App)Application.Current).EasterEggs;
         _easterEggVisuals = new EasterEggVisualController(this, EasterEggOverlay, _easterEggs);
@@ -340,7 +346,8 @@ public partial class MainWindow : Window
                 DateTimeOffset.Now,
                 PeerConnectionMode.LanDirect));
         }
-        PeersGrid.ItemsSource = displayPeers;
+        CloseStalePeerMenu(displayPeers);
+        SynchronizeDisplayedPeers(displayPeers);
         PeersEmptyText.Visibility = displayPeers.Count > 0
             ? Visibility.Collapsed
             : Visibility.Visible;
@@ -385,22 +392,52 @@ public partial class MainWindow : Window
                 PeerConnectionMode.Direct or
                 PeerConnectionMode.Relayed or
                 PeerConnectionMode.ForcedRelayed or
-                PeerConnectionMode.Punching))
+                PeerConnectionMode.Punching or
+                PeerConnectionMode.PunchFailed))
         {
             return;
         }
 
         e.Handled = true;
+        var menu = CreatePeerMenu(element, peer);
+        if (peer.ConnectionMode == PeerConnectionMode.PunchFailed)
+        {
+            var retry = new MenuItem
+            {
+                Header = "重新尝试 P2P 打洞"
+            };
+            retry.Click += async (_, _) =>
+            {
+                retry.IsEnabled = false;
+                try
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+                    await _edgeController.RetryPeerPunchAsync(peer.VirtualIp, timeout.Token);
+                }
+                catch (Exception exception)
+                {
+                    MessageBox.Show(
+                        this,
+                        $"无法重新发起双方打洞：{exception.Message}",
+                        "P2P 重试失败",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+            };
+            menu.Items.Add(retry);
+            menu.Items.Add(new Separator());
+        }
+
         var forceRelay = peer.ConnectionMode != PeerConnectionMode.ForcedRelayed;
-        var menuItem = new MenuItem
+        var relayItem = new MenuItem
         {
             Header = forceRelay ? "强制使用 pSp 中继" : "取消强制中继，恢复自动 P2P",
             IsCheckable = true,
             IsChecked = !forceRelay
         };
-        menuItem.Click += async (_, _) =>
+        relayItem.Click += async (_, _) =>
         {
-            menuItem.IsEnabled = false;
+            relayItem.IsEnabled = false;
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -416,14 +453,116 @@ public partial class MainWindow : Window
                     MessageBoxImage.Warning);
             }
         };
+        menu.Items.Add(relayItem);
+        OpenPeerMenu(menu, peer);
+    }
 
-        var menu = new ContextMenu
+    private void PeerIpText_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement element ||
+            element.DataContext is not PeerSnapshot peer ||
+            string.IsNullOrWhiteSpace(peer.VirtualIp))
         {
-            PlacementTarget = element
+            return;
+        }
+
+        e.Handled = true;
+        var menu = CreatePeerMenu(element, peer);
+        var copy = new MenuItem { Header = "复制虚拟 IP" };
+        copy.Click += (_, _) =>
+        {
+            try
+            {
+                System.Windows.Clipboard.SetText(peer.VirtualIp);
+            }
+            catch (Exception exception)
+            {
+                MessageBox.Show(
+                    this,
+                    $"无法复制虚拟 IP：{exception.Message}",
+                    "复制失败",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         };
-        menu.Items.Add(menuItem);
+        menu.Items.Add(copy);
+        OpenPeerMenu(menu, peer);
+    }
+
+    private static ContextMenu CreatePeerMenu(FrameworkElement element, PeerSnapshot peer)
+    {
+        var menu = new ContextMenu { PlacementTarget = element };
         element.ContextMenu = menu;
+        return menu;
+    }
+
+    private void OpenPeerMenu(ContextMenu menu, PeerSnapshot peer)
+    {
+        if (_activePeerMenu is not null)
+        {
+            _activePeerMenu.IsOpen = false;
+        }
+        _activePeerMenu = menu;
+        _activePeerMenuNodeId = peer.NodeId;
+        _activePeerMenuMode = peer.ConnectionMode;
+        menu.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_activePeerMenu, menu))
+            {
+                _activePeerMenu = null;
+                _activePeerMenuNodeId = null;
+            }
+        };
         menu.IsOpen = true;
+    }
+
+    private void CloseStalePeerMenu(IReadOnlyList<PeerSnapshot> peers)
+    {
+        if (_activePeerMenu is null || _activePeerMenuNodeId is null)
+        {
+            return;
+        }
+        var current = peers.FirstOrDefault(peer => peer.NodeId == _activePeerMenuNodeId);
+        if (current is null || current.ConnectionMode != _activePeerMenuMode)
+        {
+            _activePeerMenu.IsOpen = false;
+        }
+    }
+
+    private void SynchronizeDisplayedPeers(IReadOnlyList<PeerSnapshot> peers)
+    {
+        for (var targetIndex = 0; targetIndex < peers.Count; targetIndex++)
+        {
+            var desired = peers[targetIndex];
+            var currentIndex = -1;
+            for (var index = targetIndex; index < _displayPeers.Count; index++)
+            {
+                if (_displayPeers[index].NodeId == desired.NodeId)
+                {
+                    currentIndex = index;
+                    break;
+                }
+            }
+            if (currentIndex < 0)
+            {
+                _displayPeers.Insert(targetIndex, desired);
+            }
+            else
+            {
+                if (currentIndex != targetIndex)
+                {
+                    _displayPeers.Move(currentIndex, targetIndex);
+                }
+                if (_displayPeers[targetIndex] != desired)
+                {
+                    _displayPeers[targetIndex] = desired;
+                }
+            }
+        }
+        while (_displayPeers.Count > peers.Count)
+        {
+            _displayPeers.RemoveAt(_displayPeers.Count - 1);
+        }
     }
 
     private void UpdateNatIndicator(ConnectionSnapshot snapshot)

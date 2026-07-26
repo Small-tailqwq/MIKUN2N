@@ -28,7 +28,8 @@ public enum PeerConnectionMode
     Relayed,
     ForcedRelayed,
     LanDirect,
-    Punching
+    Punching,
+    PunchFailed
 }
 
 public sealed record PeerSnapshot(
@@ -54,6 +55,7 @@ public sealed record PeerSnapshot(
         PeerConnectionMode.Direct => "P2P 直连",
         PeerConnectionMode.LanDirect => "本地直连",
         PeerConnectionMode.Punching => "打洞中…",
+        PeerConnectionMode.PunchFailed => "pSp 中继（打洞失败）",
         PeerConnectionMode.Relayed => "pSp 中继",
         PeerConnectionMode.ForcedRelayed => "pSp 中继（手动）",
         _ => "检测中"

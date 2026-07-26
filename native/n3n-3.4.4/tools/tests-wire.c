@@ -19,6 +19,7 @@
  */
 
 
+#include <assert.h>
 #include <stdint.h>    // for uint8_t
 #include <stdio.h>     // for printf, fprintf, size_t, stderr, stdout
 #include <string.h>    // for memset, strcpy, strncpy
@@ -565,6 +566,107 @@ void pattern_tests () {
 
 }
 
+static void test_mikun2n_wire_extensions (void) {
+    n2n_common_t common = {0};
+    n2n_common_t decoded_common = {0};
+    n2n_QUERY_PEER_t query = {0}, decoded_query = {0};
+    n2n_PEER_INFO_t info = {0}, decoded_info = {0};
+    uint8_t buf[N2N_PKT_BUF_SIZE] = {0};
+    size_t idx = 0, rem, decoded_idx;
+
+    init_common(&common, "mikun2n-wire");
+    common.pc = MSG_TYPE_QUERY_PEER;
+    query.aflags = N2N_AFLAGS_MIKUN2N_NAT |
+                   N2N_AFLAGS_MIKUN2N_BANK_MODEL;
+    query.mikun2n_nat_kind = MIKUN2N_NAT_KIND_EIM;
+    query.mikun2n_eim_matches = 5;
+    query.mikun2n_eim_samples = 5;
+    query.mikun2n_punch_nonce = 0x12345678;
+    query.mikun2n_bank_mode = MIKUN2N_BANK_MODE_SYMMETRIC;
+    query.mikun2n_bank_direction = -1;
+    query.mikun2n_bank_workers = 25;
+    query.mikun2n_bank_reuse = 3;
+    query.mikun2n_bank1 = 26476;
+    query.mikun2n_bank2 = 27345;
+    query.mikun2n_bank_spread = 18;
+    query.mikun2n_bank_rate = 321;
+    query.mikun2n_bank_nonce = 0x55667788;
+    query.mikun2n_bank_generation = 0x33445566;
+    encode_QUERY_PEER(buf, &idx, &common, &query);
+    rem = idx;
+    decoded_idx = 0;
+    assert(decode_common(&decoded_common, buf, &rem, &decoded_idx) >= 0);
+    decode_QUERY_PEER(&decoded_query, &decoded_common, buf, &rem, &decoded_idx);
+    assert(decoded_query.mikun2n_nat_kind == query.mikun2n_nat_kind);
+    assert(decoded_query.mikun2n_eim_matches == query.mikun2n_eim_matches);
+    assert(decoded_query.mikun2n_eim_samples == query.mikun2n_eim_samples);
+    assert(decoded_query.mikun2n_punch_nonce == query.mikun2n_punch_nonce);
+    assert(decoded_query.mikun2n_bank_mode == query.mikun2n_bank_mode);
+    assert(decoded_query.mikun2n_bank_direction == query.mikun2n_bank_direction);
+    assert(decoded_query.mikun2n_bank_workers == query.mikun2n_bank_workers);
+    assert(decoded_query.mikun2n_bank_reuse == query.mikun2n_bank_reuse);
+    assert(decoded_query.mikun2n_bank1 == query.mikun2n_bank1);
+    assert(decoded_query.mikun2n_bank2 == query.mikun2n_bank2);
+    assert(decoded_query.mikun2n_bank_spread == query.mikun2n_bank_spread);
+    assert(decoded_query.mikun2n_bank_rate == query.mikun2n_bank_rate);
+    assert(decoded_query.mikun2n_bank_nonce == query.mikun2n_bank_nonce);
+    assert(decoded_query.mikun2n_bank_generation ==
+           query.mikun2n_bank_generation);
+    assert(rem == 0);
+
+    memset(buf, 0, sizeof(buf));
+    idx = 0;
+    common.pc = MSG_TYPE_PEER_INFO;
+    info.aflags = N2N_AFLAGS_MIKUN2N_NAT |
+                  N2N_AFLAGS_MIKUN2N_PUNCH_PLAN |
+                  N2N_AFLAGS_MIKUN2N_BANK_MODEL;
+    info.sock.family = AF_INET;
+    info.sock.type = SOCK_DGRAM;
+    info.mikun2n_nat_kind = MIKUN2N_NAT_KIND_APDM;
+    info.mikun2n_eim_matches = 0;
+    info.mikun2n_eim_samples = 5;
+    info.mikun2n_punch_nonce = 0x89abcdef;
+    info.mikun2n_punch_role = MIKUN2N_PUNCH_ROLE_SCANNER;
+    info.mikun2n_punch_generation = 0x10203040;
+    info.mikun2n_punch_delay_ms = 1500;
+    info.mikun2n_bank_mode = MIKUN2N_BANK_MODE_CONE;
+    info.mikun2n_bank_direction = 1;
+    info.mikun2n_bank_workers = 25;
+    info.mikun2n_bank_reuse = 25;
+    info.mikun2n_bank1 = 58491;
+    info.mikun2n_bank2 = 58491;
+    info.mikun2n_bank_spread = 4;
+    info.mikun2n_bank_rate = 0;
+    info.mikun2n_bank_nonce = 0xaabbccdd;
+    encode_PEER_INFO(buf, &idx, &common, &info);
+    rem = idx;
+    decoded_idx = 0;
+    assert(decode_common(&decoded_common, buf, &rem, &decoded_idx) >= 0);
+    decode_PEER_INFO(&decoded_info, &decoded_common, buf, &rem, &decoded_idx);
+    fprintf(stderr, "MikuN2N PEER_INFO wire: flags=%04x nat=%u nonce=%08x "
+                    "role=%u generation=%08x delay=%u rem=%u\n",
+            decoded_info.aflags, decoded_info.mikun2n_nat_kind,
+            decoded_info.mikun2n_punch_nonce, decoded_info.mikun2n_punch_role,
+            decoded_info.mikun2n_punch_generation,
+            decoded_info.mikun2n_punch_delay_ms, (unsigned int)rem);
+    assert(decoded_info.mikun2n_nat_kind == info.mikun2n_nat_kind);
+    assert(decoded_info.mikun2n_punch_nonce == info.mikun2n_punch_nonce);
+    assert(decoded_info.mikun2n_punch_role == info.mikun2n_punch_role);
+    assert(decoded_info.mikun2n_punch_generation == info.mikun2n_punch_generation);
+    assert(decoded_info.mikun2n_punch_delay_ms == info.mikun2n_punch_delay_ms);
+    assert(decoded_info.mikun2n_bank_mode == info.mikun2n_bank_mode);
+    assert(decoded_info.mikun2n_bank_direction == info.mikun2n_bank_direction);
+    assert(decoded_info.mikun2n_bank_workers == info.mikun2n_bank_workers);
+    assert(decoded_info.mikun2n_bank_reuse == info.mikun2n_bank_reuse);
+    assert(decoded_info.mikun2n_bank1 == info.mikun2n_bank1);
+    assert(decoded_info.mikun2n_bank2 == info.mikun2n_bank2);
+    assert(decoded_info.mikun2n_bank_spread == info.mikun2n_bank_spread);
+    assert(decoded_info.mikun2n_bank_rate == info.mikun2n_bank_rate);
+    assert(decoded_info.mikun2n_bank_nonce == info.mikun2n_bank_nonce);
+    assert(rem == 0);
+    fprintf(stderr, "MikuN2N wire extensions: tested\n");
+}
+
 int main (int argc, char * argv[]) {
     char *test_name = "environment";
 
@@ -579,7 +681,7 @@ int main (int argc, char * argv[]) {
     // TODO: add more wire tests
 
     pattern_tests();
+    test_mikun2n_wire_extensions();
 
     return 0;
 }
-

@@ -62,6 +62,55 @@
 
 
 #define HASH_FIND_COMMUNITY(head, name, out) HASH_FIND_STR(head, name, out)
+#define MIKUN2N_PUNCH_PLAN_DELAY_MS 1500
+#define MIKUN2N_BANK_GO_DELAY_MS 3000
+#define MIKUN2N_BANK_REPORT_TTL_MS 15000
+
+static uint64_t mikun2n_sn_now_ms (void) {
+#ifdef _WIN32
+    return (uint64_t)GetTickCount64();
+#else
+    struct timespec ts;
+
+    if(clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+        return (uint64_t)ts.tv_sec * 1000ULL +
+               (uint64_t)ts.tv_nsec / 1000000ULL;
+    return (uint64_t)time(NULL) * 1000ULL;
+#endif
+}
+
+static uint8_t mikun2n_plan_role (uint8_t local_nat, uint8_t remote_nat,
+                                  const n2n_mac_t local_mac,
+                                  const n2n_mac_t remote_mac) {
+    if(local_nat == MIKUN2N_NAT_KIND_UNCERTAIN ||
+       remote_nat == MIKUN2N_NAT_KIND_UNCERTAIN)
+        return MIKUN2N_PUNCH_ROLE_LAYERED;
+    if(local_nat == MIKUN2N_NAT_KIND_EIM &&
+       remote_nat == MIKUN2N_NAT_KIND_APDM)
+        return MIKUN2N_PUNCH_ROLE_LAYERED;
+    if(local_nat == MIKUN2N_NAT_KIND_APDM &&
+       remote_nat == MIKUN2N_NAT_KIND_EIM)
+        return MIKUN2N_PUNCH_ROLE_ANCHOR;
+    if(local_nat == MIKUN2N_NAT_KIND_APDM &&
+       remote_nat == MIKUN2N_NAT_KIND_APDM)
+        return memcmp(local_mac, remote_mac, sizeof(n2n_mac_t)) < 0
+               ? MIKUN2N_PUNCH_ROLE_SCANNER
+               : MIKUN2N_PUNCH_ROLE_ANCHOR;
+    return MIKUN2N_PUNCH_ROLE_LAYERED;
+}
+
+static uint32_t mikun2n_plan_generation (const struct peer_info *a,
+                                         const struct peer_info *b) {
+    uint8_t pair_key[sizeof(n2n_mac_t)];
+    uint32_t generation;
+    size_t i;
+
+    for(i = 0; i < sizeof(pair_key); i++)
+        pair_key[i] = a->mac_addr[i] ^ b->mac_addr[i];
+    generation = a->mikun2n_punch_nonce ^ b->mikun2n_punch_nonce ^
+                 pearson_hash_32(pair_key, sizeof(pair_key));
+    return generation ? generation : 1;
+}
 
 static ssize_t sendto_peer (struct n3n_runtime_data *sss,
                             const struct peer_info *peer,
@@ -2508,6 +2557,7 @@ static int process_udp (struct n3n_runtime_data * sss,
             int8_t allowed_match = -1;
             uint8_t match = 0;
             int match_length = 0;
+            struct peer_info *source_edge = NULL;
 
             if(!comm && sss->lock_communities) {
                 HASH_ITER(hh, sss->rules, re, tmp_re) {
@@ -2548,6 +2598,78 @@ static int process_udp (struct n3n_runtime_data * sss,
                         traceEvent(TRACE_DEBUG, "dropped QUERY_PEER due to time stamp error");
                         return -1;
                     }
+                }
+            }
+
+            if(comm && (query.aflags & N2N_AFLAGS_MIKUN2N_NAT)) {
+                HASH_FIND_PEER(comm->edges, query.srcMac, source_edge);
+                if(source_edge &&
+                   (sock_equal(&source_edge->sock, &sender) ||
+                    (source_edge->socket_fd != sss->sock &&
+                     source_edge->socket_fd == socket_fd)) &&
+                   query.mikun2n_nat_kind >= MIKUN2N_NAT_KIND_EIM &&
+                   query.mikun2n_nat_kind <= MIKUN2N_NAT_KIND_UNCERTAIN &&
+                   query.mikun2n_eim_samples > 0 &&
+                   query.mikun2n_eim_samples <= 5 &&
+                   query.mikun2n_eim_matches <= query.mikun2n_eim_samples &&
+                   query.mikun2n_punch_nonce != 0) {
+                    source_edge->mikun2n_nat_kind = query.mikun2n_nat_kind;
+                    source_edge->mikun2n_eim_matches = query.mikun2n_eim_matches;
+                    source_edge->mikun2n_eim_samples = query.mikun2n_eim_samples;
+                    source_edge->mikun2n_punch_nonce = query.mikun2n_punch_nonce;
+                } else {
+                    query.aflags &= ~N2N_AFLAGS_MIKUN2N_NAT;
+                    source_edge = NULL;
+                    traceEvent(TRACE_WARNING,
+                               "ignored invalid MikuN2N NAT summary in QUERY_PEER");
+                }
+            }
+
+            if(source_edge &&
+               (query.aflags & N2N_AFLAGS_MIKUN2N_BANK_MODEL)) {
+                if(!is_null_mac(query.targetMac) &&
+                   query.mikun2n_bank_mode >= MIKUN2N_BANK_MODE_CONE &&
+                   query.mikun2n_bank_mode <= MIKUN2N_BANK_MODE_FAST &&
+                   (query.mikun2n_bank_direction == 1 ||
+                    query.mikun2n_bank_direction == -1) &&
+                   query.mikun2n_bank_workers >= 4 &&
+                   query.mikun2n_bank_workers <= MIKUN2N_BANK_WORKERS &&
+                   query.mikun2n_bank_reuse <= query.mikun2n_bank_workers &&
+                   query.mikun2n_bank1 != 0 &&
+                   query.mikun2n_bank2 != 0 &&
+                   query.mikun2n_bank_nonce != 0 &&
+                   query.mikun2n_bank_generation != 0) {
+                    memcpy(source_edge->mikun2n_bank_target, query.targetMac,
+                           sizeof(n2n_mac_t));
+                    source_edge->mikun2n_bank_mode = query.mikun2n_bank_mode;
+                    source_edge->mikun2n_bank_direction =
+                        query.mikun2n_bank_direction;
+                    source_edge->mikun2n_bank_workers =
+                        query.mikun2n_bank_workers;
+                    source_edge->mikun2n_bank_reuse =
+                        query.mikun2n_bank_reuse;
+                    source_edge->mikun2n_bank1 = query.mikun2n_bank1;
+                    source_edge->mikun2n_bank2 = query.mikun2n_bank2;
+                    if(query.mikun2n_bank_mode ==
+                           MIKUN2N_BANK_MODE_CONE) {
+                        source_edge->mikun2n_bank1 =
+                            source_edge->sock.port;
+                        source_edge->mikun2n_bank2 =
+                            source_edge->sock.port;
+                    }
+                    source_edge->mikun2n_bank_spread =
+                        query.mikun2n_bank_spread;
+                    source_edge->mikun2n_bank_rate =
+                        query.mikun2n_bank_rate;
+                    source_edge->mikun2n_bank_nonce =
+                        query.mikun2n_bank_nonce;
+                    source_edge->mikun2n_bank_generation =
+                        query.mikun2n_bank_generation;
+                    source_edge->mikun2n_bank_report_ms = mikun2n_sn_now_ms();
+                } else {
+                    query.aflags &= ~N2N_AFLAGS_MIKUN2N_BANK_MODEL;
+                    traceEvent(TRACE_WARNING,
+                               "ignored invalid MikuN2N bank model in QUERY_PEER");
                 }
             }
 
@@ -2613,6 +2735,95 @@ static int process_udp (struct n3n_runtime_data * sss,
                     if(scan->preferred_sock.family != (uint8_t)AF_INVALID) {
                         cmn2.flags |= N2N_FLAGS_SOCKET;
                         pi.preferred_sock = scan->preferred_sock;
+                    }
+
+                    if(source_edge && source_edge->mikun2n_punch_nonce &&
+                       scan->mikun2n_punch_nonce &&
+                       scan->mikun2n_nat_kind >= MIKUN2N_NAT_KIND_EIM &&
+                       scan->mikun2n_nat_kind <= MIKUN2N_NAT_KIND_UNCERTAIN) {
+                        pi.aflags |= N2N_AFLAGS_MIKUN2N_NAT |
+                                     N2N_AFLAGS_MIKUN2N_PUNCH_PLAN;
+                        pi.mikun2n_nat_kind = scan->mikun2n_nat_kind;
+                        pi.mikun2n_eim_matches = scan->mikun2n_eim_matches;
+                        pi.mikun2n_eim_samples = scan->mikun2n_eim_samples;
+                        pi.mikun2n_punch_nonce = scan->mikun2n_punch_nonce;
+                        pi.mikun2n_punch_role =
+                            mikun2n_plan_role(source_edge->mikun2n_nat_kind,
+                                             scan->mikun2n_nat_kind,
+                                             source_edge->mac_addr,
+                                             scan->mac_addr);
+                        pi.mikun2n_punch_generation =
+                            mikun2n_plan_generation(source_edge, scan);
+                        pi.mikun2n_punch_delay_ms =
+                            MIKUN2N_PUNCH_PLAN_DELAY_MS;
+
+                        if(source_edge->mikun2n_nat_kind ==
+                               MIKUN2N_NAT_KIND_APDM &&
+                           scan->mikun2n_nat_kind == MIKUN2N_NAT_KIND_APDM &&
+                           !memcmp(source_edge->mikun2n_bank_target,
+                                   scan->mac_addr, sizeof(n2n_mac_t)) &&
+                           !memcmp(scan->mikun2n_bank_target,
+                                   source_edge->mac_addr, sizeof(n2n_mac_t)) &&
+                           source_edge->mikun2n_bank_generation ==
+                               pi.mikun2n_punch_generation &&
+                           scan->mikun2n_bank_generation ==
+                               pi.mikun2n_punch_generation &&
+                           source_edge->mikun2n_bank_report_ms +
+                               MIKUN2N_BANK_REPORT_TTL_MS >= mikun2n_sn_now_ms() &&
+                           scan->mikun2n_bank_report_ms +
+                               MIKUN2N_BANK_REPORT_TTL_MS >= mikun2n_sn_now_ms()) {
+                            uint64_t sn_now_ms = mikun2n_sn_now_ms();
+
+                            if(source_edge->mikun2n_go_local_bank_nonce !=
+                                   source_edge->mikun2n_bank_nonce ||
+                               source_edge->mikun2n_go_peer_bank_nonce !=
+                                   scan->mikun2n_bank_nonce ||
+                               source_edge->mikun2n_go_deadline_ms == 0) {
+                                uint64_t deadline =
+                                    sn_now_ms + MIKUN2N_BANK_GO_DELAY_MS;
+                                source_edge->mikun2n_go_deadline_ms = deadline;
+                                scan->mikun2n_go_deadline_ms = deadline;
+                                source_edge->mikun2n_go_local_bank_nonce =
+                                    source_edge->mikun2n_bank_nonce;
+                                source_edge->mikun2n_go_peer_bank_nonce =
+                                    scan->mikun2n_bank_nonce;
+                                scan->mikun2n_go_local_bank_nonce =
+                                    scan->mikun2n_bank_nonce;
+                                scan->mikun2n_go_peer_bank_nonce =
+                                    source_edge->mikun2n_bank_nonce;
+                            }
+
+                            pi.aflags |= N2N_AFLAGS_MIKUN2N_BANK_MODEL;
+                            pi.mikun2n_bank_mode = scan->mikun2n_bank_mode;
+                            pi.mikun2n_bank_direction =
+                                scan->mikun2n_bank_direction;
+                            pi.mikun2n_bank_workers =
+                                scan->mikun2n_bank_workers;
+                            pi.mikun2n_bank_reuse =
+                                scan->mikun2n_bank_reuse;
+                            pi.mikun2n_bank1 = scan->mikun2n_bank1;
+                            pi.mikun2n_bank2 = scan->mikun2n_bank2;
+                            pi.mikun2n_bank_spread =
+                                scan->mikun2n_bank_spread;
+                            pi.mikun2n_bank_rate = scan->mikun2n_bank_rate;
+                            pi.mikun2n_bank_nonce = scan->mikun2n_bank_nonce;
+                            pi.mikun2n_punch_delay_ms =
+                                source_edge->mikun2n_go_deadline_ms > sn_now_ms
+                                ? (uint16_t)MIN(
+                                      source_edge->mikun2n_go_deadline_ms -
+                                          sn_now_ms,
+                                      UINT16_MAX)
+                                : 0;
+                        }
+                        traceEvent(TRACE_NORMAL,
+                                   "MikuN2N punch plan generation=%u role=%u "
+                                   "local_nat=%u peer_nat=%u bank_ready=%u",
+                                   pi.mikun2n_punch_generation,
+                                   pi.mikun2n_punch_role,
+                                   source_edge->mikun2n_nat_kind,
+                                   scan->mikun2n_nat_kind,
+                                   !!(pi.aflags &
+                                      N2N_AFLAGS_MIKUN2N_BANK_MODEL));
                     }
 
                     encode_PEER_INFO(encbuf, &encx, &cmn2, &pi);

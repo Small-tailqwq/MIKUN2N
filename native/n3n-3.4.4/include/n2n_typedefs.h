@@ -327,6 +327,22 @@ typedef struct n2n_PEER_INFO {
     uint32_t load;
     n2n_version_t version;
     time_t uptime;
+    uint8_t mikun2n_nat_kind;
+    uint8_t mikun2n_eim_matches;
+    uint8_t mikun2n_eim_samples;
+    uint8_t mikun2n_punch_role;
+    uint32_t mikun2n_punch_nonce;
+    uint32_t mikun2n_punch_generation;
+    uint16_t mikun2n_punch_delay_ms;
+    uint8_t mikun2n_bank_mode;
+    int8_t mikun2n_bank_direction;
+    uint8_t mikun2n_bank_workers;
+    uint8_t mikun2n_bank_reuse;
+    uint16_t mikun2n_bank1;
+    uint16_t mikun2n_bank2;
+    uint16_t mikun2n_bank_spread;
+    uint16_t mikun2n_bank_rate;
+    uint32_t mikun2n_bank_nonce;
 } n2n_PEER_INFO_t;
 
 
@@ -335,8 +351,43 @@ typedef struct n2n_QUERY_PEER {
     n2n_mac_t srcMac;
     n2n_sock_t sock;
     n2n_mac_t targetMac;
+    uint8_t mikun2n_nat_kind;
+    uint8_t mikun2n_eim_matches;
+    uint8_t mikun2n_eim_samples;
+    uint32_t mikun2n_punch_nonce;
+    uint8_t mikun2n_bank_mode;
+    int8_t mikun2n_bank_direction;
+    uint8_t mikun2n_bank_workers;
+    uint8_t mikun2n_bank_reuse;
+    uint16_t mikun2n_bank1;
+    uint16_t mikun2n_bank2;
+    uint16_t mikun2n_bank_spread;
+    uint16_t mikun2n_bank_rate;
+    uint32_t mikun2n_bank_nonce;
+    uint32_t mikun2n_bank_generation;
 
 } n2n_QUERY_PEER_t;
+
+#define N2N_AFLAGS_MIKUN2N_NAT          0x8000
+#define N2N_AFLAGS_MIKUN2N_PUNCH_PLAN   0x4000
+#define N2N_AFLAGS_MIKUN2N_BANK_MODEL   0x2000
+
+#define MIKUN2N_NAT_KIND_UNKNOWN        0
+#define MIKUN2N_NAT_KIND_EIM            1
+#define MIKUN2N_NAT_KIND_APDM           2
+#define MIKUN2N_NAT_KIND_UNCERTAIN      3
+
+#define MIKUN2N_PUNCH_ROLE_NONE         0
+#define MIKUN2N_PUNCH_ROLE_ANCHOR       1
+#define MIKUN2N_PUNCH_ROLE_SCANNER      2
+#define MIKUN2N_PUNCH_ROLE_LAYERED      3
+
+#define MIKUN2N_BANK_MODE_NONE          0
+#define MIKUN2N_BANK_MODE_CONE          1
+#define MIKUN2N_BANK_MODE_SYMMETRIC     2
+#define MIKUN2N_BANK_MODE_HARD          3
+#define MIKUN2N_BANK_MODE_VOLATILE      4
+#define MIKUN2N_BANK_MODE_FAST          5
 
 typedef struct n2n_buf n2n_buf_t;
 
@@ -557,13 +608,26 @@ typedef struct mikun2n_nat_state {
     uint8_t unavailable;
     uint8_t multi_public_ip;
     uint8_t cross_probe_attempts;
+    uint8_t eim_samples;
+    uint8_t eim_matches;
+    uint8_t eim_uncertain;
     time_t started_at;
     time_t last_probe_at;
-    time_t cross_probe_at;
+    uint64_t started_ms;
+    uint64_t next_probe_ms;
+    uint64_t cross_probe_ms;
     uint32_t probe_round;
 } mikun2n_nat_state_t;
 
 #define MIKUN2N_FORCED_RELAY_MAX 64
+#define MIKUN2N_PUNCH_HISTORY_MAX 64
+
+typedef struct mikun2n_punch_history {
+    n2n_mac_t mac;
+    uint8_t rounds;
+    uint8_t abandoned;
+    time_t retry_at;
+} mikun2n_punch_history_t;
 
 struct n3n_runtime_data {
     n2n_edge_conf_t conf;
@@ -609,9 +673,14 @@ struct n3n_runtime_data {
     time_t last_sn_reg;       /* Time when last REGISTER_SUPER was received. */
     time_t start_time;                                                   /**< For calculating uptime */
     mikun2n_nat_state_t mikun2n_nat;                                     /**< MikuN2N data-socket NAT behavior probe. */
+    uint32_t mikun2n_punch_nonce;                                        /**< Edge-lifetime nonce used for supernode-coordinated punch generations. */
     in_addr_t mikun2n_forced_relay_ips[MIKUN2N_FORCED_RELAY_MAX];         /**< Session-local forced relay policy. */
     n2n_mac_t mikun2n_forced_relay_macs[MIKUN2N_FORCED_RELAY_MAX];        /**< Same policy keyed by edge MAC; a peer learned from a data packet has no known virtual IPv4, but always has a MAC. */
     uint8_t mikun2n_forced_relay_count;
+    mikun2n_punch_history_t mikun2n_punch_history[MIKUN2N_PUNCH_HISTORY_MAX]; /**< Retry budget survives pending-peer eviction/recreation. */
+    uint8_t mikun2n_punch_history_count;
+    uint8_t mikun2n_preferred_sock_mode_set;                                /**< Remembers whether advertise_addr began in auto mode. */
+    uint8_t mikun2n_preferred_sock_auto;
 
 
 

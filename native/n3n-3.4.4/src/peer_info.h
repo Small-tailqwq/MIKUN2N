@@ -18,10 +18,25 @@
 /* flag used in add_sn_to_list_by_mac_or_sock */
 enum skip_add {SN_ADD = 0, SN_ADD_SKIP = 1, SN_ADD_ADDED = 2};
 
-#define MIKUN2N_PUNCH_ROLE_NONE 0
-#define MIKUN2N_PUNCH_ROLE_ANCHOR 1
-#define MIKUN2N_PUNCH_ROLE_SCANNER 2
-#define MIKUN2N_PUNCH_ROLE_LAYERED 3
+#define MIKUN2N_BANK_WORKERS 25
+#ifdef _WIN32
+#define MIKUN2N_INVALID_SOCKET INVALID_SOCKET
+#else
+#define MIKUN2N_INVALID_SOCKET (-1)
+#endif
+
+typedef struct mikun2n_bank_worker {
+    SOCKET socket_fd;
+    uint16_t local_port;
+    uint16_t mapped_a;
+    uint16_t mapped_b;
+    uint32_t public_ip_a;
+    uint32_t public_ip_b;
+    uint32_t seq_a;
+    uint32_t seq_b;
+    uint64_t sent_a_ms;
+    uint64_t sent_b_ms;
+} mikun2n_bank_worker_t;
 
 struct peer_info {
     n2n_mac_t mac_addr;
@@ -51,10 +66,67 @@ struct peer_info {
     uint16_t punch_observed_port;
     int16_t punch_drift;
     uint8_t punch_exhausted;
+    uint8_t punch_rounds;
+    uint8_t punch_abandoned;
+    time_t punch_retry_at;
     uint8_t punch_role;
     uint16_t punch_band_lo;
     uint16_t punch_band_hi;
     uint8_t force_relay;
+    uint8_t mikun2n_nat_kind;
+    uint8_t mikun2n_eim_matches;
+    uint8_t mikun2n_eim_samples;
+    uint32_t mikun2n_punch_nonce;
+    uint32_t punch_generation;
+    uint64_t punch_go_at_ms;
+    uint64_t punch_coord_started_ms;
+    uint64_t punch_coord_last_query_ms;
+    uint8_t punch_plan_ready;
+    uint32_t punch_peer_nonce;
+
+    /* Supernode-side report cache. Only one NAT4 bank calibration is active
+     * per edge at a time, and the target MAC binds the report to that pair. */
+    n2n_mac_t mikun2n_bank_target;
+    uint8_t mikun2n_bank_mode;
+    int8_t mikun2n_bank_direction;
+    uint8_t mikun2n_bank_workers;
+    uint8_t mikun2n_bank_reuse;
+    uint16_t mikun2n_bank1;
+    uint16_t mikun2n_bank2;
+    uint16_t mikun2n_bank_spread;
+    uint16_t mikun2n_bank_rate;
+    uint32_t mikun2n_bank_nonce;
+    uint32_t mikun2n_bank_generation;
+    uint64_t mikun2n_bank_report_ms;
+    uint64_t mikun2n_go_deadline_ms;
+    uint32_t mikun2n_go_local_bank_nonce;
+    uint32_t mikun2n_go_peer_bank_nonce;
+
+    /* Edge-side NAT4 worker pool. The winning socket remains attached to the
+     * peer after the other calibration sockets have been closed. */
+    mikun2n_bank_worker_t punch_workers[MIKUN2N_BANK_WORKERS];
+    SOCKET punch_data_sock;
+    uint8_t punch_bank_state;
+    uint8_t punch_bank_worker_count;
+    uint8_t punch_bank_model_mode;
+    int8_t punch_bank_direction;
+    uint8_t punch_bank_reuse;
+    uint16_t punch_bank1;
+    uint16_t punch_bank2;
+    uint16_t punch_bank_spread;
+    uint16_t punch_bank_rate;
+    uint32_t punch_bank_nonce;
+    uint64_t punch_bank_deadline_ms;
+    uint8_t punch_peer_bank_ready;
+    uint8_t punch_peer_bank_mode;
+    int8_t punch_peer_bank_direction;
+    uint8_t punch_peer_bank_workers;
+    uint8_t punch_peer_bank_reuse;
+    uint16_t punch_peer_bank1;
+    uint16_t punch_peer_bank2;
+    uint16_t punch_peer_bank_spread;
+    uint16_t punch_peer_bank_rate;
+    uint32_t punch_peer_bank_nonce;
 
     UT_hash_handle hh;     /* makes this structure hashable */
 };

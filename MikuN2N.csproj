@@ -10,11 +10,11 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>MikuN2N</AssemblyName>
     <RootNamespace>MikuN2N</RootNamespace>
-    <BaseVersion>0.5.1</BaseVersion>
+    <BaseVersion>0.5.5</BaseVersion>
     <BuildStamp>$([System.DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfff'))</BuildStamp>
     <Version>$(BaseVersion)-test.b$(BuildStamp)z</Version>
-    <AssemblyVersion>0.5.1.0</AssemblyVersion>
-    <FileVersion>0.5.1.0</FileVersion>
+    <AssemblyVersion>0.5.5.0</AssemblyVersion>
+    <FileVersion>0.5.5.0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
@@ -30,6 +30,14 @@
   <Target Name="WriteBuildIdentity" AfterTargets="Build">
     <WriteLinesToFile
       File="$(TargetDir)build-identity.txt"
+      Lines="$(InformationalVersion)"
+      Overwrite="true"
+      Encoding="UTF-8" />
+  </Target>
+
+  <Target Name="WritePublishedBuildIdentity" AfterTargets="Publish">
+    <WriteLinesToFile
+      File="$(PublishDir)build-identity.txt"
       Lines="$(InformationalVersion)"
       Overwrite="true"
       Encoding="UTF-8" />

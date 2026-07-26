@@ -156,6 +156,55 @@ public sealed partial class EdgeController : IAsyncDisposable
         PublishConnected(run);
     }
 
+    public async Task RetryPeerPunchAsync(
+        string virtualIp,
+        CancellationToken cancellationToken = default)
+    {
+        EdgeRun run;
+        lock (_stateGate)
+        {
+            run = _currentRun
+                ?? throw new InvalidOperationException("当前没有正在运行的连接。");
+        }
+
+        var discovery = run.PeerDiscovery
+            ?? throw new InvalidOperationException("好友同步通道尚未就绪，请稍后重试。");
+        var target = run.Peers.FirstOrDefault(peer =>
+            string.Equals(peer.VirtualIp, virtualIp, StringComparison.Ordinal))
+            ?? throw new InvalidOperationException("尚未找到该好友的同步通道，请稍后重试。");
+        var edgeMac = ResolvePeerEdgeMac(run, virtualIp, target.Nickname);
+
+        await run.ManagementClient.SetPeerRelayAsync(
+            virtualIp,
+            false,
+            cancellationToken,
+            edgeMac);
+        try
+        {
+            // Releasing relay policy also clears n3n's per-MAC terminal failure
+            // budget. The peer applies the same command before acknowledging it,
+            // so the new round starts from both endpoints.
+            await discovery.SendRelayPolicyAsync(virtualIp, false, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            AppendLog(
+                run,
+                $"P2P 重试：本机已复位，但未能与 {virtualIp} 同步复位；本轮可能无法命中。");
+            throw new InvalidOperationException(exception.Message, exception);
+        }
+
+        lock (_stateGate)
+        {
+            if (!ReferenceEquals(_currentRun, run))
+            {
+                return;
+            }
+        }
+        AppendLog(run, $"P2P 重试：双方已复位 {virtualIp} 的失败预算，开始新一轮自动打洞。");
+        PublishConnected(run);
+    }
+
     /// <summary>
     /// The peer's n3n MAC, if the management rows identify it. n3n only learns a peer's
     /// virtual IPv4 from a REGISTER, so a peer first seen through a data packet has none
@@ -1323,12 +1372,26 @@ public sealed partial class EdgeController : IAsyncDisposable
         }
 
         var friendlyPunchLine = GetFriendlyPunchLog(line);
+        string? compatibilityLine = null;
         lock (run.LogGate)
         {
+            if (!run.EncryptionMismatchLogged &&
+                line.Contains("invalid transop ID", StringComparison.OrdinalIgnoreCase))
+            {
+                run.EncryptionMismatchLogged = true;
+                run.CompatibilityHint =
+                    "检测到至少一位好友的联机密钥或加密模式与本机不一致，该链路无法传输游戏数据。";
+                compatibilityLine =
+                    "配置错误：检测到对端的联机密钥/加密模式与本机不一致；请双方统一密钥（或都留空）后重新连接。";
+            }
             run.LogLines.Add(line);
             if (friendlyPunchLine is not null)
             {
                 run.LogLines.Add(friendlyPunchLine);
+            }
+            if (compatibilityLine is not null)
+            {
+                run.LogLines.Add(compatibilityLine);
             }
             if (run.LogLines.Count > 500)
             {
@@ -1341,6 +1404,11 @@ public sealed partial class EdgeController : IAsyncDisposable
                 {
                     run.LogWriter.WriteLine(
                         $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz}] {friendlyPunchLine}");
+                }
+                if (compatibilityLine is not null)
+                {
+                    run.LogWriter.WriteLine(
+                        $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz}] {compatibilityLine}");
                 }
             }
             catch (ObjectDisposedException)
@@ -1421,10 +1489,34 @@ public sealed partial class EdgeController : IAsyncDisposable
         {
             LogReceived?.Invoke(this, friendlyPunchLine);
         }
+        if (compatibilityLine is not null)
+        {
+            LogReceived?.Invoke(this, compatibilityLine);
+        }
     }
 
     private static string? GetFriendlyPunchLog(string line)
     {
+        if (line.Contains("MikuN2N NAT4 bank calibration started", StringComparison.OrdinalIgnoreCase))
+        {
+            return "P2P 打洞：检测到双 NAT4，正在用独立 UDP 端口组采样两端映射规律。";
+        }
+        if (line.Contains("MikuN2N NAT4 bank punch started", StringComparison.OrdinalIgnoreCase))
+        {
+            return "P2P 打洞：双 NAT4 端口组已同步，正在并行命中对端映射窗口。";
+        }
+        if (line.Contains("MikuN2N bank punch promoted", StringComparison.OrdinalIgnoreCase))
+        {
+            return "P2P 打洞：双 NAT4 端口组已命中，连接已切换为 P2P 直连。";
+        }
+        if (line.Contains("MikuN2N NAT4 bank punch exhausted", StringComparison.OrdinalIgnoreCase))
+        {
+            return "P2P 打洞：本轮双 NAT4 端口组未命中，将在冷却后重新采样；当前继续使用 pSp 中继。";
+        }
+        if (line.Contains("MikuN2N NAT4 bank punch abandoned", StringComparison.OrdinalIgnoreCase))
+        {
+            return "P2P 打洞：自动尝试已全部用完，现已稳定使用 pSp 中继；可在好友链路上右键手动重试。";
+        }
         if (line.Contains("MikuN2N Tier 1 punch started", StringComparison.OrdinalIgnoreCase))
         {
             return "P2P 打洞：增强策略已启动，正在受限的时间与发包预算内扫描可能的公网端口。";
@@ -1436,6 +1528,10 @@ public sealed partial class EdgeController : IAsyncDisposable
         if (line.Contains("MikuN2N Tier 1 punch exhausted", StringComparison.OrdinalIgnoreCase))
         {
             return "P2P 打洞：本轮增强策略未建立直连，已停止扫描并继续使用 pSp 中继。";
+        }
+        if (line.Contains("MikuN2N Tier 1 punch abandoned", StringComparison.OrdinalIgnoreCase))
+        {
+            return "P2P 打洞：自动尝试已全部用完，现已稳定使用 pSp 中继；可在好友链路上右键手动重试。";
         }
         return null;
     }
@@ -1542,15 +1638,25 @@ public sealed partial class EdgeController : IAsyncDisposable
         var punchingCount = peers.Count(peer =>
             peer.ConnectionMode == PeerConnectionMode.Punching);
         var relayedCount = peers.Count(peer =>
-            peer.ConnectionMode is PeerConnectionMode.Relayed or PeerConnectionMode.ForcedRelayed);
+            peer.ConnectionMode is PeerConnectionMode.Relayed or
+                PeerConnectionMode.ForcedRelayed or
+                PeerConnectionMode.PunchFailed);
+        var failedCount = peers.Count(peer =>
+            peer.ConnectionMode == PeerConnectionMode.PunchFailed);
         var detail = peers.Length == 0
             ? "隧道已连接；暂时没有发现其他已启动 MikuN2N 的朋友。"
             : punchingCount > 0
                 ? $"隧道已连接；{directCount} 位 P2P 直连，{punchingCount} 位打洞中，{relayedCount} 位经 Supernode 中继。"
+                : failedCount > 0
+                    ? $"隧道已连接；{directCount} 位 P2P 直连，{relayedCount} 位经 Supernode 中继；其中 {failedCount} 位已停止自动打洞，可右键重试。"
                 : $"隧道已连接；{directCount} 位 P2P 直连，{relayedCount} 位经 Supernode 中继。";
         if (!string.IsNullOrWhiteSpace(run.NetworkHint))
         {
             detail = $"{detail} {run.NetworkHint}";
+        }
+        if (!string.IsNullOrWhiteSpace(run.CompatibilityHint))
+        {
+            detail = $"{detail} {run.CompatibilityHint}";
         }
         PublishIfCurrent(run, new ConnectionSnapshot(
             ConnectionState.Connected,
@@ -1610,6 +1716,10 @@ public sealed partial class EdgeController : IAsyncDisposable
                         break;
                     case PeerConnectionMode.ForcedRelayed:
                         lines.Add($"P2P：{peerLabel} 已按用户设置强制使用 Supernode 中继。");
+                        break;
+                    case PeerConnectionMode.PunchFailed:
+                        lines.Add(
+                            $"P2P：与 {peerLabel} 的自动打洞已达到上限，现稳定使用 Supernode 中继；可右键手动重试。");
                         break;
                 }
             }
@@ -1819,6 +1929,9 @@ public sealed partial class EdgeController : IAsyncDisposable
                 var value when string.Equals(value, "p2p", StringComparison.OrdinalIgnoreCase) =>
                     PeerConnectionMode.Direct,
                 var value when string.Equals(value, "pSp", StringComparison.OrdinalIgnoreCase) &&
+                               punchState == "failed" =>
+                    PeerConnectionMode.PunchFailed,
+                var value when string.Equals(value, "pSp", StringComparison.OrdinalIgnoreCase) &&
                                punchState is "native" or "punching" =>
                     PeerConnectionMode.Punching,
                 var value when string.Equals(value, "pSp", StringComparison.OrdinalIgnoreCase) =>
@@ -1923,11 +2036,22 @@ public sealed partial class EdgeController : IAsyncDisposable
             return;
         }
         if (!modes.TryGetValue(key, out var existing) ||
-            existing != PeerConnectionMode.Direct)
+            PeerModePriority(mode) > PeerModePriority(existing))
         {
             modes[key] = mode;
         }
     }
+
+    private static int PeerModePriority(PeerConnectionMode mode) => mode switch
+    {
+        PeerConnectionMode.LanDirect => 6,
+        PeerConnectionMode.Direct => 5,
+        PeerConnectionMode.ForcedRelayed => 4,
+        PeerConnectionMode.PunchFailed => 3,
+        PeerConnectionMode.Punching => 2,
+        PeerConnectionMode.Relayed => 1,
+        _ => 0
+    };
 
     // Two management rows can share a description (peers keep the default machine
     // name), and addressing the wrong one would force the wrong friend onto the
@@ -2000,7 +2124,7 @@ public sealed partial class EdgeController : IAsyncDisposable
             "register_pkt_ttl=3",
             "mikun2n_punch=true",
             "mikun2n_punch_grace=5",
-            "mikun2n_punch_budget=22",
+            "mikun2n_punch_budget=25",
             "mikun2n_punch_max_packets=12000",
             string.Empty,
             "[filter]",
@@ -2261,6 +2385,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         public PeerDiscoveryService? PeerDiscovery { get; set; }
         public UpnpPortMappingService? PortMapping { get; set; }
         public string? NetworkHint { get; set; }
+        public string? CompatibilityHint { get; set; }
         public string NatType { get; set; } = "检测中";
         public string NatDescription { get; set; } = "正在通过 n3n 数据端口检测 NAT 行为。";
         public string? VirtualIp { get; set; }
@@ -2276,6 +2401,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         public bool RelayPolicyRestored { get; set; }
         public bool RelayReconcileWarningLogged { get; set; }
         public bool RelayUnmatchedWarningLogged { get; set; }
+        public bool EncryptionMismatchLogged { get; set; }
         public volatile bool VirtualAddressReleased;
         public volatile bool DiscoveryUnavailable;
         public volatile bool NativePunchTelemetry;

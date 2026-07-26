@@ -94,8 +94,16 @@ static void check_known_peer_sock_change (struct n3n_runtime_data *eee,
 
 #define MIKUN2N_PROBE_PORT_A 21001
 #define MIKUN2N_PROBE_PORT_B 21002
+#define MIKUN2N_NAT_SAMPLE_ROUNDS 5
+#define MIKUN2N_NAT_PROBE_INTERVAL_MS 250
+#define MIKUN2N_NAT_CROSS_WAIT_MS 750
+#define MIKUN2N_NAT_PROBE_TIMEOUT_MS 10000
+#define MIKUN2N_COORD_QUERY_MS 750
+#define MIKUN2N_COORD_FALLBACK_MS 4000
+#define MIKUN2N_PUNCH_RETRY_SECS 30
+#define MIKUN2N_PUNCH_MAX_ROUNDS 3
 #define MIKUN2N_NATIVE_GRACE_SECS 5
-#define MIKUN2N_PUNCH_BUDGET_SECS 22
+#define MIKUN2N_PUNCH_BUDGET_SECS 25
 #define MIKUN2N_PUNCH_TICK_MS 250
 #define MIKUN2N_PUNCH_MAX_PACKETS 12000
 #define MIKUN2N_CONE_ESCAPE_NEAR 64
@@ -107,6 +115,17 @@ static void check_known_peer_sock_change (struct n3n_runtime_data *eee,
 #define MIKUN2N_PUNCH_COOKIE_MASK 0x0000C000
 #define MIKUN2N_PUNCH_OFFSET_MASK 0x00003FFF
 #define MIKUN2N_PUNCH_OFFSET_BIAS 8192
+#define MIKUN2N_BANK_CALIBRATION_MS 800
+#define MIKUN2N_BANK_SPRAY_MS 7000
+#define MIKUN2N_BANK_TICK_MS 100
+
+#define MIKUN2N_BANK_STATE_NONE 0
+#define MIKUN2N_BANK_STATE_WAIT_A 1
+#define MIKUN2N_BANK_STATE_WAIT_B 2
+#define MIKUN2N_BANK_STATE_REPORTED 3
+#define MIKUN2N_BANK_STATE_ARMED 4
+#define MIKUN2N_BANK_STATE_SPRAY 5
+#define MIKUN2N_BANK_STATE_FALLBACK 6
 
 /* ************************************** */
 
@@ -117,6 +136,15 @@ static const char *mikun2n_punch_role_name (uint8_t role) {
         case MIKUN2N_PUNCH_ROLE_LAYERED: return "layered";
         default: return "none";
     }
+}
+
+static uint8_t mikun2n_nat_kind (const mikun2n_nat_state_t *nat) {
+    if(!nat->complete)
+        return MIKUN2N_NAT_KIND_UNKNOWN;
+    if(nat->eim_uncertain)
+        return MIKUN2N_NAT_KIND_UNCERTAIN;
+    return !strcmp(nat->mapping, "endpoint-independent")
+           ? MIKUN2N_NAT_KIND_EIM : MIKUN2N_NAT_KIND_APDM;
 }
 
 static int mikun2n_peer_force_relay (struct n3n_runtime_data *eee,
@@ -138,6 +166,85 @@ static int mikun2n_peer_force_relay (struct n3n_runtime_data *eee,
         }
     }
     return 0;
+}
+
+static mikun2n_punch_history_t *mikun2n_find_punch_history (
+    struct n3n_runtime_data *eee,
+    const n2n_mac_t mac,
+    int create) {
+    uint8_t i;
+
+    for(i = 0; i < eee->mikun2n_punch_history_count; i++) {
+        if(!memcmp(eee->mikun2n_punch_history[i].mac, mac,
+                   sizeof(n2n_mac_t)))
+            return &eee->mikun2n_punch_history[i];
+    }
+    if(!create ||
+       eee->mikun2n_punch_history_count >= MIKUN2N_PUNCH_HISTORY_MAX)
+        return NULL;
+
+    i = eee->mikun2n_punch_history_count++;
+    memset(&eee->mikun2n_punch_history[i], 0,
+           sizeof(eee->mikun2n_punch_history[i]));
+    memcpy(eee->mikun2n_punch_history[i].mac, mac, sizeof(n2n_mac_t));
+    return &eee->mikun2n_punch_history[i];
+}
+
+static void mikun2n_clear_punch_history (struct n3n_runtime_data *eee,
+                                         const n2n_mac_t mac) {
+    uint8_t i;
+
+    for(i = 0; i < eee->mikun2n_punch_history_count; i++) {
+        if(memcmp(eee->mikun2n_punch_history[i].mac, mac,
+                  sizeof(n2n_mac_t)))
+            continue;
+        eee->mikun2n_punch_history_count--;
+        eee->mikun2n_punch_history[i] =
+            eee->mikun2n_punch_history[eee->mikun2n_punch_history_count];
+        return;
+    }
+}
+
+static void mikun2n_apply_punch_history (struct n3n_runtime_data *eee,
+                                         struct peer_info *peer,
+                                         time_t now) {
+    mikun2n_punch_history_t *history =
+        mikun2n_find_punch_history(eee, peer->mac_addr, 0);
+
+    if(!history)
+        return;
+    peer->punch_rounds = history->rounds;
+    peer->punch_retry_at = history->retry_at;
+    peer->punch_abandoned = history->abandoned;
+    if(history->abandoned || now < history->retry_at)
+        peer->punch_exhausted = 1;
+}
+
+static int mikun2n_record_punch_failure (struct n3n_runtime_data *eee,
+                                         struct peer_info *peer,
+                                         time_t now) {
+    mikun2n_punch_history_t *history =
+        mikun2n_find_punch_history(eee, peer->mac_addr, 1);
+
+    if(history) {
+        if(history->rounds < UINT8_MAX)
+            history->rounds++;
+        history->retry_at = now + MIKUN2N_PUNCH_RETRY_SECS;
+        history->abandoned =
+            history->rounds >= MIKUN2N_PUNCH_MAX_ROUNDS;
+        peer->punch_rounds = history->rounds;
+        peer->punch_retry_at = history->retry_at;
+        peer->punch_abandoned = history->abandoned;
+    } else {
+        /* The fixed session table is deliberately bounded. Preserve the old
+         * per-entry behavior if a session somehow has more than 64 peers. */
+        peer->punch_rounds++;
+        peer->punch_retry_at = now + MIKUN2N_PUNCH_RETRY_SECS;
+        peer->punch_abandoned =
+            peer->punch_rounds >= MIKUN2N_PUNCH_MAX_ROUNDS;
+    }
+    peer->punch_exhausted = 1;
+    return peer->punch_abandoned;
 }
 
 static struct n3n_metrics_items_uint32 edge_utils_metrics_items1[] = {
@@ -461,14 +568,24 @@ void supernode_connect (struct n3n_runtime_data *eee) {
 #endif
 
         if(detect_local_ip_address(&local_sock, eee) == 0) {
-            // always overwrite local port even/especially if chosen by OS...
-            eee->conf.preferred_sock.port = local_sock.port;
-            // only if auto-detection mode, ...
-            if(eee->conf.preferred_sock.family != AF_INVALID) {
-                // ... overwrite IP address, too (whole socket struct here)
-                memcpy(&eee->conf.preferred_sock, &local_sock, sizeof(n2n_sock_t));
-                traceEvent(TRACE_INFO, "determined local socket [%s]",
+            /* "auto" used to keep AF_INVALID, so REGISTER_SUPER never carried
+             * the detected LAN endpoint and same-LAN peers had to wait for
+             * multicast discovery. Advertise the routed local endpoint while
+             * retaining multicast as an independent fast path. An explicitly
+             * configured address keeps its IP and only inherits the actual
+             * data-socket port. */
+            if(!eee->mikun2n_preferred_sock_mode_set) {
+                eee->mikun2n_preferred_sock_auto =
+                    eee->conf.preferred_sock.family == AF_INVALID;
+                eee->mikun2n_preferred_sock_mode_set = 1;
+            }
+            if(eee->mikun2n_preferred_sock_auto) {
+                memcpy(&eee->conf.preferred_sock, &local_sock,
+                       sizeof(n2n_sock_t));
+                traceEvent(TRACE_INFO, "determined and advertising local socket [%s]",
                            sock_to_cstr(sockbuf, &local_sock));
+            } else {
+                eee->conf.preferred_sock.port = local_sock.port;
             }
         }
 
@@ -687,8 +804,7 @@ static int is_valid_peer_sock (const n2n_sock_t *sock) {
  */
 static void register_with_local_peers (struct n3n_runtime_data * eee) {
 #ifndef SKIP_MULTICAST_PEERS_DISCOVERY
-    if((eee->multicast_joined && eee->conf.allow_p2p)
-       && (eee->conf.preferred_sock.family == (uint8_t)AF_INVALID)) {
+    if(eee->multicast_joined && eee->conf.allow_p2p) {
         /* send registration to the local multicast group */
         traceEvent(TRACE_DEBUG, "registering with multicast group %s:%u",
                    N2N_MULTICAST_GROUP, N2N_MULTICAST_PORT);
@@ -847,8 +963,10 @@ static void check_peer_registration_needed (struct n3n_runtime_data *eee,
         /* Already in known_peers. */
         time_t now = time(NULL);
 
-        if(!from_supernode)
+        if(!from_supernode) {
             scan->last_p2p = now;
+            mikun2n_clear_punch_history(eee, scan->mac_addr);
+        }
 
         if(via_multicast)
             scan->local = 1;
@@ -883,7 +1001,8 @@ static void peer_set_p2p_confirmed (struct n3n_runtime_data * eee,
                                     const n2n_mac_t mac,
                                     const n2n_cookie_t cookie,
                                     const n2n_sock_t * peer,
-                                    time_t now) {
+                                    time_t now,
+                                    SOCKET in_sock) {
 
     struct peer_info *scan, *scan_tmp;
     macstr_t mac_buf;
@@ -898,16 +1017,61 @@ static void peer_set_p2p_confirmed (struct n3n_runtime_data * eee,
     }
 
     if(scan) {
+        int worker_index;
+
         HASH_DEL(eee->pending_peers, scan);
+        mikun2n_clear_punch_history(eee, mac);
+
+        if(in_sock != MIKUN2N_INVALID_SOCKET && in_sock != eee->sock &&
+           in_sock != eee->udp_multicast_sock) {
+            for(worker_index = 0;
+                worker_index < MIKUN2N_BANK_WORKERS;
+                worker_index++) {
+                if(scan->punch_workers[worker_index].socket_fd == in_sock) {
+                    int close_index;
+
+                    scan->punch_data_sock = in_sock;
+                    for(close_index = 0;
+                        close_index < MIKUN2N_BANK_WORKERS;
+                        close_index++) {
+                        if(close_index != worker_index &&
+                           scan->punch_workers[close_index].socket_fd !=
+                               MIKUN2N_INVALID_SOCKET) {
+                            closesocket(
+                                scan->punch_workers[close_index].socket_fd);
+                            scan->punch_workers[close_index].socket_fd =
+                                MIKUN2N_INVALID_SOCKET;
+                        }
+                    }
+                    traceEvent(TRACE_NORMAL,
+                               "MikuN2N bank punch promoted worker=%d "
+                               "local_port=%u as peer data socket",
+                               worker_index,
+                               scan->punch_workers[worker_index].local_port);
+                    break;
+                }
+            }
+        }
 
         scan_tmp = find_peer_by_sock(peer, eee->known_peers);
         if(scan_tmp != NULL) {
             HASH_DEL(eee->known_peers, scan_tmp);
-            free(scan);
-            scan = scan_tmp;
-            memcpy(scan->mac_addr, mac, sizeof(n2n_mac_t));
-            // in case of MAC change, reset cookie to allow immediate re-registration
-            scan->last_cookie = N2N_NO_REG_COOKIE;
+            if(scan->punch_data_sock != MIKUN2N_INVALID_SOCKET) {
+                /* Keep the bank entry because it owns the winning socket.
+                 * A stale known entry for the same endpoint must not replace
+                 * it and silently move subsequent traffic back to the control
+                 * socket. Preserve any virtual address learned there first. */
+                if(scan->dev_addr.net_addr == 0 &&
+                   scan_tmp->dev_addr.net_addr != 0)
+                    scan->dev_addr = scan_tmp->dev_addr;
+                peer_info_free(scan_tmp);
+            } else {
+                peer_info_free(scan);
+                scan = scan_tmp;
+                memcpy(scan->mac_addr, mac, sizeof(n2n_mac_t));
+                // in case of MAC change, reset cookie to allow immediate re-registration
+                scan->last_cookie = N2N_NO_REG_COOKIE;
+            }
         } else {
             // update sock but ...
             // ... ignore ACKs's (and their socks) from lower ranked inbound ways for a while
@@ -1281,14 +1445,32 @@ static void sendto_sock (struct n3n_runtime_data *eee, const void * buf,
     return;
 }
 
+static ssize_t mikun2n_sendto_socket (SOCKET socket_fd, const void *buf,
+                                      size_t len, const n2n_sock_t *dest) {
+    struct sockaddr_in peer_addr;
+
+    if(socket_fd == MIKUN2N_INVALID_SOCKET || !dest || dest->family != AF_INET)
+        return -1;
+    memset(&peer_addr, 0, sizeof(peer_addr));
+    fill_sockaddr((struct sockaddr *)&peer_addr, sizeof(peer_addr), dest);
+    return sendto(socket_fd, (const char *)buf, (int)len, 0,
+                  (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+}
+
 
 /* ************************************** */
 
 static uint64_t mikun2n_now_ms (void) {
-    struct timeval tv;
+#ifdef _WIN32
+    return (uint64_t)GetTickCount64();
+#else
+    struct timespec ts;
 
-    gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
+    if(clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+        return (uint64_t)ts.tv_sec * 1000ULL +
+               (uint64_t)ts.tv_nsec / 1000000ULL;
+    return (uint64_t)time(NULL) * 1000ULL;
+#endif
 }
 
 static int mikun2n_probe_source (const struct n3n_runtime_data *eee,
@@ -1304,12 +1486,36 @@ static int mikun2n_probe_source (const struct n3n_runtime_data *eee,
 
 static void mikun2n_finish_nat_probe (struct n3n_runtime_data *eee) {
     mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
+    int endpoint_independent;
 
     if(nat->probe_mask != 3 || nat->complete)
         return;
 
-    if(!nat->multi_public_ip &&
-       nat->observed_port_a == nat->observed_port_b) {
+    /* One A/B pair cannot type a CGNAT. A single transient re-binding used to
+     * pin the whole session to NAT4 with no re-probe, which then selected the
+     * NAT4 punch strategy against a peer that was really NAT3. Sample several
+     * rounds and decide on the majority; only the first round can measure
+     * filtering, because afterwards the mapping is primed. */
+    if(nat->observed_port_a == nat->observed_port_b)
+        nat->eim_matches++;
+    nat->eim_samples++;
+
+    if(nat->eim_samples < MIKUN2N_NAT_SAMPLE_ROUNDS) {
+        nat->probe_mask = 0;
+        nat->observed_port_a = 0;
+        nat->observed_port_b = 0;
+        return;
+    }
+
+    /* A split verdict means the NAT is genuinely unstable rather than plainly
+     * symmetric. Report the majority for display but flag it, so the punch
+     * scheduler prefers the layered sweep, which covers its range in fewer
+     * ticks and does not depend on a correct NAT4 role split. */
+    nat->eim_uncertain = (nat->eim_matches * 5 < nat->eim_samples * 4) &&
+                         (nat->eim_matches * 5 > nat->eim_samples);
+    endpoint_independent = nat->eim_matches * 2 > nat->eim_samples;
+
+    if(!nat->multi_public_ip && endpoint_independent) {
         snprintf(nat->mapping, sizeof(nat->mapping), "endpoint-independent");
         if(nat->cross_reply) {
             snprintf(nat->type, sizeof(nat->type), "NAT1/2");
@@ -1328,9 +1534,11 @@ static void mikun2n_finish_nat_probe (struct n3n_runtime_data *eee) {
     nat->unavailable = 0;
 
     traceEvent(TRACE_NORMAL,
-               "MikuN2N NAT probe: type=%s mapping=%s filtering=%s external=%s:%u/%u",
+               "MikuN2N NAT probe: type=%s mapping=%s filtering=%s external=%s:%u/%u eim=%u/%u%s",
                nat->type, nat->mapping, nat->filtering, nat->public_ip,
-               nat->observed_port_a, nat->observed_port_b);
+               nat->observed_port_a, nat->observed_port_b,
+               nat->eim_matches, nat->eim_samples,
+               nat->eim_uncertain ? " (uncertain)" : "");
 }
 
 static void mikun2n_send_cross_probe (struct n3n_runtime_data *eee) {
@@ -1387,8 +1595,8 @@ static int mikun2n_handle_nat_probe (struct n3n_runtime_data *eee,
     if(sender->port == MIKUN2N_PROBE_PORT_A) {
         nat->observed_port_a = (uint16_t)port;
         nat->probe_mask |= 1;
-        if(!nat->cross_probe_at) {
-            nat->cross_probe_at = now;
+        if(!nat->cross_probe_ms) {
+            nat->cross_probe_ms = mikun2n_now_ms();
             mikun2n_send_cross_probe(eee);
         }
     } else {
@@ -1410,9 +1618,12 @@ static void mikun2n_reset_nat_probe (struct n3n_runtime_data *eee, time_t now) {
     snprintf(eee->mikun2n_nat.mapping, sizeof(eee->mikun2n_nat.mapping), "unknown");
     snprintf(eee->mikun2n_nat.filtering, sizeof(eee->mikun2n_nat.filtering), "unknown");
     eee->mikun2n_nat.started_at = now;
+    eee->mikun2n_nat.started_ms = mikun2n_now_ms();
+    eee->mikun2n_nat.next_probe_ms = eee->mikun2n_nat.started_ms;
 }
 
-static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now) {
+static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now,
+                                      uint64_t now_ms) {
     mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
     n2n_sock_t endpoint;
     static const char request[] = "PROBE";
@@ -1437,7 +1648,7 @@ static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now) 
         return;
     }
 
-    if(now - nat->started_at >= 10) {
+    if(now_ms - nat->started_ms >= MIKUN2N_NAT_PROBE_TIMEOUT_MS) {
         snprintf(nat->type, sizeof(nat->type), "unknown");
         nat->unavailable = 1;
         nat->last_probe_at = now;
@@ -1445,7 +1656,7 @@ static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now) 
         return;
     }
 
-    if(now == nat->last_probe_at)
+    if(now_ms < nat->next_probe_ms)
         return;
 
     endpoint = eee->curr_sn->sock;
@@ -1454,11 +1665,12 @@ static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now) 
     } else {
         /* Do not contact B until its unprimed cross-port reply either arrived
          * or timed out, otherwise an APDF NAT would be misreported as open. */
-        if(!nat->cross_reply && now - nat->cross_probe_at < 3) {
-            if(now != nat->last_probe_at && nat->cross_probe_attempts < 3) {
+        if(nat->eim_samples == 0 && !nat->cross_reply &&
+           now_ms - nat->cross_probe_ms < MIKUN2N_NAT_CROSS_WAIT_MS) {
+            if(nat->cross_probe_attempts < 3) {
                 mikun2n_send_cross_probe(eee);
-                nat->last_probe_at = now;
             }
+            nat->next_probe_ms = now_ms + MIKUN2N_NAT_PROBE_INTERVAL_MS;
             return;
         }
         endpoint.port = MIKUN2N_PROBE_PORT_B;
@@ -1466,6 +1678,7 @@ static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now) 
     sendto_sock(eee, request, sizeof(request) - 1, &endpoint);
     nat->probe_round++;
     nat->last_probe_at = now;
+    nat->next_probe_ms = now_ms + MIKUN2N_NAT_PROBE_INTERVAL_MS;
 }
 
 /* ************************************** */
@@ -1475,8 +1688,7 @@ static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now) 
 static void check_join_multicast_group (struct n3n_runtime_data *eee) {
 
 #ifndef SKIP_MULTICAST_PEERS_DISCOVERY
-    if((eee->conf.allow_p2p)
-       && (eee->conf.preferred_sock.family == (uint8_t)AF_INVALID)) {
+    if(eee->conf.allow_p2p) {
         if(!eee->multicast_joined) {
             struct ip_mreq mreq;
             mreq.imr_multiaddr.s_addr = inet_addr(N2N_MULTICAST_GROUP);
@@ -1529,6 +1741,41 @@ void send_query_peer (struct n3n_runtime_data * eee,
 
     memcpy(query.srcMac, eee->device.mac_addr, sizeof(n2n_mac_t));
     memcpy(query.targetMac, dst_mac, sizeof(n2n_mac_t));
+
+    if(!is_null_mac(dst_mac) && eee->mikun2n_nat.complete) {
+        HASH_FIND_PEER(eee->pending_peers, dst_mac, peer);
+        if(!peer)
+            HASH_FIND_PEER(eee->known_peers, dst_mac, peer);
+        if(peer) {
+            if(!eee->mikun2n_punch_nonce) {
+                eee->mikun2n_punch_nonce = n3n_rand();
+                if(!eee->mikun2n_punch_nonce)
+                    eee->mikun2n_punch_nonce = 1;
+            }
+            query.aflags |= N2N_AFLAGS_MIKUN2N_NAT;
+            query.mikun2n_nat_kind = mikun2n_nat_kind(&eee->mikun2n_nat);
+            query.mikun2n_eim_matches = eee->mikun2n_nat.eim_matches;
+            query.mikun2n_eim_samples = eee->mikun2n_nat.eim_samples;
+            query.mikun2n_punch_nonce = eee->mikun2n_punch_nonce;
+            if(peer->punch_bank_state >= MIKUN2N_BANK_STATE_REPORTED &&
+               peer->punch_bank_model_mode != MIKUN2N_BANK_MODE_NONE &&
+               peer->punch_bank_nonce != 0 &&
+               peer->punch_generation != 0) {
+                query.aflags |= N2N_AFLAGS_MIKUN2N_BANK_MODEL;
+                query.mikun2n_bank_mode = peer->punch_bank_model_mode;
+                query.mikun2n_bank_direction = peer->punch_bank_direction;
+                query.mikun2n_bank_workers =
+                    peer->punch_bank_worker_count;
+                query.mikun2n_bank_reuse = peer->punch_bank_reuse;
+                query.mikun2n_bank1 = peer->punch_bank1;
+                query.mikun2n_bank2 = peer->punch_bank2;
+                query.mikun2n_bank_spread = peer->punch_bank_spread;
+                query.mikun2n_bank_rate = peer->punch_bank_rate;
+                query.mikun2n_bank_nonce = peer->punch_bank_nonce;
+                query.mikun2n_bank_generation = peer->punch_generation;
+            }
+        }
+    }
 
     idx = 0;
     encode_QUERY_PEER(pktbuf, &idx, &cmn, &query);
@@ -1789,7 +2036,8 @@ static void send_register (struct n3n_runtime_data * eee,
 /** Send a REGISTER_ACK packet to a peer edge. */
 static void send_register_ack (struct n3n_runtime_data * eee,
                                const n2n_sock_t * remote_peer,
-                               const n2n_REGISTER_t * reg) {
+                               const n2n_REGISTER_t * reg,
+                               SOCKET out_sock) {
 
     uint8_t pktbuf[N2N_PKT_BUF_SIZE];
     size_t idx;
@@ -1827,7 +2075,10 @@ static void send_register_ack (struct n3n_runtime_data * eee,
                               eee->conf.header_encryption_ctx_dynamic, eee->conf.header_iv_ctx_dynamic,
                               time_stamp());
 
-    sendto_sock(eee, pktbuf, idx, remote_peer);
+    if(out_sock != MIKUN2N_INVALID_SOCKET && out_sock != eee->sock)
+        mikun2n_sendto_socket(out_sock, pktbuf, idx, remote_peer);
+    else
+        sendto_sock(eee, pktbuf, idx, remote_peer);
 }
 
 /* ************************************** */
@@ -2328,13 +2579,26 @@ static int send_packet (struct n3n_runtime_data * eee,
 
         // if no supernode around, foward the broadcast to all known peers
         if(eee->sn_wait) {
-            HASH_ITER(hh, eee->known_peers, peer, tmp_peer)
-            sendto_sock(eee, pktbuf, pktlen, &peer->sock);
+            HASH_ITER(hh, eee->known_peers, peer, tmp_peer) {
+                if(peer->punch_data_sock != MIKUN2N_INVALID_SOCKET)
+                    mikun2n_sendto_socket(peer->punch_data_sock,
+                                          pktbuf, pktlen, &peer->sock);
+                else
+                    sendto_sock(eee, pktbuf, pktlen, &peer->sock);
+            }
             return 0;
         }
         // fall through otherwise
     }
 
+    if(is_p2p) {
+        HASH_FIND_PEER(eee->known_peers, dstMac, peer);
+        if(peer && peer->punch_data_sock != MIKUN2N_INVALID_SOCKET) {
+            mikun2n_sendto_socket(peer->punch_data_sock,
+                                  pktbuf, pktlen, &destination);
+            return 0;
+        }
+    }
     sendto_sock(eee, pktbuf, pktlen, &destination);
 
     return 0;
@@ -2799,10 +3063,10 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
                            macaddr_str(mac_buf1, reg.srcMac),
                            sock_to_cstr(sockbuf1, &sender),
                            (reg.cookie & N2N_LOCAL_REG_COOKIE) ? " (local)" : "");
-                find_and_remove_peer(&eee->pending_peers, reg.srcMac);
-
                 /* NOTE: only ACK to peers */
-                send_register_ack(eee, orig_sender, &reg);
+                send_register_ack(eee, orig_sender, &reg, in_sock);
+                peer_set_p2p_confirmed(eee, reg.srcMac, reg.cookie,
+                                       &sender, now, in_sock);
             } else {
                 traceEvent(TRACE_INFO, "[pSp] Rx REGISTER from %s [%s] to %s via [%s]",
                            macaddr_str(mac_buf1, reg.srcMac), sock_to_cstr(sockbuf2, orig_sender),
@@ -2845,7 +3109,7 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
 
             peer_set_p2p_confirmed(eee, ra.srcMac,
                                    ra.cookie,
-                                   &sender, now);
+                                   &sender, now, in_sock);
             break;
         }
 
@@ -3108,6 +3372,86 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
                 if(scan) {
                     scan->sock = pi.sock;
 
+                    if(pi.aflags & N2N_AFLAGS_MIKUN2N_NAT) {
+                        scan->mikun2n_nat_kind = pi.mikun2n_nat_kind;
+                        scan->mikun2n_eim_matches = pi.mikun2n_eim_matches;
+                        scan->mikun2n_eim_samples = pi.mikun2n_eim_samples;
+                    }
+
+                    if((pi.aflags & N2N_AFLAGS_MIKUN2N_PUNCH_PLAN) &&
+                       pi.mikun2n_punch_role >= MIKUN2N_PUNCH_ROLE_ANCHOR &&
+                       pi.mikun2n_punch_role <= MIKUN2N_PUNCH_ROLE_LAYERED &&
+                       pi.mikun2n_punch_generation != 0 &&
+                       pi.mikun2n_eim_samples <= MIKUN2N_NAT_SAMPLE_ROUNDS) {
+                        if(scan->punch_generation != pi.mikun2n_punch_generation) {
+                            scan->punch_generation = pi.mikun2n_punch_generation;
+                            scan->punch_peer_nonce = pi.mikun2n_punch_nonce;
+                            scan->punch_role = pi.mikun2n_punch_role;
+                            scan->punch_plan_ready =
+                                (pi.mikun2n_nat_kind !=
+                                     MIKUN2N_NAT_KIND_APDM ||
+                                 mikun2n_nat_kind(&eee->mikun2n_nat) !=
+                                     MIKUN2N_NAT_KIND_APDM);
+                            scan->punch_go_at_ms = mikun2n_now_ms() +
+                                                   pi.mikun2n_punch_delay_ms;
+                            scan->punch_started = 0;
+                            scan->punch_last_ms = 0;
+                            scan->punch_attempt = 0;
+                            scan->punch_packets = 0;
+                            scan->punch_exhausted = 0;
+                            scan->punch_rounds = 0;
+                            scan->punch_abandoned = 0;
+                            mikun2n_apply_punch_history(eee, scan, now);
+                            traceEvent(TRACE_NORMAL,
+                                       "MikuN2N punch plan generation=%u peer_role=%s go_in=%ums "
+                                       "peer_nat=%u eim=%u/%u",
+                                       pi.mikun2n_punch_generation,
+                                       mikun2n_punch_role_name(pi.mikun2n_punch_role),
+                                       pi.mikun2n_punch_delay_ms,
+                                       pi.mikun2n_nat_kind,
+                                       pi.mikun2n_eim_matches,
+                                       pi.mikun2n_eim_samples);
+                        }
+                        if((pi.aflags & N2N_AFLAGS_MIKUN2N_BANK_MODEL) &&
+                           pi.mikun2n_bank_nonce != 0 &&
+                           scan->punch_peer_bank_nonce !=
+                               pi.mikun2n_bank_nonce) {
+                            scan->punch_peer_bank_ready = 1;
+                            scan->punch_peer_bank_mode =
+                                pi.mikun2n_bank_mode;
+                            scan->punch_peer_bank_direction =
+                                pi.mikun2n_bank_direction;
+                            scan->punch_peer_bank_workers =
+                                pi.mikun2n_bank_workers;
+                            scan->punch_peer_bank_reuse =
+                                pi.mikun2n_bank_reuse;
+                            scan->punch_peer_bank1 = pi.mikun2n_bank1;
+                            scan->punch_peer_bank2 = pi.mikun2n_bank2;
+                            scan->punch_peer_bank_spread =
+                                pi.mikun2n_bank_spread;
+                            scan->punch_peer_bank_rate =
+                                pi.mikun2n_bank_rate;
+                            scan->punch_peer_bank_nonce =
+                                pi.mikun2n_bank_nonce;
+                            scan->punch_plan_ready = 1;
+                            scan->punch_go_at_ms = mikun2n_now_ms() +
+                                                   pi.mikun2n_punch_delay_ms;
+                            scan->punch_bank_state =
+                                MIKUN2N_BANK_STATE_ARMED;
+                            traceEvent(
+                                TRACE_NORMAL,
+                                "MikuN2N bank plan generation=%u "
+                                "go_in=%ums peer_model=%u banks=%u/%u "
+                                "workers=%u",
+                                pi.mikun2n_punch_generation,
+                                pi.mikun2n_punch_delay_ms,
+                                pi.mikun2n_bank_mode,
+                                pi.mikun2n_bank1,
+                                pi.mikun2n_bank2,
+                                pi.mikun2n_bank_workers);
+                        }
+                    }
+
                     traceEvent(TRACE_INFO, "Rx PEER_INFO %s can be found at [%s]",
                                macaddr_str(mac_buf1, pi.mac),
                                sock_to_cstr(sockbuf1, &pi.sock));
@@ -3278,6 +3622,614 @@ void print_edge_stats (const struct n3n_runtime_data *eee) {
 
 /* ************************************** */
 
+static int mikun2n_cmp_uint16 (const void *a, const void *b) {
+    return (int)*(const uint16_t *)a - (int)*(const uint16_t *)b;
+}
+
+static int mikun2n_cmp_int (const void *a, const void *b) {
+    return *(const int *)a - *(const int *)b;
+}
+
+static uint16_t mikun2n_shift_port (uint16_t base, int direction, int offset) {
+    int port = (int)base + direction * offset;
+
+    while(port < 1)
+        port += 65535;
+    while(port > 65535)
+        port -= 65535;
+    return (uint16_t)port;
+}
+
+static void mikun2n_close_bank_workers (struct peer_info *pp, int keep) {
+    int i;
+
+    for(i = 0; i < MIKUN2N_BANK_WORKERS; i++) {
+        if(i != keep && pp->punch_workers[i].socket_fd != MIKUN2N_INVALID_SOCKET) {
+            closesocket(pp->punch_workers[i].socket_fd);
+            pp->punch_workers[i].socket_fd = MIKUN2N_INVALID_SOCKET;
+        }
+    }
+    if(keep < 0)
+        pp->punch_bank_worker_count = 0;
+}
+
+static int mikun2n_bank_pool_busy (struct n3n_runtime_data *eee,
+                                   const struct peer_info *owner) {
+    struct peer_info *scan, *tmp;
+
+    HASH_ITER(hh, eee->pending_peers, scan, tmp) {
+        if(scan != owner && scan->punch_bank_worker_count > 1 &&
+           scan->punch_bank_state != MIKUN2N_BANK_STATE_NONE &&
+           scan->punch_bank_state != MIKUN2N_BANK_STATE_FALLBACK)
+            return 1;
+    }
+    return 0;
+}
+
+static int mikun2n_create_bank_workers (struct peer_info *pp) {
+    int i;
+
+    for(i = 0; i < MIKUN2N_BANK_WORKERS; i++) {
+        struct sockaddr_in local;
+        socklen_t local_len = sizeof(local);
+        SOCKET fd;
+#ifdef _WIN32
+        u_long non_blocking = 1;
+#endif
+
+        memset(&local, 0, sizeof(local));
+        local.sin_family = AF_INET;
+        local.sin_addr.s_addr = htonl(INADDR_ANY);
+        local.sin_port = 0;
+        fd = open_socket((struct sockaddr *)&local, sizeof(local), 0);
+        if(fd == MIKUN2N_INVALID_SOCKET) {
+            mikun2n_close_bank_workers(pp, -1);
+            return 0;
+        }
+#ifdef _WIN32
+        ioctlsocket(fd, FIONBIO, &non_blocking);
+#else
+        fcntl(fd, F_SETFL, O_NONBLOCK);
+#endif
+        memset(&local, 0, sizeof(local));
+        if(getsockname(fd, (struct sockaddr *)&local, &local_len) != 0) {
+            closesocket(fd);
+            mikun2n_close_bank_workers(pp, -1);
+            return 0;
+        }
+        pp->punch_workers[i].socket_fd = fd;
+        pp->punch_workers[i].local_port = ntohs(local.sin_port);
+    }
+    pp->punch_bank_worker_count = MIKUN2N_BANK_WORKERS;
+    return 1;
+}
+
+static void mikun2n_send_bank_probe (struct n3n_runtime_data *eee,
+                                     struct peer_info *pp,
+                                     int probe_b,
+                                     uint64_t now_ms) {
+    char request[96];
+    char client_id[16];
+    n2n_sock_t endpoint;
+    int i;
+
+    if(!eee->curr_sn)
+        return;
+    snprintf(client_id, sizeof(client_id), "%08x", pp->punch_bank_nonce);
+    endpoint = eee->curr_sn->sock;
+    endpoint.port = probe_b ? MIKUN2N_PROBE_PORT_B : MIKUN2N_PROBE_PORT_A;
+    for(i = 0; i < pp->punch_bank_worker_count; i++) {
+        mikun2n_bank_worker_t *worker = &pp->punch_workers[i];
+        uint32_t seq = (pp->punch_bank_nonce & 0x7FFFFF00U) ^
+                       (probe_b ? 0x00550000U : 0x002A0000U) ^
+                       (uint32_t)i;
+
+        snprintf(request, sizeof(request), "PROBE7 %s %u",
+                 client_id, seq);
+        mikun2n_sendto_socket(worker->socket_fd, request,
+                              strlen(request), &endpoint);
+        if(probe_b) {
+            worker->seq_b = seq;
+            worker->sent_b_ms = now_ms;
+        } else {
+            worker->seq_a = seq;
+            worker->sent_a_ms = now_ms;
+        }
+    }
+}
+
+static void mikun2n_fit_bank_model (struct n3n_runtime_data *eee,
+                                    struct peer_info *pp) {
+    uint16_t ports[MIKUN2N_BANK_WORKERS];
+    int valid = 0, valid_a = 0, reuse = 0;
+    int largest_gap = 0, split = -1;
+    int small_deltas[MIKUN2N_BANK_WORKERS], small_count = 0;
+    int i, median_step = 1;
+    uint32_t first_ip = 0;
+    int ip_changes = 0;
+    int pairs = 0, jumpy = 0;
+
+    for(i = 0; i < pp->punch_bank_worker_count; i++) {
+        mikun2n_bank_worker_t *worker = &pp->punch_workers[i];
+
+        if(worker->mapped_a) {
+            valid_a++;
+            if(!first_ip)
+                first_ip = worker->public_ip_a;
+            else if(worker->public_ip_a &&
+                    first_ip != worker->public_ip_a)
+                ip_changes++;
+        }
+        if(worker->mapped_b) {
+            if(!first_ip)
+                first_ip = worker->public_ip_b;
+            else if(worker->public_ip_b &&
+                    first_ip != worker->public_ip_b)
+                ip_changes++;
+        }
+        if(worker->mapped_a &&
+           worker->mapped_a == worker->mapped_b)
+            reuse++;
+        if(worker->mapped_a && worker->mapped_b &&
+           worker->mapped_a != worker->mapped_b) {
+            int jump = (int)worker->mapped_b - (int)worker->mapped_a;
+
+            pairs++;
+            if(jump < 0)
+                jump = -jump;
+            if(jump > 96)
+                jumpy++;
+        }
+        if(worker->mapped_b)
+            ports[valid++] = worker->mapped_b;
+        else if(worker->mapped_a)
+            ports[valid++] = worker->mapped_a;
+    }
+
+    pp->punch_bank_reuse = (uint8_t)reuse;
+    pp->punch_bank_direction = 1;
+    pp->punch_bank_rate = 0;
+
+    if(valid < 4) {
+        pp->punch_bank_model_mode = MIKUN2N_BANK_MODE_HARD;
+        pp->punch_bank1 = eee->mikun2n_nat.public_port
+                          ? eee->mikun2n_nat.public_port : 1;
+        pp->punch_bank2 = pp->punch_bank1;
+        pp->punch_bank_spread = 384;
+    } else if(!ip_changes && valid_a > 0 &&
+              reuse * 100 >= valid_a * 80) {
+        pp->punch_bank_model_mode = MIKUN2N_BANK_MODE_CONE;
+        pp->punch_bank1 = eee->mikun2n_nat.public_port
+                          ? eee->mikun2n_nat.public_port : ports[valid - 1];
+        pp->punch_bank2 = pp->punch_bank1;
+        pp->punch_bank_spread = 4;
+    } else {
+        qsort(ports, (size_t)valid, sizeof(ports[0]),
+              mikun2n_cmp_uint16);
+        for(i = 1; i < valid; i++) {
+            int gap = (int)ports[i] - (int)ports[i - 1];
+
+            if(gap > largest_gap) {
+                largest_gap = gap;
+                split = i;
+            }
+            if(gap > 0 && gap <= 64)
+                small_deltas[small_count++] = gap;
+        }
+        if(small_count) {
+            qsort(small_deltas, (size_t)small_count,
+                  sizeof(small_deltas[0]), mikun2n_cmp_int);
+            median_step = small_deltas[small_count / 2];
+        }
+
+        int dual_bank = largest_gap >= 128 && split >= 3 &&
+                        valid - split >= 3;
+        int span = (int)ports[valid - 1] - (int)ports[0];
+
+        if(!ip_changes && !dual_bank &&
+           (span >= 192 || (pairs >= 4 && jumpy * 4 >= pairs))) {
+            /* Wide scatter without bank structure means the NAT allocates
+             * randomly inside one window (natpunch's "volatile" NAT).
+             * Collapsing to the newest sample discards the window and the
+             * scanner then sweeps a +/-15 slice of a ~500-port region, so
+             * target the whole observed range instead: lanes tile upward
+             * from the low edge and the midpoint, and spread carries the
+             * measured width into the peer's predicted lane. */
+            pp->punch_bank_model_mode = MIKUN2N_BANK_MODE_VOLATILE;
+            pp->punch_bank1 = ports[0];
+            pp->punch_bank2 = span > 256
+                              ? (uint16_t)(ports[0] + span / 2)
+                              : ports[valid - 1];
+            pp->punch_bank_spread = (uint16_t)
+                (span > 512 ? 512 : (span < 64 ? 64 : span));
+        } else {
+            pp->punch_bank_model_mode = ip_changes
+                                        ? MIKUN2N_BANK_MODE_HARD
+                                        : MIKUN2N_BANK_MODE_SYMMETRIC;
+            if(dual_bank) {
+                pp->punch_bank1 = ports[split - 1];
+                pp->punch_bank2 = ports[valid - 1];
+            } else {
+                pp->punch_bank1 = ports[valid - 1];
+                pp->punch_bank2 = pp->punch_bank1;
+            }
+            pp->punch_bank_spread = (uint16_t)
+                (ip_changes ? 512 : median_step * 3 + 12);
+        }
+    }
+
+    traceEvent(TRACE_NORMAL,
+               "MikuN2N bank calibration model=%u workers=%u "
+               "reuse=%u banks=%u/%u spread=%u",
+               pp->punch_bank_model_mode,
+               pp->punch_bank_worker_count,
+               pp->punch_bank_reuse,
+               pp->punch_bank1,
+               pp->punch_bank2,
+               pp->punch_bank_spread);
+}
+
+static int mikun2n_handle_bank_probe (struct peer_info *pp,
+                                      SOCKET in_sock,
+                                      const uint8_t *buf,
+                                      size_t len,
+                                      uint64_t now_ms) {
+    char response[256], client_id[32], ip[64], label[16];
+    char expected_id[16];
+    unsigned int seq;
+    unsigned int port;
+    long long server_ms;
+    int i;
+
+    if(len == 0 || len >= sizeof(response))
+        return 0;
+    memcpy(response, buf, len);
+    response[len] = '\0';
+    if(strncmp(response, "PROBED7 ", 8))
+        return 0;
+    if(sscanf(response, "PROBED7 %31s %u %63s %u %15s %lld",
+              client_id, &seq, ip, &port, label, &server_ms) != 6 ||
+       port == 0 || port > 65535)
+        return 1;
+    (void)server_ms;
+    snprintf(expected_id, sizeof(expected_id), "%08x",
+             pp->punch_bank_nonce);
+    if(strcmp(client_id, expected_id))
+        return 1;
+
+    for(i = 0; i < pp->punch_bank_worker_count; i++) {
+        mikun2n_bank_worker_t *worker = &pp->punch_workers[i];
+
+        if(worker->socket_fd != in_sock)
+            continue;
+        if(seq == worker->seq_a && label[0] == 'A') {
+            worker->mapped_a = (uint16_t)port;
+            worker->public_ip_a = inet_addr(ip);
+        } else if(seq == worker->seq_b && label[0] == 'B') {
+            worker->mapped_b = (uint16_t)port;
+            worker->public_ip_b = inet_addr(ip);
+        }
+        (void)now_ms;
+        return 1;
+    }
+    return 1;
+}
+
+static void mikun2n_send_register_worker (struct n3n_runtime_data *eee,
+                                          struct peer_info *pp,
+                                          SOCKET out_sock,
+                                          uint16_t target_port) {
+    uint8_t pktbuf[N2N_PKT_BUF_SIZE];
+    size_t idx = 0;
+    n2n_common_t cmn = {0};
+    n2n_REGISTER_t reg = {0};
+    n2n_sock_t target = pp->sock;
+    int offset = (int)target_port - (int)pp->sock.port;
+
+    if(offset > 32767)
+        offset -= 65535;
+    else if(offset < -32767)
+        offset += 65535;
+    if(offset < -MIKUN2N_PUNCH_OFFSET_BIAS ||
+       offset > MIKUN2N_PUNCH_OFFSET_BIAS - 1)
+        offset = 0;
+
+    cmn.ttl = N2N_DEFAULT_TTL;
+    cmn.pc = MSG_TYPE_REGISTER;
+    memcpy(cmn.community, eee->conf.community_name, N2N_COMMUNITY_SIZE);
+    reg.cookie = MIKUN2N_PUNCH_COOKIE |
+                 ((offset + MIKUN2N_PUNCH_OFFSET_BIAS) &
+                  MIKUN2N_PUNCH_OFFSET_MASK);
+    memcpy(reg.srcMac, eee->device.mac_addr, sizeof(n2n_mac_t));
+    memcpy(reg.dstMac, pp->mac_addr, sizeof(n2n_mac_t));
+    reg.dev_addr.net_addr = ntohl(eee->device.ip_addr);
+    reg.dev_addr.net_bitlen = eee->conf.tuntap_v4.net_bitlen;
+    memcpy(reg.dev_desc, eee->conf.dev_desc, N2N_DESC_SIZE);
+    encode_REGISTER(pktbuf, &idx, &cmn, &reg);
+    if(eee->conf.header_encryption == HEADER_ENCRYPTION_ENABLED)
+        packet_header_encrypt(pktbuf, idx, idx,
+                              eee->conf.header_encryption_ctx_dynamic,
+                              eee->conf.header_iv_ctx_dynamic,
+                              time_stamp());
+    target.port = target_port;
+    if(mikun2n_sendto_socket(out_sock, pktbuf, idx, &target) >= 0)
+        pp->punch_packets++;
+}
+
+static void mikun2n_bank_spray_tick (struct n3n_runtime_data *eee,
+                                     struct peer_info *pp) {
+    int i;
+    uint32_t tick = pp->punch_attempt;
+    int peer_cone = pp->punch_peer_bank_mode ==
+                    MIKUN2N_BANK_MODE_CONE;
+    int peer_hard = pp->punch_peer_bank_mode ==
+                    MIKUN2N_BANK_MODE_HARD ||
+                    pp->punch_peer_bank_mode ==
+                    MIKUN2N_BANK_MODE_VOLATILE;
+
+    for(i = 0; i < pp->punch_bank_worker_count &&
+               pp->punch_packets < eee->conf.mikun2n_punch_max_packets;
+        i++) {
+        SOCKET fd = pp->punch_workers[i].socket_fd;
+        uint16_t bank = (pp->punch_peer_bank2 !=
+                         pp->punch_peer_bank1 && (i & 1))
+                        ? pp->punch_peer_bank2
+                        : pp->punch_peer_bank1;
+
+        if(fd == MIKUN2N_INVALID_SOCKET)
+            continue;
+        mikun2n_send_register_worker(eee, pp, fd, pp->sock.port);
+        if(peer_cone) {
+            int near_offset =
+                1 + (int)((tick * 37U + (uint32_t)i * 11U) % 64U);
+            int sign = ((tick + (uint32_t)i) & 1U) ? -1 : 1;
+            int band_lo = 65 + (int)(pp->punch_rounds % 22U) * 192;
+            int wide = band_lo +
+                       (int)((tick * 53U + (uint32_t)i * 17U) % 192U);
+
+            mikun2n_send_register_worker(
+                eee, pp, fd,
+                mikun2n_shift_port(pp->sock.port, sign, near_offset));
+            mikun2n_send_register_worker(
+                eee, pp, fd,
+                mikun2n_shift_port(pp->sock.port, -sign, wide));
+        } else {
+            int direction = pp->punch_peer_bank_direction == -1 ? -1 : 1;
+            int low = 1 +
+                      (int)((tick * 37U + (uint32_t)i * 13U) % 64U);
+            int mid = 65 +
+                      (int)((tick * 53U + (uint32_t)i * 19U) % 192U);
+            int drift = pp->punch_peer_bank_rate
+                        ? pp->punch_peer_bank_rate * 8 / 10 : 32;
+            int predicted_lo = drift -
+                               (int)pp->punch_peer_bank_spread - 64;
+            int predicted_hi = drift +
+                               (int)pp->punch_peer_bank_spread + 64;
+            int predicted;
+
+            if(predicted_lo < 1)
+                predicted_lo = 1;
+            if(predicted_hi > 512)
+                predicted_hi = 512;
+            predicted = predicted_lo +
+                        (int)((tick * 97U + (uint32_t)i * 23U) %
+                              (uint32_t)(predicted_hi - predicted_lo + 1));
+            mikun2n_send_register_worker(
+                eee, pp, fd,
+                mikun2n_shift_port(bank, direction, low));
+            mikun2n_send_register_worker(
+                eee, pp, fd,
+                mikun2n_shift_port(bank, direction, mid));
+            mikun2n_send_register_worker(
+                eee, pp, fd,
+                mikun2n_shift_port(bank, direction, predicted));
+            if(peer_hard) {
+                int tail = 257 +
+                           (int)((tick * 89U + (uint32_t)i * 29U) % 128U);
+                mikun2n_send_register_worker(
+                    eee, pp, fd,
+                    mikun2n_shift_port(bank, direction, tail));
+            }
+        }
+    }
+    pp->punch_attempt++;
+}
+
+static int mikun2n_bank_update (struct n3n_runtime_data *eee,
+                                struct peer_info *pp,
+                                time_t now,
+                                uint64_t now_ms) {
+    if(pp->punch_bank_state == MIKUN2N_BANK_STATE_FALLBACK)
+        return 0;
+    if(pp->punch_abandoned)
+        return 1;
+    if(pp->punch_exhausted) {
+        if(now < pp->punch_retry_at)
+            return 1;
+        pp->punch_exhausted = 0;
+        pp->punch_started = 0;
+        pp->punch_attempt = 0;
+        pp->punch_packets = 0;
+        pp->punch_peer_bank_ready = 0;
+        pp->punch_peer_bank_nonce = 0;
+        pp->punch_bank_nonce = 0;
+        pp->punch_bank_state = MIKUN2N_BANK_STATE_NONE;
+    }
+    if(!pp->punch_generation) {
+        send_query_peer(eee, pp->mac_addr);
+        return 1;
+    }
+
+    if(pp->punch_bank_state == MIKUN2N_BANK_STATE_NONE) {
+        if(mikun2n_bank_pool_busy(eee, pp))
+            return 1;
+        if(!mikun2n_create_bank_workers(pp)) {
+            traceEvent(TRACE_WARNING,
+                       "MikuN2N bank calibration could not create workers; "
+                       "using legacy NAT4 strategy");
+            pp->punch_bank_state = MIKUN2N_BANK_STATE_FALLBACK;
+            pp->punch_plan_ready = 1;
+            pp->punch_go_at_ms = now_ms;
+            return 0;
+        }
+        pp->punch_bank_nonce = n3n_rand();
+        if(!pp->punch_bank_nonce)
+            pp->punch_bank_nonce = 1;
+        pp->punch_coord_started_ms = now_ms;
+        mikun2n_send_bank_probe(eee, pp, 0, now_ms);
+        pp->punch_bank_deadline_ms =
+            now_ms + MIKUN2N_BANK_CALIBRATION_MS;
+        pp->punch_bank_state = MIKUN2N_BANK_STATE_WAIT_A;
+        traceEvent(TRACE_NORMAL,
+                   "MikuN2N NAT4 bank calibration started workers=%u",
+                   pp->punch_bank_worker_count);
+        return 1;
+    }
+    if(pp->punch_bank_state == MIKUN2N_BANK_STATE_WAIT_A &&
+       now_ms >= pp->punch_bank_deadline_ms) {
+        mikun2n_send_bank_probe(eee, pp, 1, now_ms);
+        pp->punch_bank_deadline_ms =
+            now_ms + MIKUN2N_BANK_CALIBRATION_MS;
+        pp->punch_bank_state = MIKUN2N_BANK_STATE_WAIT_B;
+        return 1;
+    }
+    if(pp->punch_bank_state == MIKUN2N_BANK_STATE_WAIT_B &&
+       now_ms >= pp->punch_bank_deadline_ms) {
+        mikun2n_fit_bank_model(eee, pp);
+        pp->punch_bank_state = MIKUN2N_BANK_STATE_REPORTED;
+        pp->punch_coord_last_query_ms = 0;
+    }
+    if(pp->punch_bank_state == MIKUN2N_BANK_STATE_REPORTED) {
+        if(!pp->punch_coord_last_query_ms ||
+           now_ms - pp->punch_coord_last_query_ms >=
+               MIKUN2N_COORD_QUERY_MS) {
+            send_query_peer(eee, pp->mac_addr);
+            pp->punch_coord_last_query_ms = now_ms;
+        }
+        if(now_ms - pp->punch_coord_started_ms >= 8000) {
+            traceEvent(TRACE_WARNING,
+                       "MikuN2N bank coordination timed out; "
+                       "using legacy NAT4 strategy");
+            mikun2n_close_bank_workers(pp, -1);
+            pp->punch_bank_state = MIKUN2N_BANK_STATE_FALLBACK;
+            pp->punch_plan_ready = 1;
+            pp->punch_go_at_ms = now_ms;
+            return 0;
+        }
+        return 1;
+    }
+    if(pp->punch_bank_state == MIKUN2N_BANK_STATE_ARMED) {
+        if(now_ms < pp->punch_go_at_ms ||
+           now - pp->time_alloc < eee->conf.mikun2n_punch_grace)
+            return 1;
+        pp->punch_started = now;
+        pp->punch_last_ms = now_ms - MIKUN2N_BANK_TICK_MS;
+        pp->punch_attempt = 0;
+        pp->punch_packets = 0;
+        pp->punch_bank_deadline_ms = now_ms + MIKUN2N_BANK_SPRAY_MS;
+        pp->punch_bank_state = MIKUN2N_BANK_STATE_SPRAY;
+        traceEvent(TRACE_NORMAL,
+                   "MikuN2N NAT4 bank punch started peer_control=%u "
+                   "self_model=%u banks=%u/%u peer_model=%u banks=%u/%u "
+                   "workers=%u budget=%ums",
+                   pp->sock.port,
+                   pp->punch_bank_model_mode,
+                   pp->punch_bank1, pp->punch_bank2,
+                   pp->punch_peer_bank_mode,
+                   pp->punch_peer_bank1, pp->punch_peer_bank2,
+                   pp->punch_bank_worker_count,
+                   MIKUN2N_BANK_SPRAY_MS);
+    }
+    if(pp->punch_bank_state == MIKUN2N_BANK_STATE_SPRAY) {
+        if(now_ms >= pp->punch_bank_deadline_ms ||
+           pp->punch_packets >= eee->conf.mikun2n_punch_max_packets) {
+            int abandoned =
+                mikun2n_record_punch_failure(eee, pp, now);
+            if(abandoned) {
+                traceEvent(TRACE_NORMAL,
+                           "MikuN2N NAT4 bank punch abandoned after "
+                           "%us/%u ticks/%u packets (round %u/%u); "
+                           "stable pSp relay, manual retry required",
+                           (unsigned int)(now - pp->punch_started),
+                           pp->punch_attempt, pp->punch_packets,
+                           pp->punch_rounds, MIKUN2N_PUNCH_MAX_ROUNDS);
+            } else {
+                traceEvent(TRACE_NORMAL,
+                           "MikuN2N NAT4 bank punch exhausted after "
+                           "%us/%u ticks/%u packets (round %u/%u); retry in %us",
+                           (unsigned int)(now - pp->punch_started),
+                           pp->punch_attempt, pp->punch_packets,
+                           pp->punch_rounds, MIKUN2N_PUNCH_MAX_ROUNDS,
+                           MIKUN2N_PUNCH_RETRY_SECS);
+            }
+            mikun2n_close_bank_workers(pp, -1);
+            return 1;
+        }
+        if(now_ms - pp->punch_last_ms >= MIKUN2N_BANK_TICK_MS) {
+            pp->punch_last_ms += MIKUN2N_BANK_TICK_MS;
+            if(now_ms - pp->punch_last_ms >= MIKUN2N_BANK_TICK_MS)
+                pp->punch_last_ms = now_ms;
+            mikun2n_bank_spray_tick(eee, pp);
+        }
+        return 1;
+    }
+    return 1;
+}
+
+static int mikun2n_bank_fdset_list (struct peer_info *peers,
+                                    fd_set *readers,
+                                    int max_sock) {
+    struct peer_info *pp, *tmp;
+    int i;
+
+    HASH_ITER(hh, peers, pp, tmp) {
+        for(i = 0; i < MIKUN2N_BANK_WORKERS; i++) {
+            SOCKET fd = pp->punch_workers[i].socket_fd;
+
+            if(fd == MIKUN2N_INVALID_SOCKET)
+                continue;
+            FD_SET(fd, readers);
+            max_sock = max(max_sock, (int)fd);
+        }
+    }
+    return max_sock;
+}
+
+static void mikun2n_bank_process_ready_list (
+    struct n3n_runtime_data *eee,
+    struct peer_info *peers,
+    fd_set *readers,
+    time_t now) {
+    struct peer_info *pp, *tmp;
+    int i;
+
+    HASH_ITER(hh, peers, pp, tmp) {
+        for(i = 0; i < MIKUN2N_BANK_WORKERS; i++) {
+            SOCKET fd = pp->punch_workers[i].socket_fd;
+            struct sockaddr_in sender;
+            socklen_t sender_len = sizeof(sender);
+            uint8_t buf[N2N_PKT_BUF_SIZE];
+            int received;
+
+            if(fd == MIKUN2N_INVALID_SOCKET || !FD_ISSET(fd, readers))
+                continue;
+            memset(&sender, 0, sizeof(sender));
+            received = recvfrom(fd, (char *)buf, sizeof(buf), 0,
+                                (struct sockaddr *)&sender, &sender_len);
+            if(received <= 0)
+                continue;
+            if(mikun2n_handle_bank_probe(pp, fd, buf,
+                                         (size_t)received,
+                                         mikun2n_now_ms()))
+                continue;
+            process_udp(eee, (struct sockaddr *)&sender, fd,
+                        buf, (size_t)received, now);
+        }
+    }
+}
+
+/* ************************************** */
+
 static void mikun2n_punch_offset (struct n3n_runtime_data *eee,
                                   struct peer_info *pp,
                                   int base,
@@ -3297,18 +4249,66 @@ static void mikun2n_punch_offset (struct n3n_runtime_data *eee,
     pp->punch_packets++;
 }
 
+/* The NAT4 cone escape: control port, a symmetric near window, and one
+ * rotating band.
+ *
+ * Driven by attempt count, never by wall clock. A wall-clock schedule only
+ * looks synchronized: measured peer clock skew is 3.65 s (14 ticks), so the
+ * two sides select different bands regardless, and because the loop sustains
+ * ~3.1 ticks/s rather than the nominal 4, every slot it misses becomes a
+ * permanently unscanned hole. Counting attempts keeps the bands contiguous and
+ * ordered near-to-far, so an exhausted budget only drops the far, least likely
+ * tail. That ordering is what established NAT4<->NAT4 links before the
+ * schedule was switched to wall clock. */
+static void mikun2n_punch_cone_sweep (struct n3n_runtime_data *eee,
+                                      struct peer_info *pp,
+                                      int base,
+                                      uint32_t attempt) {
+    uint32_t phase = attempt % MIKUN2N_CONE_ESCAPE_TICKS;
+    uint32_t round = (attempt / MIKUN2N_CONE_ESCAPE_TICKS) % 22;
+    int band_lo = MIKUN2N_CONE_ESCAPE_NEAR +
+                  (int)round * MIKUN2N_CONE_ESCAPE_BAND + 1;
+    int band_hi = band_lo + MIKUN2N_CONE_ESCAPE_BAND - 1;
+    int i;
+
+    pp->punch_band_lo = (uint16_t)band_lo;
+    pp->punch_band_hi = (uint16_t)band_hi;
+
+    /* Equal A/B mappings only prove stability across two ports on the probe
+     * server. The real peer IP can still select a nearby mapping. Four
+     * consecutive ticks cover all 128 near and 384 rotating candidates. */
+    for(i = 0; i < 4 && pp->punch_packets < eee->conf.mikun2n_punch_max_packets; i++)
+        mikun2n_punch_offset(eee, pp, base, 0);
+    for(i = 0; i < 32 && pp->punch_packets < eee->conf.mikun2n_punch_max_packets; i++) {
+        int index = (int)phase * 32 + i;
+        int magnitude = 1 + index / 2;
+        mikun2n_punch_offset(eee, pp, base,
+                             (index & 1) ? -magnitude : magnitude);
+    }
+    for(i = 0; i < 96 && pp->punch_packets < eee->conf.mikun2n_punch_max_packets; i++) {
+        int index = (int)phase * 96 + i;
+        int magnitude = band_lo + index / 2;
+        mikun2n_punch_offset(eee, pp, base,
+                             (index & 1) ? -magnitude : magnitude);
+    }
+    if(pp->punch_drift &&
+       pp->punch_packets < eee->conf.mikun2n_punch_max_packets)
+        mikun2n_punch_offset(eee, pp, base, pp->punch_drift);
+}
+
 /* MikuN2N Tier 1 fallback. n3n's ordinary REGISTER exchange remains Tier 0.
- * A peer that stays pSp is then scanned in synchronized 250 ms wall-clock
- * slots. NAT4 senders use v7.3.1's cross-address cone escape: control, a
- * symmetric near window, and a symmetric rotating band. Other senders retain
- * the layered low/mid/far schedule. Strict time/packet budgets ensure a
- * hard/fast CGNAT quickly settles on reliable relay. */
+ * A peer that stays pSp is then scanned in 250 ms ticks. Both NAT4 roles run
+ * the cone escape above; the anchor additionally refreshes a small fixed
+ * mapping set. Other senders retain the layered low/mid/far schedule. Strict
+ * time/packet budgets ensure a hard/fast CGNAT quickly settles on reliable
+ * relay. */
 static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
                                 struct peer_info *pp,
                                 time_t now,
                                 uint64_t now_ms) {
     int i, base, delta;
     int nat4_sender;
+    uint32_t required_attempts;
     static const int anchor_offsets[] = {
         0, 1, -1, 2, -2, 4, -4, 8, -8, 16, -16,
         32, -32, 64, -64, 128, -128, 192, -192, 256, -256
@@ -3328,18 +4328,65 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
     if(!eee->conf.mikun2n_punch)
         return;
 
-    nat4_sender = eee->mikun2n_nat.complete &&
-                  !strcmp(eee->mikun2n_nat.type, "NAT4");
+    /* Do not freeze a role while the NAT result is still "detecting". That
+     * produced scanner/scanner when both peers crossed the old 5 s grace
+     * before the five-sample classifier completed. */
+    if(!eee->mikun2n_nat.complete && !eee->mikun2n_nat.unavailable)
+        return;
+
+    mikun2n_apply_punch_history(eee, pp, now);
+    if(pp->punch_abandoned)
+        return;
+
+    /* NAT3<->NAT4 deliberately remains on the proven layered path. The
+     * calibrated worker/bank accelerator is entered only when both ends'
+     * current summaries say address-and-port-dependent mapping. */
+    if(eee->mikun2n_nat.complete &&
+       mikun2n_nat_kind(&eee->mikun2n_nat) == MIKUN2N_NAT_KIND_APDM &&
+       pp->mikun2n_nat_kind == MIKUN2N_NAT_KIND_APDM) {
+        /* Give native unicast/multicast registration the full grace interval
+         * before allocating NAT4 calibration sockets. Keep coordination for
+         * the already-proven NAT3/layered path running during that grace. */
+        if(now - pp->time_alloc < eee->conf.mikun2n_punch_grace)
+            return;
+        if(mikun2n_bank_update(eee, pp, now, now_ms))
+            return;
+    }
+
+    if(eee->mikun2n_nat.complete && !pp->punch_plan_ready) {
+        if(!pp->punch_coord_started_ms)
+            pp->punch_coord_started_ms = now_ms;
+        if(!pp->punch_coord_last_query_ms ||
+           now_ms - pp->punch_coord_last_query_ms >= MIKUN2N_COORD_QUERY_MS) {
+            send_query_peer(eee, pp->mac_addr);
+            pp->punch_coord_last_query_ms = now_ms;
+        }
+        if(now_ms - pp->punch_coord_started_ms < MIKUN2N_COORD_FALLBACK_MS)
+            return;
+
+        /* Backward-compatible fallback for an older/unreachable supernode.
+         * The role is selected once and remains immutable for this round. */
+        pp->punch_role = mikun2n_nat_kind(&eee->mikun2n_nat) == MIKUN2N_NAT_KIND_APDM
+                         ? (memcmp(eee->device.mac_addr, pp->mac_addr, sizeof(n2n_mac_t)) < 0
+                            ? MIKUN2N_PUNCH_ROLE_SCANNER : MIKUN2N_PUNCH_ROLE_ANCHOR)
+                         : MIKUN2N_PUNCH_ROLE_LAYERED;
+        pp->punch_plan_ready = 1;
+        pp->punch_go_at_ms = now_ms;
+        traceEvent(TRACE_INFO,
+                   "MikuN2N punch coordination timed out; using locked local role=%s",
+                   mikun2n_punch_role_name(pp->punch_role));
+    }
+
+    if(pp->punch_plan_ready && now_ms < pp->punch_go_at_ms)
+        return;
+
+    nat4_sender = pp->punch_role == MIKUN2N_PUNCH_ROLE_SCANNER ||
+                  pp->punch_role == MIKUN2N_PUNCH_ROLE_ANCHOR;
 
     if(!pp->punch_started) {
         if(now - pp->time_alloc < eee->conf.mikun2n_punch_grace)
             return;
-        if(nat4_sender)
-            pp->punch_role =
-                memcmp(eee->device.mac_addr, pp->mac_addr, sizeof(n2n_mac_t)) < 0
-                ? MIKUN2N_PUNCH_ROLE_SCANNER
-                : MIKUN2N_PUNCH_ROLE_ANCHOR;
-        else
+        if(pp->punch_role == MIKUN2N_PUNCH_ROLE_NONE)
             pp->punch_role = MIKUN2N_PUNCH_ROLE_LAYERED;
         pp->punch_started = now;
         pp->punch_observed_port = pp->sock.port;
@@ -3350,21 +4397,64 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
                    eee->conf.mikun2n_punch_max_packets);
     }
 
+    required_attempts = pp->punch_role == MIKUN2N_PUNCH_ROLE_LAYERED
+                        ? MIKUN2N_LAYERED_ESCAPE_TICKS
+                        : MIKUN2N_CONE_ESCAPE_TICKS * 22;
     if(pp->punch_exhausted ||
+       pp->punch_attempt >= required_attempts ||
        now - pp->punch_started >= eee->conf.mikun2n_punch_budget ||
        pp->punch_packets >= eee->conf.mikun2n_punch_max_packets) {
         if(!pp->punch_exhausted) {
-            pp->punch_exhausted = 1;
-            traceEvent(TRACE_NORMAL,
-                       "MikuN2N Tier 1 punch exhausted after %us/%u packets; keeping pSp relay",
-                       (unsigned int)(now - pp->punch_started), pp->punch_packets);
+            int abandoned =
+                mikun2n_record_punch_failure(eee, pp, now);
+            /* This is recovery from an independently discovered lifetime
+             * latch, not the cause of the captured failures. Keep the same
+             * cooldown on both peers: the supernode plan aligns the first
+             * round, so equal cooldowns preserve that overlap on retries. */
+            if(abandoned) {
+                traceEvent(TRACE_NORMAL,
+                           "MikuN2N Tier 1 punch abandoned after %us/%u packets "
+                           "(round %u/%u); stable pSp relay, manual retry required",
+                           (unsigned int)(now - pp->punch_started),
+                           pp->punch_packets, pp->punch_rounds,
+                           MIKUN2N_PUNCH_MAX_ROUNDS);
+            } else {
+                traceEvent(TRACE_NORMAL,
+                           "MikuN2N Tier 1 punch exhausted after %us/%u packets "
+                           "(round %u/%u); pSp relay, retry in %us",
+                           (unsigned int)(now - pp->punch_started),
+                           pp->punch_packets, pp->punch_rounds,
+                           MIKUN2N_PUNCH_MAX_ROUNDS,
+                           (unsigned int)(pp->punch_retry_at - now));
+            }
+        }
+        if(!pp->punch_abandoned && now >= pp->punch_retry_at) {
+            pp->punch_exhausted = 0;
+            pp->punch_started = 0;
+            pp->punch_attempt = 0;
+            pp->punch_packets = 0;
+            pp->punch_plan_ready = 0;
+            pp->punch_role = MIKUN2N_PUNCH_ROLE_NONE;
+            pp->punch_coord_started_ms = 0;
+            pp->punch_coord_last_query_ms = 0;
+            pp->punch_generation = 0;
+            /* A bank coordination timeout falls back to the legacy scanner
+             * for the remainder of one round only. A fresh automatic/manual
+             * round must recalibrate instead of remaining latched in
+             * FALLBACK forever. */
+            pp->punch_bank_state = MIKUN2N_BANK_STATE_NONE;
+            pp->punch_bank_nonce = 0;
+            pp->punch_peer_bank_ready = 0;
+            pp->punch_peer_bank_nonce = 0;
         }
         return;
     }
 
     if(now_ms - pp->punch_last_ms < MIKUN2N_PUNCH_TICK_MS)
         return;
-    pp->punch_last_ms = now_ms;
+    pp->punch_last_ms += MIKUN2N_PUNCH_TICK_MS;
+    if(now_ms - pp->punch_last_ms >= MIKUN2N_PUNCH_TICK_MS)
+        pp->punch_last_ms = now_ms;
 
     base = pp->sock.port;
     if(pp->punch_observed_port && pp->punch_observed_port != pp->sock.port) {
@@ -3378,42 +4468,7 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
         pp->punch_observed_port = pp->sock.port;
     }
 
-    if(nat4_sender && pp->punch_role == MIKUN2N_PUNCH_ROLE_SCANNER) {
-        uint64_t common_slot = now_ms / MIKUN2N_PUNCH_TICK_MS;
-        uint32_t phase = (uint32_t)(common_slot % MIKUN2N_CONE_ESCAPE_TICKS);
-        uint32_t round = (uint32_t)((common_slot / MIKUN2N_CONE_ESCAPE_TICKS) % 22);
-        int band_lo = MIKUN2N_CONE_ESCAPE_NEAR +
-                      (int)round * MIKUN2N_CONE_ESCAPE_BAND + 1;
-        int band_hi = band_lo + MIKUN2N_CONE_ESCAPE_BAND - 1;
-        pp->punch_band_lo = (uint16_t)band_lo;
-        pp->punch_band_hi = (uint16_t)band_hi;
-
-        /* Equal A/B mappings only prove stability across two ports on the
-         * probe server. The real peer IP can still select a nearby mapping.
-         * Four shared wall-clock ticks cover all 128 near and 384 rotating
-         * candidates exactly, even when peers enter Tier 1 at different times. */
-        for(i = 0; i < 4 && pp->punch_packets < eee->conf.mikun2n_punch_max_packets; i++)
-            mikun2n_punch_offset(eee, pp, base, 0);
-        for(i = 0; i < 32 && pp->punch_packets < eee->conf.mikun2n_punch_max_packets; i++) {
-            int index = (int)phase * 32 + i;
-            int magnitude = 1 + index / 2;
-            mikun2n_punch_offset(eee, pp, base,
-                                 (index & 1) ? -magnitude : magnitude);
-        }
-        for(i = 0; i < 96; i++) {
-            int index = (int)phase * 96 + i;
-            int magnitude = band_lo + index / 2;
-            mikun2n_punch_offset(eee, pp, base,
-                                 (index & 1) ? -magnitude : magnitude);
-        }
-        if(pp->punch_drift)
-            mikun2n_punch_offset(eee, pp, base, pp->punch_drift);
-        if(phase == 0)
-            traceEvent(TRACE_NORMAL,
-                       "MikuN2N Tier 1 scanner shared_round=%u peer_control=%u near=+/-1..%d rotating=+/-%d..%d",
-                       round + 1, pp->sock.port, MIKUN2N_CONE_ESCAPE_NEAR,
-                       band_lo, band_hi);
-    } else if(nat4_sender && pp->punch_role == MIKUN2N_PUNCH_ROLE_ANCHOR) {
+    if(nat4_sender && pp->punch_role == MIKUN2N_PUNCH_ROLE_ANCHOR) {
         pp->punch_band_lo = 0;
         pp->punch_band_hi = 256;
         /* Keep a small, fixed mapping set alive while the complementary peer
@@ -3430,6 +4485,14 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
                        "MikuN2N Tier 1 anchor peer_control=%u stable_targets=%u range=+/-256",
                        pp->sock.port,
                        (unsigned int)(sizeof(anchor_offsets) / sizeof(anchor_offsets[0])));
+    } else if(nat4_sender) {
+        mikun2n_punch_cone_sweep(eee, pp, base, pp->punch_attempt);
+        if((pp->punch_attempt % MIKUN2N_CONE_ESCAPE_TICKS) == 0)
+            traceEvent(TRACE_NORMAL,
+                       "MikuN2N Tier 1 scanner round=%u peer_control=%u near=+/-1..%d rotating=+/-%u..%u",
+                       (pp->punch_attempt / MIKUN2N_CONE_ESCAPE_TICKS) % 22 + 1,
+                       pp->sock.port, MIKUN2N_CONE_ESCAPE_NEAR,
+                       pp->punch_band_lo, pp->punch_band_hi);
     } else {
         uint32_t near_phase = pp->punch_attempt % 4;
         uint32_t wide_phase = pp->punch_attempt % MIKUN2N_LAYERED_ESCAPE_TICKS;
@@ -3520,12 +4583,15 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
             max_sock = max(max_sock, eee->sock);
         }
 #ifndef SKIP_MULTICAST_PEERS_DISCOVERY
-        if((eee->conf.allow_p2p)
-           && (eee->conf.preferred_sock.family == (uint8_t)AF_INVALID)) {
+        if(eee->conf.allow_p2p) {
             FD_SET(eee->udp_multicast_sock, &readers);
             max_sock = max(max_sock, eee->udp_multicast_sock);
         }
 #endif
+        max_sock = mikun2n_bank_fdset_list(eee->pending_peers,
+                                            &readers, max_sock);
+        max_sock = mikun2n_bank_fdset_list(eee->known_peers,
+                                            &readers, max_sock);
 
 #ifndef _WIN32
         FD_SET(eee->device.fd, &readers);
@@ -3549,9 +4615,23 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
         // work by /design/
 
         struct timeval wait_time;
-        if(!eee->sn_wait && HASH_COUNT(eee->pending_peers) > 0) {
+        if(!eee->sn_wait &&
+           (HASH_COUNT(eee->pending_peers) > 0 ||
+            (!eee->mikun2n_nat.complete && !eee->mikun2n_nat.unavailable))) {
+            /* Sleep until the next punch is due, not a flat tick past the last
+             * wake. A flat 250 ms timeout plus ~65 ms of loop and send latency
+             * sustained only ~3.1 ticks/s against a nominal 4, and each tick
+             * lost is a band of scan candidates that never goes out. */
+            uint64_t left_ms = MIKUN2N_BANK_TICK_MS;
+            if(eee->conf.register_ttl > 1) {
+                uint64_t wake_ms = mikun2n_now_ms();
+                uint64_t due_ms = last_punch_ms + MIKUN2N_BANK_TICK_MS;
+                left_ms = (due_ms > wake_ms) ? (due_ms - wake_ms) : 0;
+                if(left_ms > MIKUN2N_BANK_TICK_MS)
+                    left_ms = MIKUN2N_BANK_TICK_MS;
+            }
             wait_time.tv_sec = 0;
-            wait_time.tv_usec = MIKUN2N_PUNCH_TICK_MS * 1000;
+            wait_time.tv_usec = (long)(left_ms * 1000);
         } else {
             wait_time.tv_sec = (eee->sn_wait) ? (SOCKET_TIMEOUT_INTERVAL_SECS / 10 + 1) : (SOCKET_TIMEOUT_INTERVAL_SECS);
             wait_time.tv_usec = 0;
@@ -3609,6 +4689,11 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
             }
 #endif
 
+            mikun2n_bank_process_ready_list(eee, eee->pending_peers,
+                                             &readers, now);
+            mikun2n_bank_process_ready_list(eee, eee->known_peers,
+                                             &readers, now);
+
             int slots_ready = slots_fdset_loop(slots, &readers, &writers);
 
             if(slots_ready < 0) {
@@ -3645,7 +4730,7 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
 
         // finished processing select data
         update_supernode_reg(eee, now);
-        mikun2n_update_nat_probe(eee, now);
+        mikun2n_update_nat_probe(eee, now, mikun2n_now_ms());
 
         numPurged = 0;
         // keep, i.e. do not purge, the known peers while no supernode supernode connection
@@ -3670,12 +4755,17 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
         }
 
         if((eee->conf.register_ttl > 1) &&
-           (mikun2n_now_ms() - last_punch_ms >= MIKUN2N_PUNCH_TICK_MS)) {
+           (mikun2n_now_ms() - last_punch_ms >= MIKUN2N_BANK_TICK_MS)) {
             struct peer_info *pp, *pp_tmp;
             uint64_t punch_now_ms = mikun2n_now_ms();
             HASH_ITER(hh, eee->pending_peers, pp, pp_tmp)
                 mikun2n_punch_peer(eee, pp, now, punch_now_ms);
-            last_punch_ms = punch_now_ms;
+            /* Advance by whole ticks so per-tick latency does not accumulate
+             * into the period; resync only when a real stall cost us more than
+             * a full tick, so a stalled loop cannot burst to catch up. */
+            last_punch_ms += MIKUN2N_BANK_TICK_MS;
+            if(punch_now_ms - last_punch_ms >= MIKUN2N_BANK_TICK_MS)
+                last_punch_ms = punch_now_ms;
         }
 
 #ifdef HAVE_BRIDGING_SUPPORT

@@ -443,6 +443,60 @@ static int mikun2n_relay_target_matches (const struct peer_info *peer,
     return 0;
 }
 
+static void mikun2n_reset_punch_history (struct n3n_runtime_data *eee,
+                                         const n2n_mac_t mac) {
+    uint8_t i;
+
+    for(i = 0; i < eee->mikun2n_punch_history_count; i++) {
+        if(memcmp(eee->mikun2n_punch_history[i].mac, mac,
+                  sizeof(n2n_mac_t)))
+            continue;
+        eee->mikun2n_punch_history_count--;
+        eee->mikun2n_punch_history[i] =
+            eee->mikun2n_punch_history[eee->mikun2n_punch_history_count];
+        return;
+    }
+}
+
+static void mikun2n_reset_peer_punch (struct peer_info *peer) {
+    peer->punch_started = 0;
+    peer->punch_last_ms = 0;
+    peer->punch_attempt = 0;
+    peer->punch_packets = 0;
+    peer->punch_exhausted = 0;
+    peer->punch_rounds = 0;
+    peer->punch_abandoned = 0;
+    peer->punch_retry_at = 0;
+    peer->punch_role = MIKUN2N_PUNCH_ROLE_NONE;
+    peer->punch_plan_ready = 0;
+    peer->punch_generation = 0;
+    peer->punch_coord_started_ms = 0;
+    peer->punch_coord_last_query_ms = 0;
+    peer->punch_bank_state = 0;
+    peer->punch_bank_nonce = 0;
+    peer->punch_peer_bank_ready = 0;
+    peer->punch_peer_bank_nonce = 0;
+}
+
+static void mikun2n_restore_peer_punch_history (
+    const struct n3n_runtime_data *eee,
+    struct peer_info *peer) {
+    uint8_t i;
+
+    for(i = 0; i < eee->mikun2n_punch_history_count; i++) {
+        const mikun2n_punch_history_t *history =
+            &eee->mikun2n_punch_history[i];
+        if(memcmp(history->mac, peer->mac_addr, sizeof(n2n_mac_t)))
+            continue;
+        peer->punch_rounds = history->rounds;
+        peer->punch_retry_at = history->retry_at;
+        peer->punch_abandoned = history->abandoned;
+        if(history->abandoned || time(NULL) < history->retry_at)
+            peer->punch_exhausted = 1;
+        return;
+    }
+}
+
 static void jsonrpc_set_peer_relay (char *id, struct n3n_runtime_data *eee, conn_t *conn, const char *params) {
     char address[64] = {0};
     char enabled[8] = {0};
@@ -483,6 +537,8 @@ static void jsonrpc_set_peer_relay (char *id, struct n3n_runtime_data *eee, conn
      * length here rather than letting it walk past a short string. */
     if(strlen(mac_text) == 17 && str2mac(mac, mac_text) == 0 && !is_null_mac(mac))
         have_mac = 1;
+    if(!force_relay && have_mac)
+        mikun2n_reset_punch_history(eee, mac);
 
     for(policy_index = 0; policy_index < eee->mikun2n_forced_relay_count; policy_index++) {
         if(eee->mikun2n_forced_relay_ips[policy_index] == target)
@@ -519,12 +575,8 @@ static void jsonrpc_set_peer_relay (char *id, struct n3n_runtime_data *eee, conn
             continue;
         peer->force_relay = force_relay;
         if(!force_relay) {
-            peer->punch_started = 0;
-            peer->punch_last_ms = 0;
-            peer->punch_attempt = 0;
-            peer->punch_packets = 0;
-            peer->punch_exhausted = 0;
-            peer->punch_role = MIKUN2N_PUNCH_ROLE_NONE;
+            mikun2n_reset_punch_history(eee, peer->mac_addr);
+            mikun2n_reset_peer_punch(peer);
         }
         changed++;
     }
@@ -532,6 +584,10 @@ static void jsonrpc_set_peer_relay (char *id, struct n3n_runtime_data *eee, conn
         if(!mikun2n_relay_target_matches(peer, target, mac, have_mac))
             continue;
         peer->force_relay = force_relay;
+        if(!force_relay) {
+            mikun2n_reset_punch_history(eee, peer->mac_addr);
+            mikun2n_reset_peer_punch(peer);
+        }
         changed++;
     }
     /* Report the real match count. The policy list itself is always updated, so
@@ -722,6 +778,8 @@ static void jsonrpc_get_edges_row (strbuf_t **reply, struct peer_info *peer, con
         punch_state = "forced_relay";
     } else if(!strcmp(mode, "p2p")) {
         punch_state = "direct";
+    } else if(peer->punch_abandoned) {
+        punch_state = "failed";
     } else if(peer->punch_exhausted) {
         punch_state = "relay";
     } else if(peer->punch_started) {
@@ -804,6 +862,7 @@ static void jsonrpc_get_edges (char *id, struct n3n_runtime_data *eee, conn_t *c
     // dump nodes with forwarding through supernodes
     HASH_ITER(hh, eee->pending_peers, peer, tmpPeer) {
         peer->force_relay = mikun2n_peer_forced_relay(eee, peer);
+        mikun2n_restore_peer_punch_history(eee, peer);
         if(index < offset) {
             index++;
             continue;
@@ -829,6 +888,7 @@ static void jsonrpc_get_edges (char *id, struct n3n_runtime_data *eee, conn_t *c
     // dump peer-to-peer nodes
     HASH_ITER(hh, eee->known_peers, peer, tmpPeer) {
         peer->force_relay = mikun2n_peer_forced_relay(eee, peer);
+        mikun2n_restore_peer_punch_history(eee, peer);
         if(index < offset) {
             index++;
             continue;
