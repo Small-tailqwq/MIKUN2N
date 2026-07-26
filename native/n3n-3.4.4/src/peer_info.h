@@ -106,6 +106,7 @@ struct peer_info {
      * peer after the other calibration sockets have been closed. */
     mikun2n_bank_worker_t punch_workers[MIKUN2N_BANK_WORKERS];
     SOCKET punch_data_sock;
+    time_t punch_keepalive_at;
     uint8_t punch_bank_state;
     uint8_t punch_bank_worker_count;
     uint8_t punch_bank_model_mode;

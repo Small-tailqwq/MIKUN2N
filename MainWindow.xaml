@@ -273,7 +273,7 @@
                               <StackPanel MaxWidth="280">
                                 <TextBlock Text="{Binding ConnectionModeText}" FontWeight="SemiBold"
                                            TextWrapping="Wrap" />
-                                <TextBlock Text="右键：强制/取消 pSp 中继；打洞失败后可重新尝试打洞。"
+                                <TextBlock Text="右键：强制/取消 pSp 中继；处于 pSp 中继时可重新尝试 P2P 打洞。"
                                            TextWrapping="Wrap" Margin="0,3,0,0" Opacity="0.75" />
                               </StackPanel>
                             </ToolTip>

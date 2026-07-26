@@ -461,6 +461,7 @@ static void mikun2n_reset_punch_history (struct n3n_runtime_data *eee,
 static void mikun2n_reset_peer_punch (struct peer_info *peer) {
     peer->punch_started = 0;
     peer->punch_last_ms = 0;
+    peer->punch_keepalive_at = 0;
     peer->punch_attempt = 0;
     peer->punch_packets = 0;
     peer->punch_exhausted = 0;

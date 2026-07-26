@@ -102,6 +102,7 @@ static void check_known_peer_sock_change (struct n3n_runtime_data *eee,
 #define MIKUN2N_COORD_FALLBACK_MS 4000
 #define MIKUN2N_PUNCH_RETRY_SECS 30
 #define MIKUN2N_PUNCH_MAX_ROUNDS 3
+#define MIKUN2N_RELAY_KEEPALIVE_SECS 5
 #define MIKUN2N_NATIVE_GRACE_SECS 5
 #define MIKUN2N_PUNCH_BUDGET_SECS 25
 #define MIKUN2N_PUNCH_TICK_MS 250
@@ -1117,8 +1118,18 @@ static void peer_set_p2p_confirmed (struct n3n_runtime_data * eee,
                    HASH_COUNT(eee->known_peers));
 
         scan->last_seen = now;
-    } else
-        traceEvent(TRACE_DEBUG, "failed to find sender in pending_peers");
+    } else {
+        /* Not pending: an ACK from an already-known peer (e.g. a reply to the
+         * forced-relay keepalive) still proves the direct path is alive, and
+         * without this refresh a canceled relay tears the entry down at the
+         * timeout/2 idle check and needs a full re-punch. */
+        HASH_FIND_PEER(eee->known_peers, mac, scan);
+        if(scan != NULL) {
+            scan->last_p2p = now;
+            scan->last_seen = now;
+        } else
+            traceEvent(TRACE_DEBUG, "failed to find sender in pending_peers");
+    }
 }
 
 
@@ -3956,6 +3967,33 @@ static void mikun2n_send_register_worker (struct n3n_runtime_data *eee,
         pp->punch_packets++;
 }
 
+/* While the user forces pSp for a peer, no traffic flows on the direct path,
+ * so the NAT pinhole decays and last_p2p goes stale; canceling the relay then
+ * hits the timeout/2 idle check, deletes the entry and needs a full re-punch
+ * (observed: a 4 s toggle resumed direct instantly, a 24 s one degraded to
+ * pSp). A periodic REGISTER over the socket that carries the direct session
+ * keeps both the mapping and the entry fresh, so cancel restores P2P at once. */
+static void mikun2n_forced_relay_keepalive (struct n3n_runtime_data *eee,
+                                            struct peer_info *pp,
+                                            time_t now) {
+    if(pp->local || pp->sock.family != AF_INET)
+        return;
+    if(pp->last_p2p == 0)
+        return;
+    if(eee->curr_sn && sock_equal(&pp->sock, &eee->curr_sn->sock))
+        return;
+    if(!mikun2n_peer_force_relay(eee, pp))
+        return;
+    if(now - pp->punch_keepalive_at < MIKUN2N_RELAY_KEEPALIVE_SECS)
+        return;
+    pp->punch_keepalive_at = now;
+    mikun2n_send_register_worker(
+        eee, pp,
+        pp->punch_data_sock != MIKUN2N_INVALID_SOCKET
+            ? pp->punch_data_sock : eee->sock,
+        pp->sock.port);
+}
+
 static void mikun2n_bank_spray_tick (struct n3n_runtime_data *eee,
                                      struct peer_info *pp) {
     int i;
@@ -4760,6 +4798,8 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
             uint64_t punch_now_ms = mikun2n_now_ms();
             HASH_ITER(hh, eee->pending_peers, pp, pp_tmp)
                 mikun2n_punch_peer(eee, pp, now, punch_now_ms);
+            HASH_ITER(hh, eee->known_peers, pp, pp_tmp)
+                mikun2n_forced_relay_keepalive(eee, pp, now);
             /* Advance by whole ticks so per-tick latency does not accumulate
              * into the period; resync only when a real stall cost us more than
              * a full tick, so a stalled loop cannot burst to catch up. */

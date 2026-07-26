@@ -400,7 +400,7 @@ public partial class MainWindow : Window
 
         e.Handled = true;
         var menu = CreatePeerMenu(element, peer);
-        if (peer.ConnectionMode == PeerConnectionMode.PunchFailed)
+        if (peer.ConnectionMode is PeerConnectionMode.PunchFailed or PeerConnectionMode.Relayed)
         {
             var retry = new MenuItem
             {

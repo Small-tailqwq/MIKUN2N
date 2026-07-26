@@ -97,6 +97,17 @@
      把 bank1/bank2 设为观测窗口下沿与中点（车道自下而上平铺整个窗口），spread 携带实测
      跨度供对端 predicted 车道使用；对端目标生成侧本就把 VOLATILE 按 hard 处理并追加
      tail 车道，无需协议改动，supernode 校验范围 [CONE,FAST] 也已覆盖该值。
+ 32. 0.5.6 强制 pSp 中继期间对直连路径做 keepalive。此前 force_relay 的 peer 完全不再有
+     流量经过直连 socket：NAT 针孔逐渐失效、last_p2p 持续变旧，取消强制中继后第一次发包
+     即命中 timeout/2 空闲检查，known 条目被删除（P2P_EXPIRED）、退回 pending 并要求完整
+     重新打洞（实测：切换 4 秒后取消可瞬间恢复直连，24 秒后取消则降级 pSp 重打洞）。现在
+     每 5 秒经承载直连会话的 socket（优先 promoted worker socket）向对端发一个 REGISTER，
+     往返即刷新双方 last_p2p/last_seen 与 NAT 映射；另外已知 peer 回来的 REGISTER_ACK
+     现在也会刷新本端条目（此前只有 pending 提升路径会刷新），因此取消强制中继后直连
+     立即恢复，无需重新打洞。
+ 33. 0.5.6 好友链路右键菜单在普通 pSp 中继状态（打洞冷却/轮间等待）也提供“重新尝试
+     P2P 打洞”，不再只有 failed 终态才显示；配合管理接口的 set_peer_relay(false) 双端
+     复位失败预算。
 
 - n3n-3.4.4-source.zip：与当前 n3n-edge.exe 对应的修改版源码（含上述改动），供 GPLv3 合规使用。官方原版源码见 https://github.com/n42n/n3n （tag 3.4.4）
 
