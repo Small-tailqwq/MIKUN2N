@@ -10,22 +10,31 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>MikuN2N</AssemblyName>
     <RootNamespace>MikuN2N</RootNamespace>
-    <BaseVersion>0.5.6</BaseVersion>
-    <BuildStamp>$([System.DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfff'))</BuildStamp>
-    <Version>$(BaseVersion)-test.b$(BuildStamp)z</Version>
-    <AssemblyVersion>0.5.6.0</AssemblyVersion>
-    <FileVersion>0.5.6.0</FileVersion>
+    <BaseVersion>0.5.8</BaseVersion>
+    <BuildNumber>1</BuildNumber>
+    <Version>$(BaseVersion)-$(BuildNumber)</Version>
+    <AssemblyVersion>$(BaseVersion).0</AssemblyVersion>
+    <FileVersion>$(BaseVersion).$(BuildNumber)</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <PathMap>$(MSBuildProjectDirectory)=/_/MikuN2N</PathMap>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="Runtime\**\*" Exclude="Runtime\edge.exe">
+    <Content Include="Runtime\n3n-edge.exe;Runtime\n3n-3.4.4-source.zip;Runtime\LICENSE-n2n.txt;Runtime\THIRD-PARTY-NOTICES.txt;Runtime\README.txt;Runtime\tap-windows-installer.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
   </ItemGroup>
+
+  <ItemGroup Condition="'$(TestProfilePath)' != ''">
+    <EmbeddedResource Include="$(TestProfilePath)" LogicalName="MikuN2N.PrivateTestProfile" />
+  </ItemGroup>
+
+  <Target Name="ValidateTestProfile" BeforeTargets="PrepareForBuild" Condition="'$(TestProfilePath)' != ''">
+    <Error Condition="!Exists('$(TestProfilePath)')" Text="The private test profile does not exist." />
+  </Target>
 
   <Target Name="WriteBuildIdentity" AfterTargets="Build">
     <WriteLinesToFile

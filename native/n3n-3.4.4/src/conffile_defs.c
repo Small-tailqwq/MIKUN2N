@@ -190,6 +190,14 @@ static struct n3n_conf_option section_connection[] = {
                 "REGISTER spray only for peers still using pSp.",
     },
     {
+        .name = "mikun2n_ipv6",
+        .type = n3n_conf_bool,
+        .offset = offsetof(n2n_edge_conf_t, mikun2n_ipv6),
+        .desc = "Prefer validated IPv6 peer paths (experimental, off by default).",
+        .help = "Uses a separate IPv6 UDP socket and an IPv4 supernode to exchange "
+                "candidates. Keeps virtual Ethernet addresses and IPv4 fallback unchanged.",
+    },
+    {
         .name = "mikun2n_punch_grace",
         .type = n3n_conf_uint32,
         .offset = offsetof(n2n_edge_conf_t, mikun2n_punch_grace),

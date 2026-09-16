@@ -6,11 +6,14 @@
 param(
     [string]$TapGuid = '{TAP-ADAPTER-GUID}',   # TAP-Windows Adapter V9
     [string]$OtherGuid = '{OTHER-TAP-GUID}', # Netease UU TAP
-    [string]$EdgeExe = '<n3n-build>\n3n-3.4.4-patched\apps\n3n-edge.exe',
+    [string]$EdgeExe = (Join-Path $(if ($env:N3N_PATCHED_SOURCE) { $env:N3N_PATCHED_SOURCE } else { '..\n3n-build\n3n-3.4.4-patched' }) 'apps\n3n-edge.exe'),
     [switch]$ConflictScenario
 )
 
 $ErrorActionPreference = 'Continue'
+if (-not (Test-Path $EdgeExe)) {
+    throw "找不到 n3n-edge.exe：$EdgeExe`n请用 -EdgeExe 指定，或设置 `$env:N3N_PATCHED_SOURCE 指向 patched 源码树。"
+}
 $Session  = 'mikun2n-verify'
 $ConfPath = "$env:USERPROFILE\n3n\$Session.conf"
 $OutFile  = "$env:TEMP\n3n-verify-out.txt"
@@ -50,7 +53,7 @@ if ($ConflictScenario -and $other) {
     Write-Host "    [冲突场景] 先探测 supernode 将分配的地址…"
     $probeConf = @"
 [community]
-name=mygroup
+name=$Community
 supernode=vps.example.com:3076
 [connection]
 description=probe
@@ -84,7 +87,7 @@ Write-Host "    目标网卡状态: $((Get-NetAdapter -InterfaceIndex $tap.ifInd
 Write-Host "`n=== 运行 ===" -ForegroundColor Cyan
 $conf = @"
 [community]
-name=mygroup
+name=$Community
 supernode=vps.example.com:3076
 
 [connection]

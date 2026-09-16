@@ -1,0 +1,42 @@
+<Window x:Class="MikuN2N.NodeEditDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="节点" Width="520" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        ShowInTaskbar="False" Background="{DynamicResource WindowBackground}">
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <StackPanel Margin="2,0,0,16">
+      <TextBlock x:Name="HeaderText" Text="添加节点" FontSize="21" FontWeight="Bold" />
+      <TextBlock Text="填写你自己搭建的 supernode 地址，参与联机的双方需要使用同一个小组名称。"
+                 TextWrapping="Wrap" Margin="0,5,0,0"
+                 Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+    </StackPanel>
+
+    <StackPanel Grid.Row="1">
+      <TextBlock Text="节点名称" FontWeight="SemiBold" Margin="2,0,0,6" />
+      <TextBox x:Name="NameBox" MaxLength="24" ToolTip="只在本机显示，用来区分多个节点" />
+      <TextBlock Text="服务器地址" FontWeight="SemiBold" Margin="2,14,0,6" />
+      <TextBox x:Name="ServerBox" ToolTip="形如 vps.example.com:3076；联邦可填多个，用逗号分隔" />
+      <TextBlock x:Name="ServerHintText" Margin="2,5,0,0" FontSize="12" TextWrapping="Wrap"
+                 Foreground="{DynamicResource TextSecondary}"
+                 Text="例如 vps.example.com:3076 或 203.0.113.10:3076。多个 supernode 用逗号分隔时，客户端会按延迟自动选择。" />
+      <TextBlock Text="小组名称" FontWeight="SemiBold" Margin="2,14,0,6" />
+      <TextBox x:Name="CommunityBox" MaxLength="20"
+               ToolTip="必须与服务器端 community 名单或对端填写的一致" />
+      <TextBlock Margin="2,5,0,0" FontSize="12" TextWrapping="Wrap"
+                 Foreground="{DynamicResource TextSecondary}"
+                 Text="不能包含空格，最长 20 个英文字符。填错会连不上，或看不到朋友。" />
+    </StackPanel>
+
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+      <Button Content="取消" Width="90" Margin="0,0,10,0" Click="Cancel_Click" />
+      <Button Content="确定" Width="100" Style="{StaticResource PrimaryButton}" Click="Confirm_Click" />
+    </StackPanel>
+  </Grid>
+</Window>

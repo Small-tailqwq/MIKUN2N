@@ -38,6 +38,8 @@
 #include "auth.h"               // for ascii_to_bin, calculate_dynamic_key
 #include "header_encryption.h"  // for packet_header_encrypt, packet_header_...
 #include "management.h"         // for process_mgmt
+#include "mikun2n_ipv6.h"
+#include "mikun2n_relay.h"
 #include "n2n.h"                // for sn_community, n3n_runtime_data
 #include "n2n_regex.h"          // for re_matchp, re_compile
 #include "n2n_wire.h"           // for encode_buf, encode_PEER_INFO, encode_...
@@ -64,7 +66,7 @@
 #define HASH_FIND_COMMUNITY(head, name, out) HASH_FIND_STR(head, name, out)
 #define MIKUN2N_PUNCH_PLAN_DELAY_MS 1500
 #define MIKUN2N_BANK_GO_DELAY_MS 3000
-#define MIKUN2N_BANK_REPORT_TTL_MS 15000
+#define MIKUN2N_BANK_REPORT_TTL_MS 6000
 
 static uint64_t mikun2n_sn_now_ms (void) {
 #ifdef _WIN32
@@ -99,16 +101,19 @@ static uint8_t mikun2n_plan_role (uint8_t local_nat, uint8_t remote_nat,
     return MIKUN2N_PUNCH_ROLE_LAYERED;
 }
 
-static uint32_t mikun2n_plan_generation (const struct peer_info *a,
-                                         const struct peer_info *b) {
+/* Takes raw MACs and nonces so a federated QUERY_PEER, whose source edge has
+ * no local peer_info entry, can still derive the same pair generation. */
+static uint32_t mikun2n_plan_generation (const n2n_mac_t mac_a,
+                                         uint32_t nonce_a,
+                                         const n2n_mac_t mac_b,
+                                         uint32_t nonce_b) {
     uint8_t pair_key[sizeof(n2n_mac_t)];
     uint32_t generation;
     size_t i;
 
     for(i = 0; i < sizeof(pair_key); i++)
-        pair_key[i] = a->mac_addr[i] ^ b->mac_addr[i];
-    generation = a->mikun2n_punch_nonce ^ b->mikun2n_punch_nonce ^
-                 pearson_hash_32(pair_key, sizeof(pair_key));
+        pair_key[i] = mac_a[i] ^ mac_b[i];
+    generation = nonce_a ^ nonce_b ^ pearson_hash_32(pair_key, sizeof(pair_key));
     return generation ? generation : 1;
 }
 
@@ -560,6 +565,13 @@ static ssize_t sendto_fd (struct n3n_runtime_data *sss,
     sent = sendto(socket_fd, (void *)pktbuf, pktsize, 0 /* flags */,
                   socket, sizeof(struct sockaddr_in));
 
+    if(sent > 0) {
+        sss->relay_out_bytes += sent;
+        ++sss->relay_out_sends;
+    } else if(sent < 0) {
+        ++sss->relay_send_errors;
+    }
+
     if((sent <= 0) && (errno)) {
         char * c = strerror(errno);
         traceEvent(TRACE_ERROR, "sendto failed (%d) %s", errno, c);
@@ -670,6 +682,40 @@ static ssize_t sendto_peer (struct n3n_runtime_data *sss,
  *    This will send the exact same datagram to zero or more edges registered to
  *    the supernode.
  */
+static void relay_account (struct n3n_runtime_data *sss,
+                           const n2n_common_t *cmn,
+                           const n2n_mac_t src,
+                           const n2n_mac_t dst,
+                           enum mikun2n_relay_kind kind,
+                           size_t bytes, time_t now) {
+    struct mikun2n_relay_flow *flow;
+    uint8_t key[MIKUN2N_RELAY_KEY_SIZE] = {0};
+
+    /* REGISTER/QUERY_PEER also use these forwarding helpers. Only DATA is a flow. */
+    if(cmn->pc != MSG_TYPE_PACKET)
+        return;
+    memcpy(key, cmn->community, strnlen((const char *)cmn->community, N2N_COMMUNITY_SIZE));
+    memcpy(key + N2N_COMMUNITY_SIZE, src, N2N_MAC_SIZE);
+    memcpy(key + N2N_COMMUNITY_SIZE + N2N_MAC_SIZE, dst, N2N_MAC_SIZE);
+    key[sizeof(key) - 1] = kind;
+    HASH_FIND(hh, sss->relay_flows, key, sizeof(key), flow);
+    if(!flow && HASH_COUNT(sss->relay_flows) < MIKUN2N_RELAY_MAX) {
+        flow = calloc(1, sizeof(*flow));
+        if(flow) {
+            memcpy(flow->key, key, sizeof(key));
+            HASH_ADD(hh, sss->relay_flows, key, sizeof(key), flow);
+        }
+    }
+    if(!flow) {
+        sss->relay_overflow_bytes += bytes;
+        ++sss->relay_overflow_packets;
+        return;
+    }
+    flow->bytes += bytes;
+    ++flow->packets;
+    flow->last_seen = now;
+}
+
 static void try_broadcast (struct n3n_runtime_data * sss,
                            const struct sn_community *comm,
                            const n2n_common_t * cmn,
@@ -710,6 +756,8 @@ static void try_broadcast (struct n3n_runtime_data * sss,
                                strerror(errno));
                 } else {
                     ++(sss->stats.sn_broadcast);
+                    relay_account(sss, cmn, srcMac, scan->mac_addr,
+                                  MIKUN2N_RELAY_FED_FLOOD, pktsize, now);
                     traceEvent(TRACE_DEBUG, "multicast %lu to supernode [%s] %s",
                                pktsize,
                                sock_to_cstr(sockbuf, &(scan->sock)),
@@ -738,6 +786,8 @@ static void try_broadcast (struct n3n_runtime_data * sss,
                                strerror(errno));
                 } else {
                     ++(sss->stats.sn_broadcast);
+                    relay_account(sss, cmn, srcMac, scan->mac_addr,
+                                  MIKUN2N_RELAY_BROADCAST, pktsize, now);
                     traceEvent(TRACE_DEBUG, "multicast %lu to [%s] %s",
                                pktsize,
                                sock_to_cstr(sockbuf, &(scan->sock)),
@@ -754,6 +804,7 @@ static void try_broadcast (struct n3n_runtime_data * sss,
 static void try_forward (struct n3n_runtime_data * sss,
                          const struct sn_community *comm,
                          const n2n_common_t * cmn,
+                         const n2n_mac_t srcMac,
                          const n2n_mac_t dstMac,
                          bool from_supernode,
                          const uint8_t * pktbuf,
@@ -775,6 +826,7 @@ static void try_forward (struct n3n_runtime_data * sss,
 
         if(data_sent_len == pktsize) {
             ++(sss->stats.sn_fwd);
+            relay_account(sss, cmn, srcMac, dstMac, MIKUN2N_RELAY_UNICAST, pktsize, now);
             traceEvent(TRACE_DEBUG, "unicast %lu to [%s] %s",
                        pktsize,
                        sock_to_cstr(sockbuf, &(scan->sock)),
@@ -800,9 +852,11 @@ static void try_forward (struct n3n_runtime_data * sss,
                 TRACE_DEBUG,
                 "found mac address associated with a known supernode, forwarding packet to that supernode"
             );
-            sendto_sock(sss, sss->sock,
+            ssize_t sent = sendto_sock(sss, sss->sock,
                         &(assoc->sock),
                         pktbuf, pktsize);
+            if(sent == pktsize)
+                relay_account(sss, cmn, srcMac, dstMac, MIKUN2N_RELAY_FED_UNICAST, pktsize, now);
             return;
         } else {
             // otherwise, forwarding packet to all federated supernodes
@@ -814,7 +868,7 @@ static void try_forward (struct n3n_runtime_data * sss,
                 sss,
                 NULL,
                 cmn,
-                sss->conf.sn_mac_addr,
+                srcMac,
                 from_supernode,
                 pktbuf,
                 pktsize,
@@ -958,6 +1012,12 @@ void sn_init (struct n3n_runtime_data *sss) {
 /** Deinitialise the supernode structure and deallocate any memory owned by
  *    it. */
 void sn_term (struct n3n_runtime_data *sss) {
+
+    struct mikun2n_relay_flow *flow, *next_flow;
+    HASH_ITER(hh, sss->relay_flows, flow, next_flow) {
+        HASH_DEL(sss->relay_flows, flow);
+        free(flow);
+    }
 
     struct sn_community *community, *tmp;
     struct sn_community_regular_expression *re, *tmp_re;
@@ -1936,7 +1996,7 @@ static int process_udp (struct n3n_runtime_data * sss,
 
             /* Common section to forward the final product. */
             if(unicast) {
-                try_forward(sss, comm, &cmn, pkt.dstMac, from_supernode, rec_buf, encx, now);
+                try_forward(sss, comm, &cmn, pkt.srcMac, pkt.dstMac, from_supernode, rec_buf, encx, now);
             } else {
                 try_broadcast(sss, comm, &cmn, pkt.srcMac, from_supernode, rec_buf, encx, now);
             }
@@ -2008,7 +2068,7 @@ static int process_udp (struct n3n_runtime_data * sss,
                                           comm->header_encryption_ctx_dynamic, comm->header_iv_ctx_dynamic,
                                           time_stamp());
                 }
-                try_forward(sss, comm, &cmn, reg.dstMac, from_supernode, rec_buf, encx, now); /* unicast only */
+                try_forward(sss, comm, &cmn, reg.srcMac, reg.dstMac, from_supernode, rec_buf, encx, now); /* unicast only */
             } else {
                 traceEvent(TRACE_ERROR, "Rx REGISTER with multicast destination");
             }
@@ -2558,6 +2618,7 @@ static int process_udp (struct n3n_runtime_data * sss,
             uint8_t match = 0;
             int match_length = 0;
             struct peer_info *source_edge = NULL;
+            int mikun2n_remote_source = 0;
 
             if(!comm && sss->lock_communities) {
                 HASH_ITER(hh, sss->rules, re, tmp_re) {
@@ -2581,7 +2642,8 @@ static int process_udp (struct n3n_runtime_data * sss,
                 return -1;
             }
 
-            decode_QUERY_PEER( &query, &cmn, udp_buf, &rem, &idx );
+            if(decode_QUERY_PEER(&query, &cmn, udp_buf, &rem, &idx) < 0)
+                return -1;
 
             // to answer a PING, it is sufficient if the provided communtiy would be a valid one, there does not
             // neccessarily need to be a comm entry present, e.g. because there locally are no edges of the
@@ -2601,22 +2663,46 @@ static int process_udp (struct n3n_runtime_data * sss,
                 }
             }
 
+            if(comm) {
+                struct peer_info *identity_source;
+                HASH_FIND_PEER(comm->edges, query.srcMac, identity_source);
+                if(identity_source && !from_supernode &&
+                   (sock_equal(&identity_source->sock, &sender) ||
+                    (identity_source->socket_fd != sss->sock && identity_source->socket_fd == socket_fd))) {
+                    if(query.aflags & N2N_AFLAGS_MIKUN2N_IDENTITY) {
+                        memcpy(identity_source->version, query.mikun2n_build_version, sizeof(n2n_version_t));
+                        identity_source->mikun2n_ipv6_wire_version = query.mikun2n_ipv6_wire_version;
+                    } else {
+                        memset(identity_source->version, 0, sizeof(n2n_version_t));
+                        identity_source->mikun2n_ipv6_wire_version = 0;
+                    }
+                }
+            }
+
             if(comm && (query.aflags & N2N_AFLAGS_MIKUN2N_NAT)) {
+                int summary_valid =
+                    query.mikun2n_nat_kind >= MIKUN2N_NAT_KIND_EIM &&
+                    query.mikun2n_nat_kind <= MIKUN2N_NAT_KIND_UNCERTAIN &&
+                    query.mikun2n_eim_samples > 0 &&
+                    query.mikun2n_eim_samples <= 5 &&
+                    query.mikun2n_eim_matches <= query.mikun2n_eim_samples &&
+                    query.mikun2n_punch_nonce != 0;
+
                 HASH_FIND_PEER(comm->edges, query.srcMac, source_edge);
                 if(source_edge &&
                    (sock_equal(&source_edge->sock, &sender) ||
                     (source_edge->socket_fd != sss->sock &&
                      source_edge->socket_fd == socket_fd)) &&
-                   query.mikun2n_nat_kind >= MIKUN2N_NAT_KIND_EIM &&
-                   query.mikun2n_nat_kind <= MIKUN2N_NAT_KIND_UNCERTAIN &&
-                   query.mikun2n_eim_samples > 0 &&
-                   query.mikun2n_eim_samples <= 5 &&
-                   query.mikun2n_eim_matches <= query.mikun2n_eim_samples &&
-                   query.mikun2n_punch_nonce != 0) {
+                   summary_valid) {
                     source_edge->mikun2n_nat_kind = query.mikun2n_nat_kind;
                     source_edge->mikun2n_eim_matches = query.mikun2n_eim_matches;
                     source_edge->mikun2n_eim_samples = query.mikun2n_eim_samples;
                     source_edge->mikun2n_punch_nonce = query.mikun2n_punch_nonce;
+                } else if(!source_edge && from_supernode && summary_valid) {
+                    /* Relayed by a federated supernode. The origin supernode
+                     * already matched the sender against its own registration
+                     * table, so plan from the summary carried in the query. */
+                    mikun2n_remote_source = 1;
                 } else {
                     query.aflags &= ~N2N_AFLAGS_MIKUN2N_NAT;
                     source_edge = NULL;
@@ -2625,7 +2711,7 @@ static int process_udp (struct n3n_runtime_data * sss,
                 }
             }
 
-            if(source_edge &&
+            if((source_edge || mikun2n_remote_source) &&
                (query.aflags & N2N_AFLAGS_MIKUN2N_BANK_MODEL)) {
                 if(!is_null_mac(query.targetMac) &&
                    query.mikun2n_bank_mode >= MIKUN2N_BANK_MODE_CONE &&
@@ -2639,37 +2725,52 @@ static int process_udp (struct n3n_runtime_data * sss,
                    query.mikun2n_bank2 != 0 &&
                    query.mikun2n_bank_nonce != 0 &&
                    query.mikun2n_bank_generation != 0) {
-                    memcpy(source_edge->mikun2n_bank_target, query.targetMac,
-                           sizeof(n2n_mac_t));
-                    source_edge->mikun2n_bank_mode = query.mikun2n_bank_mode;
-                    source_edge->mikun2n_bank_direction =
-                        query.mikun2n_bank_direction;
-                    source_edge->mikun2n_bank_workers =
-                        query.mikun2n_bank_workers;
-                    source_edge->mikun2n_bank_reuse =
-                        query.mikun2n_bank_reuse;
-                    source_edge->mikun2n_bank1 = query.mikun2n_bank1;
-                    source_edge->mikun2n_bank2 = query.mikun2n_bank2;
-                    if(query.mikun2n_bank_mode ==
-                           MIKUN2N_BANK_MODE_CONE) {
-                        source_edge->mikun2n_bank1 =
-                            source_edge->sock.port;
-                        source_edge->mikun2n_bank2 =
-                            source_edge->sock.port;
+                    if(source_edge) {
+                        memcpy(source_edge->mikun2n_bank_target, query.targetMac,
+                               sizeof(n2n_mac_t));
+                        source_edge->mikun2n_bank_mode = query.mikun2n_bank_mode;
+                        source_edge->mikun2n_bank_direction =
+                            query.mikun2n_bank_direction;
+                        source_edge->mikun2n_bank_workers =
+                            query.mikun2n_bank_workers;
+                        source_edge->mikun2n_bank_reuse =
+                            query.mikun2n_bank_reuse;
+                        source_edge->mikun2n_bank1 = query.mikun2n_bank1;
+                        source_edge->mikun2n_bank2 = query.mikun2n_bank2;
+                        if(query.mikun2n_bank_mode ==
+                               MIKUN2N_BANK_MODE_CONE) {
+                            source_edge->mikun2n_bank1 =
+                                source_edge->sock.port;
+                            source_edge->mikun2n_bank2 =
+                                source_edge->sock.port;
+                        }
+                        source_edge->mikun2n_bank_spread =
+                            query.mikun2n_bank_spread;
+                        source_edge->mikun2n_bank_rate =
+                            query.mikun2n_bank_rate;
+                        source_edge->mikun2n_bank_nonce =
+                            query.mikun2n_bank_nonce;
+                        source_edge->mikun2n_bank_generation =
+                            query.mikun2n_bank_generation;
+                        source_edge->mikun2n_bank_report_ms = mikun2n_sn_now_ms();
                     }
-                    source_edge->mikun2n_bank_spread =
-                        query.mikun2n_bank_spread;
-                    source_edge->mikun2n_bank_rate =
-                        query.mikun2n_bank_rate;
-                    source_edge->mikun2n_bank_nonce =
-                        query.mikun2n_bank_nonce;
-                    source_edge->mikun2n_bank_generation =
-                        query.mikun2n_bank_generation;
-                    source_edge->mikun2n_bank_report_ms = mikun2n_sn_now_ms();
                 } else {
                     query.aflags &= ~N2N_AFLAGS_MIKUN2N_BANK_MODEL;
                     traceEvent(TRACE_WARNING,
                                "ignored invalid MikuN2N bank model in QUERY_PEER");
+                }
+            }
+
+            if(comm && (query.aflags & N2N_AFLAGS_MIKUN2N_IPV6)) {
+                struct peer_info *candidate_source;
+                HASH_FIND_PEER(comm->edges, query.srcMac, candidate_source);
+                if(candidate_source && sock_equal(&candidate_source->sock, &sender)) {
+                    candidate_source->mikun2n_ipv6_address = query.mikun2n_ipv6_address;
+                    candidate_source->mikun2n_ipv6_token = mikun2n_ipv6_candidate(&query.mikun2n_ipv6_address)
+                                                               ? query.mikun2n_ipv6_token : 0;
+                    candidate_source->mikun2n_ipv6_seen_ms = mikun2n_sn_now_ms();
+                } else if(!from_supernode) {
+                    query.aflags &= ~N2N_AFLAGS_MIKUN2N_IPV6;
                 }
             }
 
@@ -2732,12 +2833,39 @@ static int process_udp (struct n3n_runtime_data * sss,
                     memcpy(pi.srcMac, query.srcMac, sizeof(n2n_mac_t));
                     memcpy(pi.mac, query.targetMac, sizeof(n2n_mac_t));
                     pi.sock = scan->sock;
+                    if((query.aflags & N2N_AFLAGS_MIKUN2N_IDENTITY) && scan->version[0]) {
+                        pi.aflags |= N2N_AFLAGS_MIKUN2N_IDENTITY;
+                        memcpy(pi.version, scan->version, sizeof(n2n_version_t));
+                        pi.mikun2n_ipv6_wire_version = scan->mikun2n_ipv6_wire_version;
+                    }
+                    if(query.aflags & N2N_AFLAGS_MIKUN2N_IPV6) {
+                        pi.aflags |= N2N_AFLAGS_MIKUN2N_IPV6;
+                        memset(&pi.mikun2n_ipv6_address, 0, sizeof(pi.mikun2n_ipv6_address));
+                        pi.mikun2n_ipv6_token = 0;
+                        if(mikun2n_sn_now_ms() - scan->mikun2n_ipv6_seen_ms < 30000) {
+                            pi.mikun2n_ipv6_address = scan->mikun2n_ipv6_address;
+                            pi.mikun2n_ipv6_token = scan->mikun2n_ipv6_token;
+                        }
+                    }
                     if(scan->preferred_sock.family != (uint8_t)AF_INVALID) {
                         cmn2.flags |= N2N_FLAGS_SOCKET;
                         pi.preferred_sock = scan->preferred_sock;
                     }
 
-                    if(source_edge && source_edge->mikun2n_punch_nonce &&
+                    uint8_t src_nat_kind = 0;
+                    uint32_t src_punch_nonce = 0;
+                    uint32_t src_bank_nonce = 0;
+                    int src_bank_ready = 0;
+
+                    if(source_edge) {
+                        src_nat_kind = source_edge->mikun2n_nat_kind;
+                        src_punch_nonce = source_edge->mikun2n_punch_nonce;
+                    } else if(mikun2n_remote_source) {
+                        src_nat_kind = query.mikun2n_nat_kind;
+                        src_punch_nonce = query.mikun2n_punch_nonce;
+                    }
+
+                    if(src_punch_nonce &&
                        scan->mikun2n_punch_nonce &&
                        scan->mikun2n_nat_kind >= MIKUN2N_NAT_KIND_EIM &&
                        scan->mikun2n_nat_kind <= MIKUN2N_NAT_KIND_UNCERTAIN) {
@@ -2748,49 +2876,90 @@ static int process_udp (struct n3n_runtime_data * sss,
                         pi.mikun2n_eim_samples = scan->mikun2n_eim_samples;
                         pi.mikun2n_punch_nonce = scan->mikun2n_punch_nonce;
                         pi.mikun2n_punch_role =
-                            mikun2n_plan_role(source_edge->mikun2n_nat_kind,
+                            mikun2n_plan_role(src_nat_kind,
                                              scan->mikun2n_nat_kind,
-                                             source_edge->mac_addr,
+                                             query.srcMac,
                                              scan->mac_addr);
                         pi.mikun2n_punch_generation =
-                            mikun2n_plan_generation(source_edge, scan);
+                            mikun2n_plan_generation(query.srcMac,
+                                                    src_punch_nonce,
+                                                    scan->mac_addr,
+                                                    scan->mikun2n_punch_nonce);
                         pi.mikun2n_punch_delay_ms =
                             MIKUN2N_PUNCH_PLAN_DELAY_MS;
 
-                        if(source_edge->mikun2n_nat_kind ==
-                               MIKUN2N_NAT_KIND_APDM &&
+                        if(source_edge) {
+                            src_bank_ready =
+                                !memcmp(source_edge->mikun2n_bank_target,
+                                        scan->mac_addr, sizeof(n2n_mac_t)) &&
+                                source_edge->mikun2n_bank_generation ==
+                                    pi.mikun2n_punch_generation &&
+                                source_edge->mikun2n_bank_report_ms +
+                                    MIKUN2N_BANK_REPORT_TTL_MS >=
+                                        mikun2n_sn_now_ms();
+                            src_bank_nonce = source_edge->mikun2n_bank_nonce;
+                        } else if(query.aflags & N2N_AFLAGS_MIKUN2N_BANK_MODEL) {
+                            /* Bank fields ride in the forwarded query itself;
+                             * the report is as fresh as this packet. */
+                            src_bank_ready =
+                                query.mikun2n_bank_generation ==
+                                    pi.mikun2n_punch_generation;
+                            src_bank_nonce = query.mikun2n_bank_nonce;
+                        }
+
+                        if(src_nat_kind == MIKUN2N_NAT_KIND_APDM &&
                            scan->mikun2n_nat_kind == MIKUN2N_NAT_KIND_APDM &&
-                           !memcmp(source_edge->mikun2n_bank_target,
-                                   scan->mac_addr, sizeof(n2n_mac_t)) &&
+                           src_bank_ready &&
                            !memcmp(scan->mikun2n_bank_target,
-                                   source_edge->mac_addr, sizeof(n2n_mac_t)) &&
-                           source_edge->mikun2n_bank_generation ==
-                               pi.mikun2n_punch_generation &&
+                                   query.srcMac, sizeof(n2n_mac_t)) &&
                            scan->mikun2n_bank_generation ==
                                pi.mikun2n_punch_generation &&
-                           source_edge->mikun2n_bank_report_ms +
-                               MIKUN2N_BANK_REPORT_TTL_MS >= mikun2n_sn_now_ms() &&
                            scan->mikun2n_bank_report_ms +
                                MIKUN2N_BANK_REPORT_TTL_MS >= mikun2n_sn_now_ms()) {
                             uint64_t sn_now_ms = mikun2n_sn_now_ms();
+                            uint64_t go_deadline_ms;
 
-                            if(source_edge->mikun2n_go_local_bank_nonce !=
-                                   source_edge->mikun2n_bank_nonce ||
-                               source_edge->mikun2n_go_peer_bank_nonce !=
-                                   scan->mikun2n_bank_nonce ||
-                               source_edge->mikun2n_go_deadline_ms == 0) {
-                                uint64_t deadline =
-                                    sn_now_ms + MIKUN2N_BANK_GO_DELAY_MS;
-                                source_edge->mikun2n_go_deadline_ms = deadline;
-                                scan->mikun2n_go_deadline_ms = deadline;
-                                source_edge->mikun2n_go_local_bank_nonce =
-                                    source_edge->mikun2n_bank_nonce;
-                                source_edge->mikun2n_go_peer_bank_nonce =
-                                    scan->mikun2n_bank_nonce;
-                                scan->mikun2n_go_local_bank_nonce =
-                                    scan->mikun2n_bank_nonce;
-                                scan->mikun2n_go_peer_bank_nonce =
-                                    source_edge->mikun2n_bank_nonce;
+                            if(source_edge) {
+                                if(source_edge->mikun2n_go_local_bank_nonce !=
+                                       source_edge->mikun2n_bank_nonce ||
+                                   source_edge->mikun2n_go_peer_bank_nonce !=
+                                       scan->mikun2n_bank_nonce ||
+                                   source_edge->mikun2n_go_deadline_ms == 0) {
+                                    uint64_t deadline =
+                                        sn_now_ms + MIKUN2N_BANK_GO_DELAY_MS;
+                                    source_edge->mikun2n_go_deadline_ms = deadline;
+                                    scan->mikun2n_go_deadline_ms = deadline;
+                                    source_edge->mikun2n_go_local_bank_nonce =
+                                        source_edge->mikun2n_bank_nonce;
+                                    source_edge->mikun2n_go_peer_bank_nonce =
+                                        scan->mikun2n_bank_nonce;
+                                    scan->mikun2n_go_local_bank_nonce =
+                                        scan->mikun2n_bank_nonce;
+                                    scan->mikun2n_go_peer_bank_nonce =
+                                        source_edge->mikun2n_bank_nonce;
+                                }
+                                go_deadline_ms =
+                                    source_edge->mikun2n_go_deadline_ms;
+                            } else {
+                                /* Cross-supernode pair: the querying edge has
+                                 * no local entry, so pace the GO from the local
+                                 * member's entry. The mirror supernode does the
+                                 * same for the other edge; the two deadlines
+                                 * can skew by up to one coordination interval,
+                                 * which the attempt-driven scanner tolerates. */
+                                if(scan->mikun2n_go_local_bank_nonce !=
+                                       scan->mikun2n_bank_nonce ||
+                                   scan->mikun2n_go_peer_bank_nonce !=
+                                       src_bank_nonce ||
+                                   scan->mikun2n_go_deadline_ms == 0) {
+                                    scan->mikun2n_go_deadline_ms =
+                                        sn_now_ms + MIKUN2N_BANK_GO_DELAY_MS;
+                                    scan->mikun2n_go_local_bank_nonce =
+                                        scan->mikun2n_bank_nonce;
+                                    scan->mikun2n_go_peer_bank_nonce =
+                                        src_bank_nonce;
+                                }
+                                go_deadline_ms = scan->mikun2n_go_deadline_ms;
                             }
 
                             pi.aflags |= N2N_AFLAGS_MIKUN2N_BANK_MODEL;
@@ -2808,11 +2977,9 @@ static int process_udp (struct n3n_runtime_data * sss,
                             pi.mikun2n_bank_rate = scan->mikun2n_bank_rate;
                             pi.mikun2n_bank_nonce = scan->mikun2n_bank_nonce;
                             pi.mikun2n_punch_delay_ms =
-                                source_edge->mikun2n_go_deadline_ms > sn_now_ms
-                                ? (uint16_t)MIN(
-                                      source_edge->mikun2n_go_deadline_ms -
-                                          sn_now_ms,
-                                      UINT16_MAX)
+                                go_deadline_ms > sn_now_ms
+                                ? (uint16_t)MIN(go_deadline_ms - sn_now_ms,
+                                                UINT16_MAX)
                                 : 0;
                         }
                         traceEvent(TRACE_NORMAL,
@@ -2820,7 +2987,7 @@ static int process_udp (struct n3n_runtime_data * sss,
                                    "local_nat=%u peer_nat=%u bank_ready=%u",
                                    pi.mikun2n_punch_generation,
                                    pi.mikun2n_punch_role,
-                                   source_edge->mikun2n_nat_kind,
+                                   src_nat_kind,
                                    scan->mikun2n_nat_kind,
                                    !!(pi.aflags &
                                       N2N_AFLAGS_MIKUN2N_BANK_MODEL));
@@ -2877,7 +3044,8 @@ static int process_udp (struct n3n_runtime_data * sss,
                 return -1;
             }
 
-            decode_PEER_INFO(&pi, &cmn, udp_buf, &rem, &idx);
+            if(decode_PEER_INFO(&pi, &cmn, udp_buf, &rem, &idx) < 0)
+                return -1;
 
             if(comm->header_encryption == HEADER_ENCRYPTION_ENABLED) {
                 if(!find_peer_time_stamp_and_verify(

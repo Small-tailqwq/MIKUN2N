@@ -23,6 +23,10 @@ namespace MikuN2N.Services;
 internal static class NetworkTuningService
 {
     private const string FirewallRuleName = "MikuN2N 虚拟局域网";
+    private const string TransportFirewallRuleName = "MikuN2N 隧道传输";
+    private const string DiscoveryFirewallRuleName = "MikuN2N 好友发现";
+    private const int EdgeUdpPort = 50001;
+    private const int DiscoveryUdpPort = 43121;
 
     /// <summary>
     /// Interface metric for the tunnel. n3n already asks for this through its own
@@ -32,6 +36,55 @@ internal static class NetworkTuningService
     /// traffic - route lookup still picks the most specific prefix.
     /// </summary>
     private const int TunnelMetric = 1;
+
+    public static async Task EnsureStableFirewallRulesAsync(
+        string scope,
+        Action<string> log,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var (transportExitCode, transportOutput) = await ReplaceFirewallRuleAsync(
+                TransportFirewallRuleName,
+                [
+                    "dir=in",
+                    "action=allow",
+                    "protocol=udp",
+                    $"localport={EdgeUdpPort}",
+                    "profile=any",
+                    "description=允许 MikuN2N n3n edge 在固定 UDP 50001 端口接收 Supernode 和好友的隧道数据。"
+                ],
+                cancellationToken);
+            var (discoveryExitCode, discoveryOutput) = await ReplaceFirewallRuleAsync(
+                DiscoveryFirewallRuleName,
+                [
+                    "dir=in",
+                    "action=allow",
+                    "protocol=udp",
+                    $"localport={DiscoveryUdpPort}",
+                    $"remoteip={scope}",
+                    "profile=any",
+                    "description=允许 MikuN2N 在虚拟局域网内通过 UDP 43121 发现好友。"
+                ],
+                cancellationToken);
+            if (transportExitCode != 0)
+            {
+                log($"防火墙：隧道传输规则添加失败（退出码 {transportExitCode}）：{transportOutput}");
+            }
+            if (discoveryExitCode != 0)
+            {
+                log($"防火墙：好友发现规则添加失败（退出码 {discoveryExitCode}）：{discoveryOutput}");
+            }
+            if (transportExitCode == 0 && discoveryExitCode == 0)
+            {
+                log("防火墙：已准备固定端口规则，更新程序路径不会再重复申请放行。");
+            }
+        }
+        catch (Exception exception)
+        {
+            log($"防火墙：准备固定端口规则时出错：{exception.Message}");
+        }
+    }
 
     public static async Task ApplyAsync(
         string? adapterId,
@@ -48,6 +101,7 @@ internal static class NetworkTuningService
 
         // netsh wants the network base, not the host address we happen to hold.
         var scope = $"{ToNetworkAddress(address, subnetMask)}/{ToPrefixLength(subnetMask)}";
+        await EnsureStableFirewallRulesAsync(scope, log, cancellationToken);
         await EnsureFirewallRuleAsync(scope, log, cancellationToken);
         await EnsurePrivateProfileAsync(index.Value, log, cancellationToken);
         await EnsureBroadcastPriorityAsync(index.Value, log, cancellationToken);
@@ -91,17 +145,9 @@ internal static class NetworkTuningService
     {
         try
         {
-            // The rule is rewritten rather than probed: the virtual subnet is fixed
-            // today but a changed scope has to replace the old rule, not add a second.
-            await RunAsync(
-                "netsh",
-                ["advfirewall", "firewall", "delete", "rule", $"name={FirewallRuleName}"],
-                cancellationToken);
-            var (exitCode, output) = await RunAsync(
-                "netsh",
+            var (exitCode, output) = await ReplaceFirewallRuleAsync(
+                FirewallRuleName,
                 [
-                    "advfirewall", "firewall", "add", "rule",
-                    $"name={FirewallRuleName}",
                     "dir=in",
                     "action=allow",
                     "protocol=any",
@@ -118,6 +164,29 @@ internal static class NetworkTuningService
         {
             log($"网卡优化：设置防火墙放行规则时出错：{exception.Message}");
         }
+    }
+
+    private static async Task<(int ExitCode, string Output)> ReplaceFirewallRuleAsync(
+        string name,
+        string[] properties,
+        CancellationToken cancellationToken)
+    {
+        // These rules intentionally have no program= filter. Windows keys its
+        // interactive allow rules to an executable's full path, so every versioned
+        // build directory otherwise produces another prompt and another pair of
+        // stale rules. Fixed ports remain stable across builds.
+        await RunAsync(
+            "netsh",
+            ["advfirewall", "firewall", "delete", "rule", $"name={name}"],
+            cancellationToken);
+        return await RunAsync(
+            "netsh",
+            [
+                "advfirewall", "firewall", "add", "rule",
+                $"name={name}",
+                .. properties
+            ],
+            cancellationToken);
     }
 
     private static async Task EnsurePrivateProfileAsync(

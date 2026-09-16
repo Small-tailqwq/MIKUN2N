@@ -61,7 +61,7 @@ v7.2 保留 v7.1 已验证的规律 NAT 分层扫描，并为手机流量常见�
 ## 构建
 
 ```powershell
-$env:Path = "%UserProfile%\mingw64\mingw64\bin;$env:Path"
+$env:Path = "$env:USERPROFILE\mingw64\mingw64\bin;$env:Path"
 gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.exe natpunch.c -lws2_32
 ```
 

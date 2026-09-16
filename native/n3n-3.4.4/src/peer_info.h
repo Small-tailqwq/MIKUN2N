@@ -19,6 +19,7 @@
 enum skip_add {SN_ADD = 0, SN_ADD_SKIP = 1, SN_ADD_ADDED = 2};
 
 #define MIKUN2N_BANK_WORKERS 25
+#define MIKUN2N_IPV6_PROBES 8
 #ifdef _WIN32
 #define MIKUN2N_INVALID_SOCKET INVALID_SOCKET
 #else
@@ -37,6 +38,13 @@ typedef struct mikun2n_bank_worker {
     uint64_t sent_a_ms;
     uint64_t sent_b_ms;
 } mikun2n_bank_worker_t;
+
+typedef struct mikun2n_ipv6_probe {
+    uint64_t challenge;
+    uint64_t sent_ms;
+    n2n_sock_t destination;
+    uint16_t bytes;
+} mikun2n_ipv6_probe_t;
 
 struct peer_info {
     n2n_mac_t mac_addr;
@@ -59,6 +67,7 @@ struct peer_info {
     char *hostname;
     time_t uptime;
     n2n_version_t version;
+    uint8_t mikun2n_ipv6_wire_version;
     time_t punch_started;
     uint64_t punch_last_ms;
     uint32_t punch_attempt;
@@ -118,6 +127,8 @@ struct peer_info {
     uint16_t punch_bank_rate;
     uint32_t punch_bank_nonce;
     uint64_t punch_bank_deadline_ms;
+    uint64_t punch_bank_fit_ms;
+    uint8_t punch_bank_recalib;
     uint8_t punch_peer_bank_ready;
     uint8_t punch_peer_bank_mode;
     int8_t punch_peer_bank_direction;
@@ -128,6 +139,28 @@ struct peer_info {
     uint16_t punch_peer_bank_spread;
     uint16_t punch_peer_bank_rate;
     uint32_t punch_peer_bank_nonce;
+
+    n2n_sock_t mikun2n_ipv6_address;
+    /* Advertised candidates can be ULA; only a checked public endpoint carries data. */
+    n2n_sock_t mikun2n_ipv6_path_address;
+    uint64_t mikun2n_ipv6_token;
+    uint64_t mikun2n_ipv6_seen_ms;
+    uint64_t mikun2n_ipv6_query_ms;
+    mikun2n_ipv6_probe_t mikun2n_ipv6_probes[MIKUN2N_IPV6_PROBES];
+    uint8_t mikun2n_ipv6_probe_index;
+    uint64_t mikun2n_ipv6_next_probe_ms;
+    uint64_t mikun2n_ipv6_next_learn_ms;
+    uint64_t mikun2n_ipv6_valid_until_ms;
+    uint64_t mikun2n_ipv6_peer_ready_until_ms;
+    uint64_t mikun2n_ipv6_ready_report_ms;
+    uint64_t mikun2n_ipv6_legacy_log_ms;
+    uint64_t punch_ipv6_stable_ms;
+    uint64_t punch_ipv6_paused_ms;
+    uint32_t mikun2n_ipv6_rtt_ms;
+    uint8_t mikun2n_ipv6_attempts;
+    uint16_t mikun2n_ipv6_probe_bytes;
+    uint16_t mikun2n_ipv6_path_bytes;
+    uint64_t mikun2n_ipv6_oversize_log_ms;
 
     UT_hash_handle hh;     /* makes this structure hashable */
 };

@@ -56,6 +56,11 @@ public sealed class N2nManagementClient : IDisposable
             ? CallJsonRpcAsync("get_nat", authenticated: false, cancellationToken)
             : Task.FromResult<IReadOnlyList<JsonElement>>([]);
 
+    public Task<JsonElement> GetInfoAsync(CancellationToken cancellationToken) =>
+        _protocol == ManagementProtocol.N3nHttp
+            ? SendJsonRpcAsync("get_info", authenticated: false, cancellationToken)
+            : Task.FromResult(default(JsonElement));
+
     /// <returns>
     /// How many peer entries the edge actually updated. Zero means the policy was
     /// recorded but no known/pending peer carries that virtual address yet.

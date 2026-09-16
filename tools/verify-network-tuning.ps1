@@ -2,10 +2,13 @@
 # 直接调用编译出的真实服务代码（tune-harness），不是复刻命令。需要管理员权限。
 param(
     [string]$TapGuid  = '{TAP-ADAPTER-GUID}',
-    [string]$EdgeExe  = '<n3n-build>\n3n-3.4.4-patched\apps\n3n-edge.exe',
+    [string]$EdgeExe  = (Join-Path $(if ($env:N3N_PATCHED_SOURCE) { $env:N3N_PATCHED_SOURCE } else { '..\n3n-build\n3n-3.4.4-patched' }) 'apps\n3n-edge.exe'),
     [Parameter(Mandatory)][string]$Harness
 )
 $ErrorActionPreference = 'Continue'
+if (-not (Test-Path $EdgeExe)) {
+    throw "找不到 n3n-edge.exe：$EdgeExe`n请用 -EdgeExe 指定，或设置 `$env:N3N_PATCHED_SOURCE 指向 patched 源码树。"
+}
 $Session  = 'mikun2n-tune'
 $RuleName = 'MikuN2N 虚拟局域网'
 
@@ -37,7 +40,7 @@ Report '起点  '
 Write-Host "`n=== 启动 edge 让网卡就绪 ===" -ForegroundColor Cyan
 $conf = @"
 [community]
-name=mygroup
+name=$Community
 supernode=vps.example.com:3076
 
 [connection]

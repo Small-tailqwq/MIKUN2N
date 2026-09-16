@@ -21,6 +21,9 @@
 #include <string.h>      // for strtok, strlen, strncpy
 #include "base64.h"      // for base64decode
 #include "management.h"
+#include "mikun2n_ipv6.h"
+#include "mikun2n_build_version.h"
+#include "mikun2n_relay.h"
 #include "peer_info.h"   // for peer_info
 
 #ifdef _WIN32
@@ -766,14 +769,18 @@ static int mikun2n_peer_forced_relay (const struct n3n_runtime_data *eee,
     return 0;
 }
 
-static void jsonrpc_get_edges_row (strbuf_t **reply, struct peer_info *peer, const char *mode, const char *community) {
+static void jsonrpc_get_edges_row (strbuf_t **reply, struct peer_info *peer, const char *mode, const char *community, int ipv6) {
     macstr_t mac_buf;
     n2n_sock_str_t sockbuf;
     n2n_sock_str_t sockbuf2;
+    n2n_sock_str_t ipv6_candidate, ipv6_path;
     dec_ip_bit_str_t ip_bit_str = {'\0'};
     const char *punch_state = "native";
     const char *punch_role = "none";
     uint32_t punch_elapsed = 0;
+
+    if(ipv6)
+        mode = "p2p";
 
     if(peer->force_relay) {
         punch_state = "forced_relay";
@@ -796,6 +803,15 @@ static void jsonrpc_get_edges_row (strbuf_t **reply, struct peer_info *peer, con
     sb_reprintf(reply,
                 "{"
                 "\"mode\":\"%s\","
+                "\"transport\":\"%s\","
+                "\"ipv6_rtt_ms\":%u,"
+                "\"ipv6_checked_udp_bytes\":%u,"
+                "\"ipv6_wire_version\":%u,"
+                "\"peer_ipv6_wire_version\":%u,"
+                "\"ipv4_scan_paused\":%s,"
+                "\"ipv6_candidate\":\"%s\","
+                "\"ipv6_path\":\"%s\","
+                "\"ipv6_path_kind\":\"%s\","
                 "\"community\":\"%s\","
                 "\"ip4addr\":\"%s\","
                 "\"purgeable\":%i,"
@@ -820,6 +836,16 @@ static void jsonrpc_get_edges_row (strbuf_t **reply, struct peer_info *peer, con
                 "\"punch_band_hi\":%u,"
                 "\"force_relay\":%s},",
                 mode,
+                ipv6 ? "ipv6" : "ipv4",
+                ipv6 ? peer->mikun2n_ipv6_rtt_ms : 0,
+                ipv6 ? peer->mikun2n_ipv6_path_bytes : 0,
+                MIKUN2N_IPV6_WIRE_VERSION,
+                peer->mikun2n_ipv6_wire_version,
+                peer->punch_ipv6_paused_ms ? "true" : "false",
+                sock_to_cstr(ipv6_candidate, &peer->mikun2n_ipv6_address),
+                ipv6 ? sock_to_cstr(ipv6_path, &peer->mikun2n_ipv6_path_address) : "",
+                !ipv6 ? "inactive" : sock_equal(&peer->mikun2n_ipv6_path_address, &peer->mikun2n_ipv6_address)
+                                         ? "advertised" : "peer_reflexive",
                 community,
                 (peer->dev_addr.net_addr == 0) ? "" : ip_subnet_to_str(ip_bit_str, &peer->dev_addr),
                 peer->purgeable,
@@ -874,7 +900,8 @@ static void jsonrpc_get_edges (char *id, struct n3n_runtime_data *eee, conn_t *c
             &conn->request,
             peer,
             "pSp",
-            eee->conf.community_name
+            eee->conf.community_name,
+            !peer->local && !peer->force_relay && mikun2n_ipv6_active(eee, peer, mikun2n_ipv6_now_ms())
         );
 
         if(jsonrpc_error_overflow(id, conn, count)) {
@@ -900,7 +927,8 @@ static void jsonrpc_get_edges (char *id, struct n3n_runtime_data *eee, conn_t *c
             &conn->request,
             peer,
             peer->force_relay ? "pSp" : "p2p",
-            eee->conf.community_name
+            eee->conf.community_name,
+            !peer->local && !peer->force_relay && mikun2n_ipv6_active(eee, peer, mikun2n_ipv6_now_ms())
         );
 
         if(jsonrpc_error_overflow(id, conn, count)) {
@@ -925,7 +953,8 @@ static void jsonrpc_get_edges (char *id, struct n3n_runtime_data *eee, conn_t *c
                 &conn->request,
                 peer,
                 "sn",
-                (community->is_federation) ? "-/-" : community->community
+                (community->is_federation) ? "-/-" : community->community,
+                0
             );
 
             if(jsonrpc_error_overflow(id, conn, count)) {
@@ -968,6 +997,8 @@ static void jsonrpc_get_nat (char *id, struct n3n_runtime_data *eee, conn_t *con
         "\"probe_mask\":%u,"
         "\"probe_round\":%u,"
         "\"cross_probe_attempts\":%u,"
+        "\"ipv6_enabled\":%s,"
+        "\"ipv6_nat66_supported\":true,"
         "\"strategy\":\"%s\"}]",
         nat->type[0] ? nat->type : "detecting",
         nat->mapping[0] ? nat->mapping : "unknown",
@@ -981,6 +1012,7 @@ static void jsonrpc_get_nat (char *id, struct n3n_runtime_data *eee, conn_t *con
         nat->probe_mask,
         nat->probe_round,
         nat->cross_probe_attempts,
+        eee->conf.mikun2n_ipv6 ? "true" : "false",
         strategy
     );
     jsonrpc_result_tail(conn, 200);
@@ -1003,6 +1035,8 @@ static void jsonrpc_get_info (char *id, struct n3n_runtime_data *eee, conn_t *co
                 "{"
                 "\"version\":\"%s\","
                 "\"builddate\":\"%s\","
+                "\"mikun2n_build_version\":\"%s\","
+                "\"ipv6_wire_version\":%u,"
                 "\"is_edge\":%i,"
                 "\"is_supernode\":%i,"
                 "\"macaddr\":\"%s\","
@@ -1010,6 +1044,8 @@ static void jsonrpc_get_info (char *id, struct n3n_runtime_data *eee, conn_t *co
                 "\"sockaddr\":\"%s\"}",
                 VERSION,
                 BUILDDATE,
+                MIKUN2N_BUILD_VERSION,
+                MIKUN2N_IPV6_WIRE_VERSION,
                 eee->conf.is_edge,
                 eee->conf.is_supernode,
                 is_null_mac(eee->device.mac_addr) ? "" : macaddr_str(mac_buf, eee->device.mac_addr),
@@ -1241,6 +1277,44 @@ static void jsonrpc_help_events (char *id, struct n3n_runtime_data *eee, conn_t 
     jsonrpc_result_tail(conn, 200);
 }
 
+static void jsonrpc_get_relay_stats (char *id, struct n3n_runtime_data *eee, conn_t *conn, const char *params) {
+    struct mikun2n_relay_flow *flow, *tmp;
+    int limit = 16, offset = 0, index = 0, count = 0;
+    extract_pagination((char *)params, &limit, &offset);
+    if(limit < 1 || limit > 64) limit = 16;
+    if(offset < 0) offset = 0;
+    jsonrpc_result_head(id, conn);
+    sb_reprintf(&conn->request,
+        "{\"schema\":1,\"started_at\":%llu,\"sampled_at\":%llu,"
+        "\"out_bytes\":%llu,\"out_sends\":%llu,\"send_errors\":%llu,"
+        "\"overflow_bytes\":%llu,\"overflow_packets\":%llu,"
+        "\"flow_count\":%u,\"flow_limit\":%u,\"flows\":[",
+        (unsigned long long)eee->start_time, (unsigned long long)time(NULL),
+        (unsigned long long)eee->relay_out_bytes, (unsigned long long)eee->relay_out_sends,
+        (unsigned long long)eee->relay_send_errors,
+        (unsigned long long)eee->relay_overflow_bytes, (unsigned long long)eee->relay_overflow_packets,
+        HASH_COUNT(eee->relay_flows), MIKUN2N_RELAY_MAX);
+    HASH_ITER(hh, eee->relay_flows, flow, tmp) {
+        if(index++ < offset) continue;
+        char community[2 * N2N_COMMUNITY_SIZE + 1];
+        macstr_t src, dst;
+        for(int i = 0; i < N2N_COMMUNITY_SIZE; ++i)
+            snprintf(community + 2 * i, 3, "%02x", flow->key[i]);
+        sb_reprintf(&conn->request,
+            "{\"community_hex\":\"%s\",\"src\":\"%s\",\"dst\":\"%s\","
+            "\"kind\":%u,\"bytes\":%llu,\"packets\":%llu,\"last_seen\":%llu},",
+            community, macaddr_str(src, flow->key + N2N_COMMUNITY_SIZE),
+            macaddr_str(dst, flow->key + N2N_COMMUNITY_SIZE + N2N_MAC_SIZE),
+            flow->key[MIKUN2N_RELAY_KEY_SIZE - 1],
+            (unsigned long long)flow->bytes, (unsigned long long)flow->packets,
+            (unsigned long long)flow->last_seen);
+        if(jsonrpc_error_overflow(id, conn, count)) return;
+        if(++count >= limit) break;
+    }
+    jsonrpc_listend_hack(conn, "]}");
+    jsonrpc_result_tail(conn, 200);
+}
+
 static void jsonrpc_help (char *id, struct n3n_runtime_data *eee, conn_t *conn, const char *params);
 
 struct mgmt_jsonrpc_method {
@@ -1256,6 +1330,7 @@ static const struct mgmt_jsonrpc_method jsonrpc_methods[] = {
     { "get_nat", jsonrpc_get_nat, "Show MikuN2N NAT behavior probe" },
     { "get_mac", jsonrpc_get_mac, "Show known mac addresses" },
     { "get_packetstats", jsonrpc_get_packetstats, "traffic counters" },
+    { "get_relay_stats", jsonrpc_get_relay_stats, "Supernode cumulative outbound relay bytes by directed MAC pair" },
     { "get_supernodes", jsonrpc_get_supernodes, "List current supernodes" },
     { "get_timestamps", jsonrpc_get_timestamps, "Event timestamps" },
     { "get_verbose", jsonrpc_get_verbose, "Logging verbosity" },

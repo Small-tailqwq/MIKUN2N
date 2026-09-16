@@ -1,0 +1,36 @@
+#
+# MikuN2N 自建 supernode 配置模板。
+#
+# 安装脚本会把 __BIND_PORT__ 与 __COMMUNITY_FILE__ 替换成实际值，写进
+# /etc/n3n/<服务名>.conf。字段含义可用 `n3n-supernode help config` 查询。
+#
+# 该文件由 n3n 以 INI 语法解析：[section] 分段，每行一个 option=value。
+#
+
+[connection]
+# 监听的 UDP 地址与端口。开放给公网时用默认的 0.0.0.0；只在本机联调可改成 127.0.0.1。
+# 需要在云安全组和主机防火墙上同时放行这个 UDP 端口。
+bind=0.0.0.0:__BIND_PORT__
+
+[supernode]
+# 允许的小组（community）名单，一行一个名字，可带小组自己的虚拟网段，例如：
+#     mygroup 192.0.2.0/24
+# 名字也支持正则，例如 net[0-9][0-9]。不配这一项时任何名字都能连上本节点。
+# 想让节点只服务自己的小圈子，取消下面一行的注释并编辑名单文件。
+#community_file=__COMMUNITY_FILE__
+
+# 防止伪造源地址的报文被当作有效注册。自建节点建议保持开启。
+spoofing_protection=true
+
+# 多台 supernode 组成联邦（互相中继、就近选路）时，所有成员填写同一个联邦名，
+# 并用 peer 指向其他成员。单节点部署不需要这两项。
+#federation=myfederation
+#peer=other.example.com:3076
+
+[daemon]
+# 交给 systemd 托管时保持 false，让进程留在前台。
+background=false
+
+[logging]
+# 1=只记错误，2=记录注册与连接，3=逐包。排查问题时可临时调到 3。
+verbose=2

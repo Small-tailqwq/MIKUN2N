@@ -128,14 +128,12 @@ static int decode_uint32 (uint32_t * out,
     return 4;
 }
 
-#if 0
-// Not used anywhere, uncommment when this changes
 static int encode_uint64 (uint8_t * base,
                           size_t * idx,
                           const uint64_t v) {
 
-    *(uint64_t*)(base + *idx) = htobe64(v);
-    *idx += 8;
+    encode_uint32(base, idx, (uint32_t)(v >> 32));
+    encode_uint32(base, idx, (uint32_t)v);
 
     return 8;
 }
@@ -149,13 +147,13 @@ static int decode_uint64 (uint64_t * out,
         return 0;
     }
 
-    *out  = be64toh(*(uint64_t*)base + *idx);
-    *idx += 8;
-    *rem -= 8;
+    uint32_t high, low;
+    decode_uint32(&high, base, rem, idx);
+    decode_uint32(&low, base, rem, idx);
+    *out = ((uint64_t)high << 32) | low;
 
     return 8;
 }
-#endif
 
 int encode_buf (uint8_t * base,
                 size_t * idx,
@@ -756,6 +754,21 @@ int decode_PACKET (n2n_PACKET_t * pkt,
 }
 
 
+/* Identity strings are display metadata, never arbitrary JSON or log text. */
+static int mikun2n_version_valid (const n2n_version_t version) {
+    if(!version[0])
+        return 0;
+    for(size_t i = 0; i < sizeof(n2n_version_t); i++) {
+        unsigned char c = (unsigned char)version[i];
+        if(!c)
+            return 1;
+        if(!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+             (c >= 'a' && c <= 'z') || c == '.' || c == '-' || c == '+' || c == '_'))
+            return 0;
+    }
+    return 0;
+}
+
 int encode_PEER_INFO (uint8_t *base,
                       size_t *idx,
                       const n2n_common_t *cmn,
@@ -797,6 +810,13 @@ int encode_PEER_INFO (uint8_t *base,
         retval += encode_uint32(base, idx, pkt->mikun2n_bank_nonce);
     }
 
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_IPV6) {
+        retval += encode_buf(base, idx, pkt->mikun2n_ipv6_address.addr.v6, IPV6_SIZE);
+        retval += encode_uint16(base, idx, pkt->mikun2n_ipv6_address.port);
+        retval += encode_uint64(base, idx, pkt->mikun2n_ipv6_token);
+    }
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_IDENTITY)
+        retval += encode_uint8(base, idx, pkt->mikun2n_ipv6_wire_version);
     return retval;
 }
 
@@ -845,6 +865,26 @@ int decode_PEER_INFO (n2n_PEER_INFO_t *pkt,
         retval += decode_uint32(&pkt->mikun2n_bank_nonce, base, rem, idx);
     }
 
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_IPV6) {
+        if(*rem < IPV6_SIZE + 2 + 8) {
+            pkt->aflags &= ~N2N_AFLAGS_MIKUN2N_IPV6;
+            return -1;
+        }
+        pkt->mikun2n_ipv6_address.family = AF_INET6;
+        retval += decode_buf(pkt->mikun2n_ipv6_address.addr.v6, IPV6_SIZE, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_ipv6_address.port, base, rem, idx);
+        retval += decode_uint64(&pkt->mikun2n_ipv6_token, base, rem, idx);
+    }
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_IDENTITY) {
+        /* Older federation hops preserve unknown flags but omit their suffix. */
+        if(!*rem) {
+            pkt->aflags &= ~N2N_AFLAGS_MIKUN2N_IDENTITY;
+            return retval;
+        }
+        if(!mikun2n_version_valid(pkt->version))
+            return -1;
+        retval += decode_uint8(&pkt->mikun2n_ipv6_wire_version, base, rem, idx);
+    }
     return retval;
 }
 
@@ -879,6 +919,15 @@ int encode_QUERY_PEER (uint8_t * base,
         retval += encode_uint32(base, idx, pkt->mikun2n_bank_generation);
     }
 
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_IPV6) {
+        retval += encode_buf(base, idx, pkt->mikun2n_ipv6_address.addr.v6, IPV6_SIZE);
+        retval += encode_uint16(base, idx, pkt->mikun2n_ipv6_address.port);
+        retval += encode_uint64(base, idx, pkt->mikun2n_ipv6_token);
+    }
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_IDENTITY) {
+        retval += encode_buf(base, idx, pkt->mikun2n_build_version, sizeof(n2n_version_t));
+        retval += encode_uint8(base, idx, pkt->mikun2n_ipv6_wire_version);
+    }
     return retval;
 }
 
@@ -915,5 +964,28 @@ int decode_QUERY_PEER (n2n_QUERY_PEER_t * pkt,
         retval += decode_uint32(&pkt->mikun2n_bank_generation, base, rem, idx);
     }
 
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_IPV6) {
+        if(*rem < IPV6_SIZE + 2 + 8) {
+            pkt->aflags &= ~N2N_AFLAGS_MIKUN2N_IPV6;
+            return -1;
+        }
+        pkt->mikun2n_ipv6_address.family = AF_INET6;
+        retval += decode_buf(pkt->mikun2n_ipv6_address.addr.v6, IPV6_SIZE, base, rem, idx);
+        retval += decode_uint16(&pkt->mikun2n_ipv6_address.port, base, rem, idx);
+        retval += decode_uint64(&pkt->mikun2n_ipv6_token, base, rem, idx);
+    }
+
+    if(pkt->aflags & N2N_AFLAGS_MIKUN2N_IDENTITY) {
+        if(!*rem) {
+            pkt->aflags &= ~N2N_AFLAGS_MIKUN2N_IDENTITY;
+            return retval;
+        }
+        if(*rem < sizeof(n2n_version_t) + 1)
+            return -1;
+        retval += decode_buf((uint8_t *)pkt->mikun2n_build_version, sizeof(n2n_version_t), base, rem, idx);
+        retval += decode_uint8(&pkt->mikun2n_ipv6_wire_version, base, rem, idx);
+        if(!mikun2n_version_valid(pkt->mikun2n_build_version))
+            return -1;
+    }
     return retval;
 }

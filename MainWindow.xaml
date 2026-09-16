@@ -82,11 +82,20 @@
                 <TextBlock x:Name="StatusDetail" Text="填写昵称后点击连接，即可加入朋友们的虚拟局域网。"
                            TextWrapping="Wrap" Margin="0,6,0,0" FontSize="13"
                            Foreground="{DynamicResource TextSecondary}" />
-                <Border Background="{DynamicResource AccentSoft}" CornerRadius="9"
-                        Padding="9,4" Margin="0,10,0,0" HorizontalAlignment="Left">
-                  <TextBlock x:Name="RoomNameText" Text="房间：—" FontSize="11"
-                             Foreground="{DynamicResource Accent}" FontWeight="SemiBold" />
-                </Border>
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                  <Border Background="{DynamicResource AccentSoft}" CornerRadius="9"
+                          Padding="9,4" HorizontalAlignment="Left">
+                    <TextBlock x:Name="RoomNameText" Text="房间：—" FontSize="11"
+                               Foreground="{DynamicResource Accent}" FontWeight="SemiBold" />
+                  </Border>
+                  <Border x:Name="SupernodeBadge" Background="{DynamicResource AccentSoft}"
+                          CornerRadius="9" Padding="9,4" Margin="6,0,0,0"
+                          HorizontalAlignment="Left" Visibility="Collapsed"
+                          ToolTip="当前网络流量经由的中继节点（按延迟自动选择）。">
+                    <TextBlock x:Name="SupernodeText" Text="中继：—" FontSize="11"
+                               Foreground="{DynamicResource Accent}" FontWeight="SemiBold" />
+                  </Border>
+                </StackPanel>
               </StackPanel>
               <Grid Grid.Row="1" Grid.Column="1" Margin="0,19,0,0" UseLayoutRounding="True">
                 <Grid.ColumnDefinitions>
@@ -215,7 +224,7 @@
             <CheckBox x:Name="RememberKeyBox" Grid.Row="3" Grid.Column="2"
                       Content="在这台电脑上安全记住密钥" Margin="1,7,0,0" />
             <Button x:Name="ConnectButton" Grid.Row="4" Grid.ColumnSpan="3" Margin="0,21,0,0"
-                    Height="50" Content="连接到 mygroup" FontSize="16"
+                    Height="50" Content="连接" FontSize="16"
                     Style="{StaticResource PrimaryButton}" Click="ConnectButton_Click" />
           </Grid>
         </Border>
@@ -236,6 +245,7 @@
             </Grid>
             <Grid>
               <DataGrid x:Name="PeersGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                        PreviewMouseWheel="PeersGrid_PreviewMouseWheel"
                         CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False"
                         HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
                         MinHeight="88" MaxHeight="228" RowHeight="38" ColumnHeaderHeight="34"
@@ -262,6 +272,14 @@
                     </DataGridTemplateColumn.CellTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="延迟" Binding="{Binding LatencyText}" Width="*" />
+                  <DataGridTemplateColumn Header="版本" Width="*" MinWidth="82">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding VersionText}" ToolTip="{Binding VersionDetail}"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="链路" Width="*">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate>
@@ -273,6 +291,7 @@
                               <StackPanel MaxWidth="280">
                                 <TextBlock Text="{Binding ConnectionModeText}" FontWeight="SemiBold"
                                            TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding VersionDetail}" TextWrapping="Wrap" Margin="0,3,0,0" />
                                 <TextBlock Text="右键：强制/取消 pSp 中继；处于 pSp 中继时可重新尝试 P2P 打洞。"
                                            TextWrapping="Wrap" Margin="0,3,0,0" Opacity="0.75" />
                               </StackPanel>
@@ -295,21 +314,49 @@
           </StackPanel>
         </Border>
 
-        <Expander Grid.Row="4" Header="高级连接设置" Margin="3,1,3,13">
+        <Expander Grid.Row="4" Header="当前节点" IsExpanded="True" Margin="3,1,3,13">
           <Border Style="{StaticResource CardStyle}" Margin="0,10,0,0" Padding="18">
             <Grid>
-              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="18"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-              <TextBlock Text="服务器" FontWeight="SemiBold" Margin="0,0,0,7" />
-              <TextBlock Grid.Column="2" Text="小组名称" FontWeight="SemiBold" Margin="0,0,0,7" />
-              <TextBox x:Name="ServerBox" Grid.Row="1" />
-              <TextBox x:Name="CommunityBox" Grid.Row="1" Grid.Column="2" MaxLength="20"
-                       TextChanged="CommunityBox_TextChanged" />
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="18*" /><ColumnDefinition Width="16" />
+                <ColumnDefinition Width="24*" /><ColumnDefinition Width="16" />
+                <ColumnDefinition Width="18*" />
+              </Grid.ColumnDefinitions>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+              </Grid.RowDefinitions>
+              <TextBlock Grid.ColumnSpan="5" Text="节点由你自建或朋友分享，可在设置里添加和维护。"
+                         Foreground="{DynamicResource TextSecondary}" FontSize="12"
+                         TextWrapping="Wrap" Margin="0,0,0,12" />
+              <TextBlock Text="节点" FontWeight="SemiBold" Margin="0,0,0,7" />
+              <TextBlock Grid.Column="2" Text="地址" FontWeight="SemiBold" Margin="0,0,0,7" />
+              <TextBlock Grid.Column="4" Text="小组名称" FontWeight="SemiBold" Margin="0,0,0,7" />
+              <ComboBox x:Name="NodeBox" Grid.Row="1" DisplayMemberPath="Name"
+                        SelectionChanged="NodeBox_SelectionChanged"
+                        ToolTip="选择要连接的节点" />
+              <TextBox x:Name="NodeAddressText" Grid.Row="1" Grid.Column="2" IsReadOnly="True"
+                       Foreground="{DynamicResource TextSecondary}" ToolTip="节点地址，可在设置中修改" />
+              <TextBox x:Name="NodeCommunityText" Grid.Row="1" Grid.Column="4" IsReadOnly="True"
+                       Foreground="{DynamicResource TextSecondary}" ToolTip="小组名称，参与联机的双方必须一致" />
+              <Button x:Name="ManageNodesButton" Grid.Row="2" Grid.ColumnSpan="5"
+                      Content="管理节点…" Click="ManageNodes_Click"
+                      HorizontalAlignment="Left" Margin="0,12,0,0" />
             </Grid>
           </Border>
         </Expander>
 
-        <Expander Grid.Row="5" Header="运行日志" Margin="3,0,3,0">
+        <StackPanel Grid.Row="5">
+          <Border x:Name="DiagnosticsPanel" Visibility="Collapsed" Background="{DynamicResource SurfaceAlt}"
+                  BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,12">
+            <DockPanel>
+              <Button x:Name="StopUploadButton" DockPanel.Dock="Right" Content="停止上传" IsEnabled="False"
+                      Click="StopUpload_Click" Margin="12,0,0,0" Padding="12,6" />
+              <TextBlock x:Name="DiagnosticsStatusText" TextWrapping="Wrap" VerticalAlignment="Center"
+                         Foreground="{DynamicResource TextSecondary}" />
+            </DockPanel>
+          </Border>
+        <Expander Header="运行日志" Margin="3,0,3,0">
           <Border Background="{DynamicResource LogBackground}" CornerRadius="12" Padding="14" Margin="0,10,0,0">
             <TextBox x:Name="LogBox" Height="160" IsReadOnly="True" AcceptsReturn="True"
                      VerticalScrollBarVisibility="Auto" TextWrapping="Wrap"
@@ -318,6 +365,7 @@
                      BorderThickness="0" FontFamily="Cascadia Mono, Consolas" FontSize="12" />
           </Border>
         </Expander>
+        </StackPanel>
       </Grid>
     </ScrollViewer>
     <Canvas x:Name="EasterEggOverlay" Panel.ZIndex="100" IsHitTestVisible="False" />

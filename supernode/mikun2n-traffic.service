@@ -1,0 +1,21 @@
+[Unit]
+Description=MikuN2N local relay traffic accounting
+After=mikun2n-supernode.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/mikun2n/traffic/relay-traffic.py collect
+Restart=on-failure
+RestartSec=10s
+StateDirectory=mikun2n-traffic
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

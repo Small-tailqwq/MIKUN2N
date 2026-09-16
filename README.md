@@ -1,94 +1,67 @@
 # MikuN2N
 
-面向非技术用户的 Windows n2n 联机助手。默认连接：
+A Windows client for playing LAN games with friends over a self-hosted virtual Ethernet network. MikuN2N manages a patched n3n edge, TAP-Windows, peer discovery, reconnects and a light/dark WPF interface.
 
-- Supernode：`vps.example.com:3076`（独立 n3n 网络）
-- Community：`mygroup`
-- 虚拟网段：`192.0.2.0/24`
+**The client ships with no server addresses.** Build your own server using [the server deployment guide](supernode/README.md), or add a server shared by a friend in the node manager. Participants need the same community and encryption key. A node may contain multiple federated endpoints.
 
-## 当前功能
+## Connectivity
 
-- 一键启动和停止 n2n edge
-- 结合 n3n 注册日志和 TAP 地址确认是否真正加入网络，不依赖 Windows 上不稳定的管理接口
-- 通过隧道内 UDP 心跳显示好友昵称、虚拟 IP、往返延迟和在线状态
-- 按好友显示 `P2P 直连` 或 `pSp 中继`，并统计当前 P2P 直连数量
-- 使用 n3n 数据 socket 探测 NAT 映射/过滤行为，在主界面显示 NAT1/2、NAT3 或 NAT4
-- n3n 原生直连失败 5 秒后触发 22 秒有预算的分层打洞；NAT4 使用跨地址 control 近窗与轮转窗口，失败后保留可靠 Supernode 中继
-- 固定 n3n UDP `50001` 并自动检测 UPnP；公网 IPv4 环境下自动续租端口映射
-- 当路由器 WAN 位于私网或运营商 CGNAT 后方时给出明确提示
-- 支持跟随系统、亮色和暗色三种界面主题
-- 默认常驻系统托盘，可从托盘连接、断开、打开设置或退出
-- 首次关闭窗口会询问是退出还是最小化到托盘，选择可在设置中修改
-- 设置中的“关于”页面集中展示版本、上游项目、许可证及随包许可证文件
-- 意外掉线后自动重启；平时完全不改动 TAP 网卡（沿用网卡自带的固定 MAC），仅当
-  服务器尚未释放旧连接时才临时下发随机 MAC 立即重连，避免每次连接都重置网卡与
-  Windows 网络位置
-- 单实例与旧 edge 进程检查，避免两个客户端同时抢占 TAP
-- 每次 edge 运行的完整日志保存到 `%LocalAppData%\MikuN2N\logs`
-- 可在设置中选择日志保留 7/30/90/180 天或永久保留，程序每 6 小时自动清理过期日志
-- 使用官方 n3n 3.4.4 Windows edge；发布包不再携带来源不可复现的旧 dirty n2n edge
-- 连接时自动完成三项网卡适配，让虚拟网卡像真实局域网网卡一样工作：
-  - 按虚拟网段 `192.0.2.0/24` 添加一条入站放行规则（规则名“MikuN2N 虚拟局域网”），
-    使好友之间的联机、房间发现和 ping 不再被 Windows 默认入站拦截挡掉；作用域限定在
-    虚拟网段内，不影响真实网络
-  - 将虚拟网卡的网络位置设为“专用网络”，避免公用网络配置文件下的局域网发现限制
-  - 把虚拟网卡的接口跃点降到 1。`224.0.0.0/4` 与 `255.255.255.255/32` 在每块网卡上
-    都存在且路由跃点相同，平局由接口跃点决定；默认物理网卡跃点更低，游戏的房间广播会从
-    物理网卡发出而进不了隧道。断开连接（含异常退出）后跃点交还 Windows 自动计算
-- n2n 密钥不写入命令行和临时配置
-- 可选使用 Windows DPAPI 保存密钥，仅当前 Windows 用户可以解密
-- 全部应用配置和日志按 Unicode 处理
-- 自动检测 TAP-Windows，并提供官方签名驱动的安装入口
-- 明确指定 n3n 使用随包的 TAP-Windows 网卡（按 GUID），不会被加速器等第三方
-  TAP 网卡抢走；指定网卡不可用时自动回退为自动选择
+- Native n3n IPv4 P2P, followed by bounded NAT-aware port prediction and worker-bank probing when necessary. NAT4-to-NAT4 direct connections depend on the predictability of both networks; supernode relay remains available.
+- Per-peer IPv4 P2P, IPv6 P2P, local direct, punching and relay status, with tunnel latency and online presence. The friend list shows client versions; its version tooltip includes the running n3n build and IPv6 wire version. Unreported legacy versions remain unknown. IPv6 wire mismatches are explained while IPv4 remains available; differing build numbers alone do not prevent IPv6.
+- Optional IPv6 UDP peer transport, disabled by default. Enable “尝试 IPv6 P2P 直连” in Settings → General on both clients, then reconnect.
+- The IPv6 experiment uses the matching patched **IPv4 supernode** to exchange candidates. It validates a sized UDP round trip and the peer's receive readiness before preferring IPv6, checks liveness and falls back to IPv4 on expiry or send failure. Wire version 2 requires matching updated clients; older peers keep IPv4 connectivity. The virtual Ethernet network and game traffic remain IPv4.
+- IPv6 selects one local address, preferring global IPv6 and allowing a routed ULA for NAT66. Matching test builds can configure an IPv6 STUN observer to discover the peer socket's public mapping and exchange it through the NAT66-capable supernode, allowing both peers to initiate checks. Without an observer, a ULA peer still depends on its first probe reaching the public peer. Probes reduce their size after oversized sends or timeouts; DATA above the validated size falls back individually to IPv4. Endpoint-dependent mappings or filtered UDP may still prevent direct connectivity, and NAT66-to-NAT66 remains unvalidated. Validated IPv6 is preferred over Internet IPv4, while local direct links retain priority. IPv6 RTT is recorded without comparison against IPv4 RTT. IPv6-only supernodes and IPv6 relay remain outside this experiment.
 
-## 技术研究记录
+The numbered native patch list is maintained only in [Runtime/README.txt](Runtime/README.txt). Use the server and client source from the same release: an upstream-only server does not provide MikuN2N's extended coordination or IPv6 candidate exchange.
 
-- [NATPUNCH v7 阶段总结](NATPUNCH-V7阶段总结.md)：NAT4 探测、穿梭版本、
-  实测边界、失败结论及后续接入建议。
+## Desktop features
 
-## 开发构建
+- Node management, tray controls, single-instance protection and recovery after unexpected edge exits.
+- TAP-Windows installation, adapter selection, interface priority and scoped firewall setup.
+- UDP 50001 for the edge, optional UPnP mapping and CGNAT detection.
+- System, light and dark themes; configurable close behavior and log retention.
+- Peer discovery and latency measurement inside the virtual network. Missing or stale samples show “暂无法测量” after ten seconds; a route change clears the old RTT while probes continue. Native IPv6 probe RTT does not substitute for tunnel measurements.
+- Encryption keys passed through process environment variables, never command-line arguments or generated configuration files. Optional key storage uses Windows DPAPI for the current user.
+- Settings and logs stored under `%LocalAppData%/MikuN2N`; settings replacement preserves the previous file until the new file has been written.
 
-需要 Windows 和 .NET 9 SDK：
+## Build
+
+Requires Windows and the .NET 9 SDK:
 
 ```powershell
 dotnet build
 ```
 
-构建产物位于 `bin/Debug/net9.0-windows/`。测试构建以 `0.4.1-test.b<UTC 时间戳>z`
-作为完整版本号，每次执行构建都会自动生成新的构建身份。完整版本固定显示在主界面
-右上角，并写入产物中的 `build-identity.txt`；测试反馈和分发包不得只记录基础版本
-`0.4.1`。
+Output: `bin/Debug/net9.0-windows/`. `BaseVersion` and `BuildNumber` in `MikuN2N.csproj` produce versions such as `0.5.8-1`. Increment the number for each newly delivered package; retain it for rebuilds of that delivery and reset it to 1 when the base version changes. Record the version from the UI or `build-identity.txt` when reporting a problem.
 
-## 发布
+The patched native source is included in `Runtime/n3n-3.4.4-source.zip`. Before a new native release build, run `tools/sync-native-version.ps1 -PatchedSource <source-root>` to generate its build identity from the project version. Then run `sh scripts/build-mikun2n-windows.sh` from the native source root in Git Bash with MinGW-w64 GCC and make on PATH. Rebuilding the supplied archive directly retains its included identity. This uses GNU C17 and maps build paths in debug information. Copy `apps/n3n-edge.exe` to `Runtime/n3n-edge.exe`, then update the source archive and component hashes together.
 
-发给测试同伴的包用**框架依赖**构建（约 2 MB，对方需自行安装 .NET 9 Desktop
-Runtime，未安装时双击会提示下载）：
+## Publish
+
+Framework-dependent package (requires the .NET 9 Desktop Runtime):
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist/MikuN2N-<完整版本号>
+dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist/MikuN2N
 ```
 
-只有面向不懂电脑的用户的**正式发布**才用自包含构建。它把整个 .NET 运行时打进
-程序，产物约 170 MB、解压后占盘约 173 MB（WPF 不支持 `PublishTrimmed`，无法裁剪），
-不要拿它打日常测试包：
+Self-contained package:
 
 ```powershell
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/win-x64
 ```
 
-两种方式都需要把 `bin/Release/net9.0-windows/win-x64/build-identity.txt` 复制到产物
-目录，`Runtime/` 会自动随程序输出。
+Both commands write `build-identity.txt` and include the explicitly listed runtime files: the patched edge, corresponding source, licenses, component notices and TAP installer. Use a fresh output directory for each release. Legacy edge binaries and backups are excluded.
 
-`Runtime/n3n-edge.exe` 和对应的 `n3n-3.4.4-source.zip` 会随程序发布。发布给朋友前还需要：
+The source archive supports both the Windows edge and the Linux supernode. Server build and install scripts are in [supernode/](supernode/README.md). Deployment is manual; no server or credentials are supplied by this project.
 
-1. 在干净的 Windows 10/11 电脑上验证 TAP-Windows 安装流程。
-2. 对程序和安装包进行代码签名。
-3. 保留随包提供的 GPLv3 许可证和 n3n 3.4.4 对应源码归档。
-4. 在至少两台 Windows 电脑上测试 Minecraft 与 Left 4 Dead 2。
+IPv6 remains experimental. Compilation does not establish real-world connectivity, game compatibility or light/dark visual acceptance. Release validation needs two consenting clients, their own server and tests of connection, fallback, reconnect and MTU behavior.
 
-## 独立服务端
+## Research
 
-服务器模板位于 `server/`。当前部署使用源码构建的 n3n 3.4.4、systemd 服务
-`mikun2n-supernode.service`、公网 `3076/UDP` 和 `192.0.2.0/24`。旧 `3075`
-n2n 服务保持不变。supernode 管理接口仅使用服务器本机 Unix socket，不向公网开放。
+[NATPUNCH v7 summary](docs/NATPUNCH-V7阶段总结.md) and [federation notes](docs/FEDERATION.md) document past experiments and their limits.
+
+## License
+
+MikuN2N's own code is licensed under [GPL-3.0-only](LICENSE). Third-party files retain their individual licenses; see [Runtime/THIRD-PARTY-NOTICES.txt](Runtime/THIRD-PARTY-NOTICES.txt). Distribute the matching native source archive with the native binary.
+
+Keep deployment addresses, communities, keys and local settings out of public source and history. For a new public repository, import the cleaned source export without the private repository's `.git` directory.

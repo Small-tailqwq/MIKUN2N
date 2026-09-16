@@ -9,10 +9,13 @@
 # 需要管理员权限。
 param(
     [string]$TapGuid = '{TAP-ADAPTER-GUID}',
-    [string]$EdgeExe = '<n3n-build>\n3n-3.4.4-patched\apps\n3n-edge.exe',
+    [string]$EdgeExe = (Join-Path $(if ($env:N3N_PATCHED_SOURCE) { $env:N3N_PATCHED_SOURCE } else { '..\n3n-build\n3n-3.4.4-patched' }) 'apps\n3n-edge.exe'),
     [int]$Metric = 1
 )
 $ErrorActionPreference = 'Continue'
+if (-not (Test-Path $EdgeExe)) {
+    throw "找不到 n3n-edge.exe：$EdgeExe`n请用 -EdgeExe 指定，或设置 `$env:N3N_PATCHED_SOURCE 指向 patched 源码树。"
+}
 $Session = 'mikun2n-metric'
 
 if (-not (New-Object Security.Principal.WindowsPrincipal(
@@ -40,7 +43,7 @@ $before = Get-Metric
 
 $conf = @"
 [community]
-name=mygroup
+name=$Community
 supernode=vps.example.com:3076
 
 [connection]

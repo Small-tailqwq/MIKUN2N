@@ -106,6 +106,7 @@ OBJS=\
 	src/management.o \
 	src/metrics.o \
 	src/minilzo.o \
+	src/mikun2n_ipv6.o \
 	src/n2n.o \
 	src/n2n_port_mapping.o \
 	src/n2n_regex.o \

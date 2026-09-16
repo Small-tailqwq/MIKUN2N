@@ -75,7 +75,7 @@ v7.2 保留 v7.1 已验证的规律 NAT 分层扫描，并为手机流量常见�
 ## 构建
 
 ```powershell
-$env:Path = "%UserProfile%\mingw64\mingw64\bin;$env:Path"
+$env:Path = "$env:USERPROFILE\mingw64\mingw64\bin;$env:Path"
 gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.1.exe natpunch.c -lws2_32
 ```
 
@@ -93,10 +93,11 @@ gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.1.exe natpunch.c -lws2_32
 python3 natpunch-server.py server --bind 0.0.0.0 --port-a 21001 --port-b 21002
 ```
 
-两端使用相同房间号：
+两端使用相同房间号，服务器地址填运行上面服务端的机器：
 
 ```powershell
 .\natpunch-v7.3.1.exe client vps.example.com 房间号
+.\打洞测试.bat vps.example.com 房间号
 ```
 
 可选参数：

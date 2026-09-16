@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$mingwBin = "%UserProfile%\mingw64\mingw64\bin"
+$mingwBin = if ($env:N3N_TOOLCHAIN_BIN) { $env:N3N_TOOLCHAIN_BIN } else { "$env:USERPROFILE\mingw64\mingw64\bin" }
 if (Test-Path -LiteralPath $mingwBin) {
     $env:Path = "$mingwBin;$env:Path"
 }

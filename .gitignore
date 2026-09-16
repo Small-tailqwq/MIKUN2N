@@ -11,6 +11,13 @@ logs/
 .claude/
 *.zip
 
-# Runtime/ ships third-party binaries intentionally (see CLAUDE.md) — do not ignore it.
+# Runtime/ ships third-party binaries intentionally (see Runtime/README.txt) — do not ignore it.
 !Runtime/
 !Runtime/**
+Runtime/*.bak*
+
+# Local agent overrides may carry machine-specific paths, personal server addresses and
+# group names. Never commit them; the tracked instruction files must stay generic.
+*.local.md
+AGENTS.local.md
+CLAUDE.local.md

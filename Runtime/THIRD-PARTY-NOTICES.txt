@@ -1,34 +1,21 @@
-MikuN2N prototype third-party components
+MikuN2N third-party components
 =========================================
 
 1. n3n edge (preferred)
 
 - File: n3n-edge.exe
-- Version: 3.4.4
-- SHA-256: 6A045C1D157E36F7D2072296FB52427839611D4853C5D4D0FC9166646616148A
+- Version: patched n3n 3.4.4 (MikuN2N; see README.txt)
+- SHA-256: 49A6E34A7264F54BA296EDCCAD17A97344BE08E5DF8AC6E8CC228253CB0DCE13
 - License: GPL-3.0-only
 - Upstream: https://github.com/n42n/n3n
 - Release: https://github.com/n42n/n3n/releases/tag/3.4.4
-- Published: 2024-12-07
+- Upstream release date: 2024-12-07
 - Windows Authenticode: not signed
 - Bundled license: LICENSE-n2n.txt
 - Bundled corresponding source: n3n-3.4.4-source.zip
-- Source archive SHA-256: 119637DD9D552C00F3D77C0F8ABC386BF6BDB27A836D29BA94F5E44C29B52502
+- Source archive SHA-256: FB230D99D492BF4BA27376BC62B18BEEE87290D0F98B5B14677C27F50FDA41AA
 
-2. Legacy n2n edge (source-tree reference only; excluded from builds)
-
-- File: edge.exe
-- Reported version: 3.1.1-16-g23e168b-dirty-r1200 x64_static
-- SHA-256: ED6696BD7E6269529B77063494A7AFDA3D9486D4C68DA7BBB913891979B0B572
-- License: GPL-3.0
-- Upstream: https://github.com/ntop/n2n
-- Bundled license: LICENSE-n2n.txt
-
-This prototype binary came from the local EasyN2N reference package. Because it
-reports a dirty build and its exact corresponding source has not been
-reproduced, MikuN2N excludes it from build and publish output.
-
-3. TAP-Windows
+2. TAP-Windows
 
 - File: tap-windows-installer.exe
 - Version: 9.24.7-I601-Win10
@@ -38,7 +25,7 @@ reproduced, MikuN2N excludes it from build and publish output.
 - Upstream: https://github.com/OpenVPN/tap-windows6
 - Download: https://build.openvpn.net/downloads/releases/tap-windows-9.24.7-I601-Win10.exe
 
-4. .NET, WPF and Windows Forms
+3. .NET, WPF and Windows Forms
 
 - Runtime: .NET 9 self-contained Windows runtime
 - Runtime binary license: Microsoft .NET Library License

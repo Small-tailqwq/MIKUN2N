@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -21,26 +22,70 @@ public sealed class SettingsStore
         var directory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "MikuN2N");
+        if (TestBuildProfile.Current is { } profile)
+            directory = Path.Combine(directory, "tests", profile.BatchId);
         Directory.CreateDirectory(directory);
         _settingsPath = Path.Combine(directory, "settings.json");
     }
 
-    public AppSettings Load()
+    /// <summary>
+    /// Reads the settings file, bringing a file written by an older build up to the node
+    /// model. <paramref name="upgraded"/> reports whether that conversion happened, so the
+    /// caller can write the result back instead of leaving the old address on disk.
+    /// </summary>
+    public AppSettings Load(out bool upgraded)
     {
+        upgraded = false;
         try
         {
             if (!File.Exists(_settingsPath))
             {
-                return new AppSettings();
+                return TestBuildProfile.Current?.CreateSettings() ?? new AppSettings();
             }
 
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath), JsonOptions)
-                   ?? new AppSettings();
+            var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath), JsonOptions)
+                           ?? new AppSettings();
+            var upgradedSettings = false;
+            var normalized = Normalize(settings, ref upgradedSettings);
+            upgraded = upgradedSettings;
+            return normalized;
         }
         catch
         {
-            return new AppSettings();
+            upgraded = false;
+            return TestBuildProfile.Current?.CreateSettings() ?? new AppSettings();
         }
+    }
+
+    public AppSettings Load() => Load(out _);
+
+    /// <summary>
+    /// Brings a settings file written by an older build up to the node-list model. The
+    /// pre-0.6 fields held one server and one community, so they become the first node;
+    /// both are then cleared so a later save drops the address from disk.
+    /// </summary>
+    private static AppSettings Normalize(AppSettings settings, ref bool upgraded)
+    {
+        var servers = EdgeController.SplitServers(settings.LegacyServer ?? string.Empty);
+        upgraded = settings.LegacyServer is not null || settings.LegacyCommunity is not null;
+        if (servers.Count > 0 && settings.Nodes.Count == 0)
+        {
+            settings.Nodes.Add(new SupernodeNode
+            {
+                Name = "默认节点",
+                Server = string.Join(", ", servers),
+                Community = settings.LegacyCommunity?.Trim() ?? string.Empty
+            });
+            settings.ActiveNodeId = settings.Nodes[0].Id;
+        }
+
+        settings.LegacyServer = null;
+        settings.LegacyCommunity = null;
+        if (string.IsNullOrEmpty(settings.ActiveNodeId) && settings.Nodes.Count > 0)
+        {
+            settings.ActiveNodeId = settings.Nodes[0].Id;
+        }
+        return settings;
     }
 
     public void Save(AppSettings settings, string key)
@@ -49,7 +94,19 @@ public sealed class SettingsStore
             ? Protect(key)
             : null;
 
-        File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings, JsonOptions), new UTF8Encoding(false));
+        var temporaryPath = $"{_settingsPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(settings, JsonOptions), new UTF8Encoding(false));
+            File.Move(temporaryPath, _settingsPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
     }
 
     public string LoadKey(AppSettings settings)

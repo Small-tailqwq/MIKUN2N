@@ -1,0 +1,21 @@
+[Unit]
+Description=MikuN2N supernode (n3n)
+Documentation=https://github.com/n42n/n3n
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/n3n/__SERVICE_NAME__.env
+ExecStart=__BINARY__ start __SERVICE_NAME__
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/n3n
+RuntimeDirectory=n3n/__SERVICE_NAME__
+
+[Install]
+WantedBy=multi-user.target

@@ -1,20 +1,18 @@
 [Unit]
-Description=MikuN2N dedicated n3n supernode
+Description=MikuN2N NAT observation (__SERVICE_NAME__)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/n3n/mikun2n-supernode.env
-ExecStart=/opt/mikun2n/n3n-3.4.4/sbin/n3n-supernode start mikun2n-supernode
+ExecStart=/usr/bin/python3 -u __PROBE_FILE__ server --bind 0.0.0.0 --port-a 21001 --port-b 21002
 Restart=on-failure
 RestartSec=3s
+DynamicUser=true
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadOnlyPaths=/etc/n3n
-RuntimeDirectory=n3n/mikun2n-supernode
 
 [Install]
 WantedBy=multi-user.target

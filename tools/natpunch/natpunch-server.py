@@ -110,7 +110,8 @@ class Coordinator:
             return
         if cmd == "XPROBE" and len(parts) >= 3:
             try:
-                send_b("XREPLY", (parts[1], int(parts[2])))
+                if parts[1] == addr[0] and int(parts[2]) == addr[1]:
+                    send_b("XREPLY", addr)
             except (ValueError, OSError):
                 pass
             return

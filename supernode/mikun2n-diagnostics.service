@@ -1,0 +1,26 @@
+[Unit]
+Description=MikuN2N consented test diagnostics (HTTPS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mikun2n-diag
+Group=mikun2n-diag
+EnvironmentFile=/etc/mikun2n-diagnostics/receiver.env
+ExecStart=/usr/bin/python3 /opt/mikun2n/diagnostics/diagnostics-receiver.py --cert /etc/mikun2n-diagnostics/cert.pem --key /etc/mikun2n-diagnostics/key.pem
+Restart=on-failure
+RestartSec=3
+StateDirectory=mikun2n-diagnostics
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=256M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

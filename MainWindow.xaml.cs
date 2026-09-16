@@ -48,6 +48,8 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private bool _closeInProgress;
     private bool _shownTrayTip;
+    private bool _connectionBusy;
+    private TestDiagnosticsSession? _diagnostics;
     private readonly ObservableCollection<PeerSnapshot> _displayPeers = [];
     private ContextMenu? _activePeerMenu;
     private string? _activePeerMenuNodeId;
@@ -70,25 +72,21 @@ public partial class MainWindow : Window
         {
             _settings.NodeId = Guid.NewGuid().ToString("N");
         }
-        if (string.Equals(_settings.Server, "vps.example.com:3075", StringComparison.OrdinalIgnoreCase))
-        {
-            _settings.Server = "vps.example.com:3076";
-        }
-        ServerBox.Text = string.IsNullOrWhiteSpace(_settings.Server)
-            ? "vps.example.com:3076"
-            : _settings.Server;
-        CommunityBox.Text = string.IsNullOrWhiteSpace(_settings.Community)
-            ? "mygroup"
-            : _settings.Community;
         NicknameBox.Text = _settings.Nickname;
         RememberKeyBox.IsChecked = _settings.RememberKey;
         KeyBox.Password = _settingsStore.LoadKey(_settings);
+        if (TestBuildProfile.Current is not null)
+        {
+            DiagnosticsPanel.Visibility = Visibility.Visible;
+            DiagnosticsStatusText.Text = "连接前会询问日志上传授权";
+        }
+        RefreshNodeBox();
 
         _edgeController.SnapshotChanged += EdgeController_SnapshotChanged;
         _edgeController.LogReceived += EdgeController_LogReceived;
         _trayIcon = new TrayIconService();
         _trayIcon.ShowRequested += (_, _) => Dispatcher.InvokeAsync(ShowFromTray);
-        _trayIcon.SettingsRequested += (_, _) => Dispatcher.InvokeAsync(OpenSettings);
+        _trayIcon.SettingsRequested += (_, _) => Dispatcher.InvokeAsync(() => OpenSettings());
         _trayIcon.ConnectionRequested += (_, _) => Dispatcher.InvokeAsync(() =>
         {
             ShowFromTray();
@@ -100,26 +98,117 @@ public partial class MainWindow : Window
         UpdateTapAvailability();
     }
 
-    private void CommunityBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    private void PeersGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (RoomNameText is null)
+        var innerScroll = FindVisualChild<ScrollViewer>(PeersGrid);
+        if (innerScroll is null)
         {
             return;
         }
 
-        var roomName = CommunityBox.Text.Trim();
-        RoomNameText.Text = $"房间：{(roomName.Length == 0 ? "—" : roomName)}";
+        var atTop = innerScroll.VerticalOffset <= 0;
+        var atBottom = innerScroll.VerticalOffset >= innerScroll.ScrollableHeight;
+
+        if ((e.Delta > 0 && atTop) || (e.Delta < 0 && atBottom))
+        {
+            e.Handled = true;
+            var parent = VisualTreeHelper.GetParent(PeersGrid) as UIElement;
+            if (parent is not null)
+            {
+                parent.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+                {
+                    RoutedEvent = UIElement.MouseWheelEvent
+                });
+            }
+        }
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            var descendant = FindVisualChild<T>(child);
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
+    }
+
+    private void NodeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (NodeBox.SelectedItem is SupernodeNode node)
+        {
+            _settings.ActiveNodeId = node.Id;
+        }
+        RefreshNodeSummary();
+    }
+
+    private void ManageNodes_Click(object sender, RoutedEventArgs e) => OpenSettings(NodesTabIndex);
+
+    /// <summary>Reloads the node selector from settings; also used after the user edits nodes.</summary>
+    private void RefreshNodeBox()
+    {
+        NodeBox.SelectionChanged -= NodeBox_SelectionChanged;
+        NodeBox.ItemsSource = null;
+        NodeBox.ItemsSource = new ObservableCollection<SupernodeNode>(_settings.Nodes);
+        var active = _settings.ActiveNode;
+        NodeBox.SelectedItem = active;
+        if (active is not null)
+        {
+            _settings.ActiveNodeId = active.Id;
+        }
+        NodeBox.SelectionChanged += NodeBox_SelectionChanged;
+        RefreshNodeSummary();
+    }
+
+    private void RefreshNodeSummary()
+    {
+        if (NodeBox is null || RoomNameText is null)
+        {
+            return;
+        }
+
+        var node = NodeBox.SelectedItem as SupernodeNode;
+        NodeAddressText.Text = node is null ? "尚未添加节点" : node.Server;
+        NodeCommunityText.Text = node is null ? "—" : node.Community;
+        RoomNameText.Text = $"房间：{(string.IsNullOrWhiteSpace(node?.Community) ? "—" : node.Community)}";
+        ConnectButton.Content = ConnectButtonLabel();
+    }
+
+    private string ConnectButtonLabel()
+    {
+        var community = (NodeBox?.SelectedItem as SupernodeNode)?.Community;
+        return string.IsNullOrWhiteSpace(community) ? "连接" : $"连接到 {community}";
     }
 
     private async void ConnectButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_connectionBusy) return;
         if (_edgeController.IsRunning)
         {
-            ConnectButton.IsEnabled = false;
-            await _edgeController.StopAsync();
-            SetInputsEnabled(true);
-            ConnectButton.Content = "连接";
-            ConnectButton.IsEnabled = true;
+            _connectionBusy = true;
+            try
+            {
+                ConnectButton.IsEnabled = false;
+                await _edgeController.StopAsync();
+                await FinishDiagnosticsAsync();
+                SetInputsEnabled(true);
+                ConnectButton.Content = "连接";
+            }
+            finally
+            {
+                _connectionBusy = false;
+                ConnectButton.IsEnabled = true;
+            }
             return;
         }
 
@@ -167,20 +256,54 @@ public partial class MainWindow : Window
 
         SaveSettings();
         LogBox.AppendText($"{Environment.NewLine}===== 开始新的连接 {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====={Environment.NewLine}");
+        var node = _settings.ActiveNode ?? NodeBox.SelectedItem as SupernodeNode;
+        if (node is null)
+        {
+            SetInputsEnabled(true);
+            ConnectButton.Content = "重新连接";
+            ApplySnapshot(new ConnectionSnapshot(
+                ConnectionState.Error,
+                "尚未添加节点",
+                "请先在“管理节点”里添加一个自建或朋友分享的 supernode 地址。"));
+            return;
+        }
+
         SetInputsEnabled(false);
         ConnectButton.Content = "取消连接";
 
         try
         {
+            _connectionBusy = true;
+            await FinishDiagnosticsAsync();
+            if (TestBuildProfile.Current is { } profile)
+            {
+                var consent = new LogUploadConsentDialog(profile) { Owner = this }.ShowDialog() == true;
+                if (_closeInProgress) return;
+                try
+                {
+                    _diagnostics = new TestDiagnosticsSession(profile, consent, KeyBox.Password,
+                        status => Dispatcher.InvokeAsync(() => DiagnosticsStatusText.Text = status));
+                    StopUploadButton.IsEnabled = consent;
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    DiagnosticsStatusText.Text = "详细日志无法写入，本次不会上传日志。";
+                }
+            }
             await _edgeController.StartAsync(
-                ServerBox.Text.Trim(),
-                CommunityBox.Text.Trim(),
+                node.Server,
+                node.Community,
                 NicknameBox.Text.Trim(),
                 _settings.NodeId,
-                KeyBox.Password);
+                KeyBox.Password,
+                node.Name,
+                experimentalIpv6P2p: _settings.ExperimentalIpv6P2p,
+                diagnostics: _diagnostics);
         }
         catch (Exception exception)
         {
+            _diagnostics?.Write("connection_start_failed", new { error = exception.GetType().Name });
+            await FinishDiagnosticsAsync();
             SetInputsEnabled(true);
             ConnectButton.Content = "重新连接";
             ApplySnapshot(new ConnectionSnapshot(
@@ -188,6 +311,26 @@ public partial class MainWindow : Window
                 "无法开始连接",
                 exception.Message));
         }
+        finally
+        {
+            _connectionBusy = false;
+        }
+    }
+
+    private async void StopUpload_Click(object sender, RoutedEventArgs e)
+    {
+        StopUploadButton.IsEnabled = false;
+        if (_diagnostics is { } diagnostics)
+            await diagnostics.StopUploadAsync();
+    }
+
+    private async Task FinishDiagnosticsAsync()
+    {
+        var diagnostics = _diagnostics;
+        _diagnostics = null;
+        StopUploadButton.IsEnabled = false;
+        if (diagnostics is not null)
+            await diagnostics.DisposeAsync();
     }
 
     private bool TryValidate(out string error)
@@ -208,16 +351,17 @@ public partial class MainWindow : Window
             error = "昵称太长，请缩短到 31 个英文字符或大约 10 个汉字以内。";
             return false;
         }
-        if (!TryParseServer(ServerBox.Text.Trim()))
+        var node = _settings.ActiveNode ?? NodeBox.SelectedItem as SupernodeNode;
+        if (node is null || !TryParseServer(node.Server))
         {
-            error = "服务器格式不正确，应类似 vps.example.com:3075。";
+            error = "当前节点还没有可用的服务器地址。请打开“管理节点”，填写形如 vps.example.com:3076 的地址。";
             return false;
         }
-        if (string.IsNullOrWhiteSpace(CommunityBox.Text) ||
-            Encoding.UTF8.GetByteCount(CommunityBox.Text.Trim()) > 20 ||
-            CommunityBox.Text.Any(char.IsWhiteSpace))
+        if (string.IsNullOrWhiteSpace(node.Community) ||
+            Encoding.UTF8.GetByteCount(node.Community.Trim()) > 20 ||
+            node.Community.Any(char.IsWhiteSpace))
         {
-            error = "小组名称不能为空、不能包含空格，且最长为 20 个英文字符。";
+            error = "小组名称不能为空、不能包含空格，且最长为 20 个英文字符；请打开“管理节点”修改当前节点。";
             return false;
         }
         if (KeyBox.Password.Any(character => character > 127))
@@ -277,6 +421,12 @@ public partial class MainWindow : Window
 
     private static bool TryParseServer(string value)
     {
+        var servers = EdgeController.SplitServers(value);
+        return servers.Count > 0 && servers.All(TryParseServerToken);
+    }
+
+    private static bool TryParseServerToken(string value)
+    {
         var separator = value.LastIndexOf(':');
         if (separator <= 0 || separator == value.Length - 1 ||
             !int.TryParse(value[(separator + 1)..], out var port) || port is < 1 or > 65535)
@@ -292,14 +442,15 @@ public partial class MainWindow : Window
     {
         _settings = new AppSettings
         {
-            Server = ServerBox.Text.Trim(),
-            Community = CommunityBox.Text.Trim(),
+            Nodes = _settings.Nodes,
+            ActiveNodeId = _settings.ActiveNodeId,
             Nickname = NicknameBox.Text.Trim(),
             NodeId = _settings.NodeId,
             RememberKey = RememberKeyBox.IsChecked == true,
             Theme = _settings.Theme,
             CloseBehavior = _settings.CloseBehavior,
-            LogRetentionDays = _settings.LogRetentionDays
+            LogRetentionDays = _settings.LogRetentionDays,
+            ExperimentalIpv6P2p = _settings.ExperimentalIpv6P2p
         };
         _settingsStore.Save(_settings, KeyBox.Password);
     }
@@ -332,6 +483,10 @@ public partial class MainWindow : Window
             ? snapshot.DirectPeerCount.ToString()
             : "—";
         UpdateNatIndicator(snapshot);
+        var showSupernode = snapshot.State == ConnectionState.Connected &&
+                            snapshot.SupernodeText != "—";
+        SupernodeBadge.Visibility = showSupernode ? Visibility.Visible : Visibility.Collapsed;
+        SupernodeText.Text = $"中继：{snapshot.SupernodeText}";
         UptimeText.Text = snapshot.Uptime is { } uptime
             ? $"{(int)uptime.TotalHours:00}:{uptime.Minutes:00}:{uptime.Seconds:00}"
             : "—";
@@ -373,7 +528,7 @@ public partial class MainWindow : Window
         }
         else if (snapshot.State == ConnectionState.Disconnected)
         {
-            ConnectButton.Content = "连接到 mygroup";
+            ConnectButton.Content = ConnectButtonLabel();
         }
 
         if (_easterEggs.IsJackpot)
@@ -390,6 +545,7 @@ public partial class MainWindow : Window
             element.DataContext is not PeerSnapshot peer ||
             peer.ConnectionMode is not (
                 PeerConnectionMode.Direct or
+                PeerConnectionMode.Ipv6Direct or
                 PeerConnectionMode.Relayed or
                 PeerConnectionMode.ForcedRelayed or
                 PeerConnectionMode.Punching or
@@ -618,10 +774,13 @@ public partial class MainWindow : Window
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
 
-    private void OpenSettings()
+    /// <summary>Node list tab inside the settings dialog; index follows the XAML tab order.</summary>
+    private const int NodesTabIndex = 0;
+
+    private void OpenSettings(int initialTabIndex = 1)
     {
         ShowFromTray();
-        var window = new SettingsWindow(_settings) { Owner = this };
+        var window = new SettingsWindow(_settings, initialTabIndex, _edgeController.IsRunning) { Owner = this };
         if (window.ShowDialog() != true)
         {
             return;
@@ -630,8 +789,14 @@ public partial class MainWindow : Window
         _settings.Theme = window.SelectedTheme;
         _settings.CloseBehavior = window.SelectedCloseBehavior;
         _settings.LogRetentionDays = window.SelectedLogRetentionDays;
+        _settings.ExperimentalIpv6P2p = window.SelectedExperimentalIpv6P2p;
+        _settings.Nodes = window.EditedNodes;
+        _settings.ActiveNodeId = window.SelectedNodeId;
+        _settings.LegacyServer = null;
+        _settings.LegacyCommunity = null;
         ((App)Application.Current).ThemeManager.Apply(_settings.Theme);
         ((App)Application.Current).LogCleanup.Configure(_settings.LogRetentionDays);
+        RefreshNodeBox();
         SaveSettings();
     }
 
@@ -671,8 +836,10 @@ public partial class MainWindow : Window
         NicknameBox.IsEnabled = enabled;
         KeyBox.IsEnabled = enabled;
         RememberKeyBox.IsEnabled = enabled;
-        ServerBox.IsEnabled = enabled;
-        CommunityBox.IsEnabled = enabled;
+        // Switching nodes mid-session would leave the running edge on the old address,
+        // so the selector follows the rest of the connection inputs.
+        NodeBox.IsEnabled = enabled;
+        ManageNodesButton.IsEnabled = enabled;
     }
 
     private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -729,6 +896,7 @@ public partial class MainWindow : Window
             // must not pull a minimized window back on screen just to close it.
             IsEnabled = false;
             await _edgeController.DisposeAsync();
+            await FinishDiagnosticsAsync();
             _trayIcon.Dispose();
         }
         catch (Exception exception)

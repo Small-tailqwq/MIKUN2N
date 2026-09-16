@@ -30,7 +30,20 @@ public partial class App : Application
             Shutdown();
             return;
         }
-        var settings = new SettingsStore().Load();
+        var settingsStore = new SettingsStore();
+        var settings = settingsStore.Load(out var upgraded);
+        // A settings file written before the node model still carried the old server and
+        // community fields. Write the converted result once so no address lingers on disk.
+        // Saving needs the clear key, and a missing key means DPAPI could not decrypt it -
+        // in that case rewriting would throw the remembered key away, so leave the file.
+        if (upgraded)
+        {
+            var key = settingsStore.LoadKey(settings);
+            if (!settings.RememberKey || !string.IsNullOrEmpty(key))
+            {
+                settingsStore.Save(settings, key);
+            }
+        }
         ThemeManager.Apply(settings.Theme);
         LogCleanup.Configure(settings.LogRetentionDays);
         base.OnStartup(e);

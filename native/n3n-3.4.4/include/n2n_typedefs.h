@@ -343,6 +343,9 @@ typedef struct n2n_PEER_INFO {
     uint16_t mikun2n_bank_spread;
     uint16_t mikun2n_bank_rate;
     uint32_t mikun2n_bank_nonce;
+    n2n_sock_t mikun2n_ipv6_address;
+    uint64_t mikun2n_ipv6_token;
+    uint8_t mikun2n_ipv6_wire_version;
 } n2n_PEER_INFO_t;
 
 
@@ -366,11 +369,17 @@ typedef struct n2n_QUERY_PEER {
     uint32_t mikun2n_bank_nonce;
     uint32_t mikun2n_bank_generation;
 
+    n2n_sock_t mikun2n_ipv6_address;
+    uint64_t mikun2n_ipv6_token;
+    n2n_version_t mikun2n_build_version;
+    uint8_t mikun2n_ipv6_wire_version;
 } n2n_QUERY_PEER_t;
 
 #define N2N_AFLAGS_MIKUN2N_NAT          0x8000
 #define N2N_AFLAGS_MIKUN2N_PUNCH_PLAN   0x4000
 #define N2N_AFLAGS_MIKUN2N_BANK_MODEL   0x2000
+#define N2N_AFLAGS_MIKUN2N_IPV6         0x1000
+#define N2N_AFLAGS_MIKUN2N_IDENTITY     0x0800
 
 #define MIKUN2N_NAT_KIND_UNKNOWN        0
 #define MIKUN2N_NAT_KIND_EIM            1
@@ -518,6 +527,7 @@ typedef struct n2n_edge_conf {
     uint32_t register_interval;                      /**< Interval for supernode registration, also used for UDP NAT hole punching. */
     uint32_t register_ttl;                           /**< TTL for registration packet when UDP NAT hole punching through supernode. */
     bool mikun2n_punch;                              /**< Enable the bounded MikuN2N Tier 1 fallback. */
+    bool mikun2n_ipv6;                               /**< Experimental IPv6 peer transport; IPv4 rendezvous remains available. */
     uint32_t mikun2n_punch_grace;                    /**< Native n3n P2P grace period in seconds. */
     uint32_t mikun2n_punch_budget;                   /**< Tier 1 fallback duration in seconds. */
     uint32_t mikun2n_punch_max_packets;              /**< Per-peer Tier 1 packet budget. */
@@ -651,6 +661,19 @@ struct n3n_runtime_data {
     /* supernode socket is in        eee->curr_sn->sock (of type n2n_sock_t) */
     slots_t *mgmt_slots;
     int sock;
+    SOCKET mikun2n_ipv6_socket;
+    n2n_sock_t mikun2n_ipv6_address;
+    uint64_t mikun2n_ipv6_token;
+    uint64_t mikun2n_ipv6_refresh_ms;
+    n2n_sock_t mikun2n_ipv6_mapped_address;
+    uint64_t mikun2n_ipv6_mapped_ms;
+    n2n_sock_t mikun2n_ipv6_stun_servers[2];
+    uint8_t mikun2n_ipv6_stun_transaction[12];
+    uint64_t mikun2n_ipv6_stun_sent_ms;
+    uint64_t mikun2n_ipv6_stun_next_ms;
+    uint8_t mikun2n_ipv6_stun_index;
+    bool mikun2n_ipv6_stun_initialized;
+    bool mikun2n_ipv6_stun_pending;
 
 #ifndef SKIP_MULTICAST_PEERS_DISCOVERY
     int udp_multicast_sock;                                              /**< socket for local multicast registrations. */
@@ -691,6 +714,9 @@ struct n3n_runtime_data {
     network_traffic_filter_t         *network_traffic_filter;
 
     // Supernode specific data
+    struct mikun2n_relay_flow *relay_flows;
+    uint64_t relay_out_bytes, relay_out_sends, relay_send_errors;
+    uint64_t relay_overflow_bytes, relay_overflow_packets;
     int tcp_sock;                                           /* auxiliary socket for optional TCP connections */
     n2n_mac_t mac_addr;
     bool lock_communities;                                    /* If true, only loaded and matching communities can be used. */

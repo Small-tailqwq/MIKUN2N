@@ -108,6 +108,168 @@
  33. 0.5.6 好友链路右键菜单在普通 pSp 中继状态（打洞冷却/轮间等待）也提供“重新尝试
      P2P 打洞”，不再只有 failed 终态才显示；配合管理接口的 set_peer_relay(false) 双端
      复位失败预算。
+ 34. 适配多 Supernode 联邦（多节点自动选路中继）。edge 侧：打洞排除表从仅 curr_sn 扩展到
+     conf.supernodes 全部联邦节点（强制中继 keepalive 与 Tier 1 扫描都不再误把第二个
+     supernode 当 peer）；NAT 探测回包（21001/21002）来源校验放宽到任一已知联邦节点，
+     避免 rtt 重锚定竞态丢弃回包。supernode 侧：QUERY_PEER 经联邦转发到达对端锚定的
+     supernode 时（from_supernode 且本地无 source_edge），信任查询内携带的 NAT 摘要与
+     bank 模型字段（来源 supernode 已按本地注册表校验过），照常计算并下发同 generation
+     的互补角色打洞计划；双 NAT4 的 GO deadline 在跨 supernode 场景由各自锚定的
+     supernode 独立下发，偏差不超过一个协调间隔，由按 attempt 推进的 scanner 容忍。
+     配套：客户端配置生成支持多条 supernode= 并在多节点时启用 supernode_selection=rtt，
+     主界面显示当前锚定节点与延迟。
+ 35. Windows sendto 失败后立即保存 WSAGetLastError，避免后续日志调用污染错误码；遇到
+     WSAENOBUFS (10055) 时额外记录 socket、报文长度、进程句柄、内存负载与可用物理内存、
+     known/pending peer、活跃 NAT4 worker，以及 P2P/Supernode 累计发送计数，供长期日志
+     对比并区分进程资源泄漏、打洞突发流量和系统网络队列瞬时耗尽。
+ 36. 跨轮速率测量 + 高动态 NAT 快速落中继：bank 拟合现在跨轮测量端口分配速率（环形
+     距离/时间，双 bank 取最优配对）。实测（natpunch v7.2 现场数据：对端移动 CGNAT
+     速率每轮 150-232/s 摆动、一次 7 秒喷射内窗口漂移数千端口，17 轮 fast-target
+     全部落空）表明高速单 bank 无法拟合成可追踪模型，因此速率 >=120 端口/秒时直接
+     判定为 HARD（不可预测）：扫描端按宽窗覆盖一轮，预算耗尽即落中继，不再烧预算
+     追逐相位。校准样本不足时继承上轮 VOLATILE 模型而非退化为 HARD；上一轮
+     VOLATILE 且未观察到 cone 时保留 volatile 分类，避免 CGNAT 负载均衡短暂塌缩为
+     单 bank 时扫描策略振荡。Tier 1（NAT3↔NAT4 layered / cone sweep）时间片从
+     250ms 提速到 100ms，±4096 全覆盖从 15.75s 缩短到约 6.3s，12000 包预算与
+     25 秒窗口不变；bank 喷射的 low/mid 近区从散点哈希改为按 tick 确定性推进，
+     预算耗尽时最近（最可能）的端口已优先扫过。
+ 37. 双端同步性：校准模型在 REPORTED 等待对端期间会老化（对端晚校准数秒时，
+     GO 时刻模型年龄可达 7s+，SYMMETRIC 的 predicted 带覆盖不了漂移量而失败）。
+     edge 现在检测到模型年龄超过 5s 就原地重校准（复用 worker、nonce 轮转、
+     清对端模型缓存，上限 2 次），把 GO 时刻模型年龄压到 5s 内；supernode 侧
+     报告 TTL 从 15s 收紧到 6s，拒绝用陈旧报告生成 GO。单 supernode 的 GO
+     时刻对齐已由 750ms 查询周期 + 3000ms GO 延迟保证（双方 go_at 均收敛到
+     同一 deadline + 各自 RTT/2，偏差 <50ms），无需改动；联邦场景双 SN 各自
+     定 deadline 的 ~400ms 偏差由 attempt 驱动扫描容忍，未改协议。
+
+ 38. 0.5.7: experimental IPv6 peer transport (disabled by default). IPv4-only
+     rendezvous could not use a reachable IPv6 path between game clients. A separate
+     IPv6-only UDP socket now advertises a global candidate and session token through
+     the matching patched supernode. MTU-sized challenge/response probes confirm the
+     path; periodic probes expire it after 6.5 seconds without confirmation. Address
+     changes invalidate prior paths, and send failures or oversized packets use the
+     existing IPv4 route. Existing IPv4 NAT4 worker sockets, local direct priority and
+     forced-relay policy remain in use. Candidate refreshes preserve established IPv4
+     destinations. On IPv6 fallback, the normal last_p2p/timeout check removes an
+     expired IPv4 path and selects the supernode; a recently confirmed IPv4 path
+     remains eligible until that check expires it. get_edges exposes transport and
+     IPv6 RTT. TAP/game addressing stays
+     IPv4; this does not add an IPv6 supernode listener or relay. One global candidate
+     is selected per client; validated IPv6 is preferred without comparative IPv4 RTT
+     selection. Windows compilation passed; live IPv6 and Linux deployment are unverified.
+ 39. 0.5.7: IPv6 probe response tracking and runtime status. A single challenge could
+     be replaced by a retry before its response arrived. Keep up to eight independent
+     probes for the 6.5-second path window, preserving the existing sending cadence
+     and matching RTT to the actual probe. Log exhausted response windows. A failed
+     probe send invalidates the IPv6 path, reports the socket error and waits 10 seconds
+     before retrying; local address refresh remains independent. get_nat reports
+     ipv6_enabled so the client can distinguish a request from runtime confirmation.
+ 40. 0.5.7: Opt-in IPv6 test diagnostics. MIKUN2N_IPV6_DIAGNOSTICS=1 records local
+     candidate selection and bind errors, peer candidate/query state, probe slots and
+     matched RTT, path expiry/fallback reasons, and ten-second traffic/rejection
+     counters. Session tokens, challenges and packet payloads are not logged. The
+     private test client captures these events with UTC and monotonic timestamps;
+     uploading requires a separate, explicit per-connection consent dialog.
+
+ 41. 0.5.7: NAT66-to-public IPv6 compatibility. Client logs showed a routed ULA-only
+     host never opened its IPv6 socket despite a public candidate on its peer. A
+     routed ULA can now bind the socket and advertise its session via the matching
+     supernode; global local addresses remain preferred. ULA reports are identities,
+     not Internet probe destinations. A session-bound incoming PING triggers a
+     rate-limited check of its public source. Only an MTU-sized PONG matching our
+     outstanding challenge, destination address/port and 6.5-second window selects
+     that endpoint. Advertised candidates and checked paths are separate, so report
+     refreshes preserve NAT mappings; session/address changes invalidate them.
+     DATA remains restricted to the checked endpoint. Diagnostics expose NAT66
+     capability, reported/selected addresses, source checks and path selection.
+     Both clients and the supernode need this update for NAT66; the public peer
+     must receive the first UDP probe. NAT66-to-NAT66 and IPv6 mapping discovery at
+     the supernode are not implemented. Live NAT66 pairing remains to be validated.
+
+ 42. 0.5.7: Preserve IPv6 reachability on an oversized data packet. A test session
+     confirmed a 63 ms IPv6 path, then disabled it 37 ms later when a 1593-byte
+     wrapped packet exceeded the 1418-byte checked size. The persistent size block
+     stopped outgoing probes and rejected incoming DATA while still answering PING,
+     leaving the remote peer using a path the local peer had disabled. Oversized
+     packets now individually fall through to the existing IPv4 route without
+     changing the checked endpoint, expiry or probe window. Normal IPv6 DATA and
+     keepalives continue; real expiry and send failures still invalidate the path.
+     Oversize diagnostics record n3n/wrapped sizes and path preservation at most
+     once per peer per ten seconds, with total fallback counts in the summary.
+     This does not establish IPv6 delivery for packets above the checked size.
+     The wire protocol is unchanged; the NAT66-capable supernode remains compatible.
+
+ 43. 0.5.7: Attribute supernode outbound DATA to directed community/MAC pairs.
+     Existing packet counters could not identify which relay users caused a
+     traffic spike. Successful unicast sends, per-recipient broadcast copies,
+     federation unicast and federation flooding now have separate cumulative byte
+     and packet counters. An overall positive-send byte counter includes control
+     traffic and framing; errors and flow-table overflow remain visible. The
+     read-only get_relay_stats method is paginated, uses 64-bit counters and caps
+     tracked keys at 8192 per process. No per-packet file writes, payload capture,
+     wire changes or client routing changes are introduced. The optional local
+     server collector checkpoints every minute and retains hourly totals for
+     30 days; see supernode/TRAFFIC.md for accounting and restart boundaries.
+
+ 44. 0.5.7: Adapt IPv6 checks to smaller paths and discover NAT66 mappings. A
+     hotspot client repeatedly failed to send the fixed 1418-byte UDP probe with
+     WSAEMSGSIZE (10040). An oversized send or an unanswered probe flight now
+     lowers the budget to 1232 bytes (the IPv6 minimum MTU less IPv6/UDP headers).
+     Each challenge records its exact size; only a matching size, source endpoint,
+     transaction and lifetime can establish the per-peer checked DATA budget.
+     Larger DATA packets individually use IPv4 while smaller IPv6 traffic continues.
+     Optional IPv6 STUN observers use the same bound UDP socket as peer traffic.
+     Source/transaction-checked RFC 8489 XOR-MAPPED-ADDRESS replies are advertised
+     through the existing IPv4 rendezvous channel for 30 seconds and refreshed
+     every 10 seconds. This lets both peers initiate checks instead of requiring
+     a NAT66 peer's first unsolicited probe to traverse the public peer's firewall.
+     A mapping is only a candidate: peer PONG validation still gates DATA, forced
+     relay and LAN policy still apply, and IPv4 worker destinations are unchanged.
+     The launcher resolves an optional private-profile Ipv6StunHost asynchronously;
+     native MIKUN2N_IPV6_STUN_SERVERS accepts up to two semicolon-separated literal
+     global IPv6 addresses on UDP 3478, with no bundled public observer default.
+     Diagnostics add mapping requests/results/timeouts, interface MTU, probe
+     downshift reasons and ipv6_checked_udp_bytes. Tokens and packet payloads are
+     not logged. Endpoint-dependent mappings or filtered UDP can still prevent
+     direct connectivity. Use matching clients; no supernode wire change is needed.
+
+ 45. 0.5.7: Require mutual receive readiness before selecting IPv6 DATA. The
+     mixed-client hotspot test had one endpoint accepting 1232-byte PONGs while
+     the other rejected DATA; matching clients still rejected 57/21 startup
+     packets before their probe budgets converged. Wire version 2 PONGs advertise
+     a bounded remaining receive lease after our own source-bound challenge has
+     succeeded. DATA sends require both that lease and the local checked path;
+     receives retain the validated source/session checks. Old wire versions stay
+     on IPv4. A smaller incoming probe immediately lowers our own check budget,
+     removing the initial full-size timeout on asymmetric MTU paths. Expiring
+     readiness falls back to IPv4 and diagnostics distinguish checked paths from
+     DATA readiness. Stable IPv6 pauses extra IPv4 scanning after five seconds,
+     releasing exploratory workers while retaining the winning IPv4 socket and
+     destinations. Loss of IPv6 resumes bounded scanning with consumed budgets
+     retained. Management adds ipv6_wire_version and ipv4_scan_paused. The IPv4
+     candidate exchange and existing supernode remain compatible; upgrade all
+     participating clients. Build/wire checks do not establish live stability.
+
+ 46. 0.5.8-1: Expose the running native build and IPv6 wire generation. The
+     mixed-version retest repeatedly reported remote=1/local=2, but friend rows
+     could not identify the incompatible endpoint. An optional bounded identity
+     suffix on QUERY_PEER reports the compiled build label and wire generation;
+     the supernode stores it only for the matching registered sender and returns
+     it in PEER_INFO to capable clients. Existing fields and old readers retain
+     their layout. Version text is length/character checked, absent metadata stays
+     unknown, and observed IPv6 control packets also report the peer generation.
+     get_info exposes mikun2n_build_version/ipv6_wire_version; get_edges exposes
+     the peer build in version and its generation in peer_ipv6_wire_version.
+     This adds metadata without changing IPv6 DATA wire version 2: different
+     package builds can communicate when their wire protocol is compatible.
+     The client displays its own release number separately from the actual edge
+     build, including after a manual Runtime replacement. Native release identity
+     is generated from the client BaseVersion/BuildNumber before compilation.
+
+构建要求：Windows 目标需要在 CFLAGS 中带上 `-std=gnu17`（随包的旧 src/win32/getopt.c 在本
+工具链的 C23 默认标准下编译不过），并带上 `-ffile-prefix-map=<构建路径>=<占位路径>`，把调试
+信息里的绝对路径映射掉。曾经发布的二进制内嵌了构建机的用户名与目录结构（`Users/<name>/.../
+n3n-build/...` 共 13 条），加映射后重编已清零。重编后请重新核对二进制里不再出现本机路径。
 
 - n3n-3.4.4-source.zip：与当前 n3n-edge.exe 对应的修改版源码（含上述改动），供 GPLv3 合规使用。官方原版源码见 https://github.com/n42n/n3n （tag 3.4.4）
 
@@ -117,3 +279,5 @@
 - tap-windows-installer.exe：OpenVPN 官方 TAP-Windows 9.24.7 驱动安装器
 
 注意：分发 n2n/n3n 二进制时必须同时遵守 GPLv3 许可证并提供对应源代码。
+Windows source build: run sh scripts/build-mikun2n-windows.sh from the extracted source root in Git Bash with MinGW-w64 on PATH.
+Linux server build: use supernode/build-supernode.sh from the MikuN2N source release; it runs autogen.sh before configure.

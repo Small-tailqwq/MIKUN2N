@@ -124,8 +124,7 @@
 - supernode 增加第二个 UDP 观测端口（STUN-lite 回显源 ip:port）。
 - 新增 supernode 中继的边到边打洞协调 PDU：转发对端 NAT 模型 + 下发共同 `attempt` 与 GO 时刻。
 - edge 收到 GO 后在数据 socket 上同步喷射；命中即 `last_p2p` 刷新、n3n 自动切 p2p。
-- **部署注意**：vps.example.com 上 supernode 有真实用户（community `mygroup`），重部署属对外、不易回滚操作，
-  需用户明确同意后再执行；先在旁路端口/测试社区灰度。
+- **部署注意**：正式节点上有真实用户，重部署属对外、不易回滚操作，需先取得同意；先在旁路端口/测试小组灰度。
 
 ### Phase D — C# 收口与端到端
 

@@ -17,7 +17,61 @@
                  Foreground="{DynamicResource TextSecondary}" />
     </StackPanel>
 
-    <TabControl Grid.Row="1" BorderThickness="0" Background="Transparent">
+    <TabControl x:Name="SettingsTabs" Grid.Row="1" BorderThickness="0" Background="Transparent"
+                SelectionChanged="SettingsTabs_SelectionChanged">
+      <TabItem Header="节点">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="2,18,10,10">
+            <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14">
+              <StackPanel>
+                <TextBlock Text="联机节点" FontSize="16" FontWeight="SemiBold" />
+                <TextBlock Margin="0,5,0,0" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextSecondary}" FontSize="12"
+                           Text="MikuN2N 不自带服务器，请添加你自己搭建的 supernode，或朋友分享给你的地址。可以添加多个节点并在主界面切换，参与联机的双方必须填写同一个小组名称。" />
+              </StackPanel>
+            </Border>
+
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <DataGrid x:Name="NodesGrid" MinHeight="180" MaxHeight="320"
+                        AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                        CanUserResizeRows="False" IsReadOnly="True" HeadersVisibility="Column"
+                        SelectionMode="Single" SelectionUnit="FullRow"
+                        SelectionChanged="NodesGrid_SelectionChanged"
+                        MouseDoubleClick="NodesGrid_MouseDoubleClick">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="节点名称" Binding="{Binding Name}" Width="*" />
+                  <DataGridTextColumn Header="地址" Binding="{Binding Server}" Width="1.6*" />
+                  <DataGridTextColumn Header="小组名称" Binding="{Binding Community}" Width="*" />
+                  <DataGridTemplateColumn Header="当前" Width="56">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding ActiveMark}" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource Accent}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                </DataGrid.Columns>
+              </DataGrid>
+              <StackPanel Grid.Column="2" MinWidth="112">
+                <Button Content="添加…" Click="AddNode_Click" />
+                <Button x:Name="EditNodeButton" Content="编辑…" Margin="0,8,0,0" Click="EditNode_Click" />
+                <Button x:Name="RemoveNodeButton" Content="删除" Margin="0,8,0,0" Click="RemoveNode_Click" />
+                <Button x:Name="UseNodeButton" Content="设为当前" Margin="0,8,0,0" Click="UseNode_Click" />
+              </StackPanel>
+            </Grid>
+
+            <TextBlock x:Name="NodesHintText" Margin="2,12,0,0" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource TextSecondary}" />
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
       <TabItem Header="常规">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
           <StackPanel Margin="2,18,10,10">
@@ -65,6 +119,27 @@
                                Style="{StaticResource SegmentRadio}" />
                 </UniformGrid>
               </Grid>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14">
+              <StackPanel>
+                <TextBlock Text="实验功能" FontSize="16" FontWeight="SemiBold" />
+                <CheckBox x:Name="ExperimentalIpv6Box" Content="尝试 IPv6 P2P 直连" Margin="0,12,0,0">
+                  <CheckBox.Style>
+                    <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                      <Style.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                          <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+                          <Setter Property="FontWeight" Value="SemiBold" />
+                        </Trigger>
+                      </Style.Triggers>
+                    </Style>
+                  </CheckBox.Style>
+                </CheckBox>
+                <TextBlock Text="双方开启后尝试使用 IPv6 直连，连接不通时自动使用原有线路。游戏仍使用虚拟局域网。保存后在下次连接时生效。"
+                           TextWrapping="Wrap" Margin="0,7,0,0"
+                           Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+              </StackPanel>
             </Border>
 
             <Border Style="{StaticResource CardStyle}">

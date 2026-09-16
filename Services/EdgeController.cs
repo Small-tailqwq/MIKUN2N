@@ -510,7 +510,10 @@ public sealed partial class EdgeController : IAsyncDisposable
         string nickname,
         string nodeId,
         string encryptionKey,
-        CancellationToken cancellationToken = default)
+        string? nodeName = null,
+        bool experimentalIpv6P2p = false,
+        CancellationToken cancellationToken = default,
+        TestDiagnosticsSession? diagnostics = null)
     {
         await _lifecycleGate.WaitAsync(cancellationToken);
         try
@@ -539,7 +542,12 @@ public sealed partial class EdgeController : IAsyncDisposable
             var engine = string.Equals(Path.GetFileName(edgePath), "n3n-edge.exe", StringComparison.OrdinalIgnoreCase)
                 ? EdgeEngine.N3n
                 : EdgeEngine.LegacyN2n;
-            var parameters = new ConnectionParameters(server, community, nickname, nodeId, encryptionKey, engine);
+            var parameters = new ConnectionParameters(server, community, nickname, nodeId, encryptionKey, engine, nodeName, experimentalIpv6P2p, diagnostics);
+            diagnostics?.Write("connection_requested", new
+            {
+                server, community, nickname, nodeId, engine = engine.ToString(), experimentalIpv6P2p,
+                encryptionEnabled = !string.IsNullOrEmpty(encryptionKey), edgePort = EdgeUdpPort
+            });
             CancellationTokenSource connectionCancellation;
             int sessionId;
             lock (_stateGate)
@@ -953,6 +961,7 @@ public sealed partial class EdgeController : IAsyncDisposable
             ? FindAvailableTcpPort()
             : FindAvailableUdpPort();
         var managementPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+        parameters.Diagnostics?.AddSecret(managementPassword);
         var sessionName = $"mikun2n-{Guid.NewGuid():N}";
         var configPath = parameters.Engine == EdgeEngine.N3n
             ? Path.Combine(_n3nConfigDirectory, $"{sessionName}.conf")
@@ -970,16 +979,15 @@ public sealed partial class EdgeController : IAsyncDisposable
                 _tapAdapterId,
                 EdgeUdpPort,
                 managementPort,
-                managementPassword)
+                managementPassword,
+                parameters.ExperimentalIpv6P2p)
             : BuildLegacyConfiguration(
-                parameters.Server,
+                // The legacy edge knows nothing about federations; give it the first entry.
+                SplitServers(parameters.Server).FirstOrDefault() ?? parameters.Server,
                 parameters.Community,
                 parameters.Nickname,
                 managementPort,
                 managementPassword);
-        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
-        await File.WriteAllTextAsync(configPath, config, new UTF8Encoding(false), cancellationToken);
-
         var edgePath = parameters.Engine == EdgeEngine.N3n
             ? Path.Combine(_runtimeDirectory, "n3n-edge.exe")
             : Path.Combine(_runtimeDirectory, "edge.exe");
@@ -1007,7 +1015,38 @@ public sealed partial class EdgeController : IAsyncDisposable
             startInfo.Environment["N2N_KEY"] = parameters.EncryptionKey;
             startInfo.Environment["N3N_KEY"] = parameters.EncryptionKey;
         }
+        if (parameters.Diagnostics is not null)
+            startInfo.Environment["MIKUN2N_IPV6_DIAGNOSTICS"] = "1";
+        if (parameters.Engine == EdgeEngine.N3n && parameters.ExperimentalIpv6P2p &&
+            TestBuildProfile.Current is { Ipv6StunHost.Length: > 0 } profile)
+        {
+            using var lookupCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            lookupCancellation.CancelAfter(TimeSpan.FromSeconds(3));
+            try
+            {
+                var addresses = await Dns.GetHostAddressesAsync(
+                    profile.Ipv6StunHost, AddressFamily.InterNetworkV6, lookupCancellation.Token);
+                var observers = addresses.Where(address => (address.GetAddressBytes()[0] & 0xe0) == 0x20)
+                    .Distinct().Take(2).Select(address => address.ToString()).ToArray();
+                startInfo.Environment["MIKUN2N_IPV6_STUN_SERVERS"] = string.Join(';', observers);
+                parameters.Diagnostics?.Write("ipv6_mapping_observers", new
+                {
+                    host = profile.Ipv6StunHost, port = 3478, addresses = observers
+                });
+            }
+            catch (Exception exception) when (exception is SocketException or OperationCanceledException)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                startInfo.Environment["MIKUN2N_IPV6_STUN_SERVERS"] = string.Empty;
+                parameters.Diagnostics?.Write("ipv6_mapping_lookup_failed", new
+                {
+                    error = exception.GetType().Name
+                });
+            }
+        }
 
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        await File.WriteAllTextAsync(configPath, config, new UTF8Encoding(false), cancellationToken);
         var logPath = CreateLogPath(sessionId);
         var logWriter = new StreamWriter(logPath, append: false, new UTF8Encoding(false))
         {
@@ -1033,7 +1072,32 @@ public sealed partial class EdgeController : IAsyncDisposable
             logWriter,
             parameters.Engine == EdgeEngine.N3n,
             parameters.NodeId,
-            parameters.Nickname);
+            parameters.Nickname)
+        {
+            SupernodeHosts = ResolveSupernodeHosts(parameters.Server),
+            ActiveNodeName = parameters.NodeName,
+            ExperimentalIpv6P2p = parameters.ExperimentalIpv6P2p,
+            Diagnostics = parameters.Diagnostics
+        };
+
+        if (run.Diagnostics is { } diagnostics)
+        {
+            try
+            {
+                using var binary = File.OpenRead(edgePath);
+                diagnostics.Write("edge_start", new
+                {
+                    run = sessionId, binary = Path.GetFileName(edgePath),
+                    sha256 = Convert.ToHexString(SHA256.HashData(binary)),
+                    adapterPinned = _tapAdapterId is not null, rotatingMac = _useRotatingMac
+                });
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                diagnostics.Write("edge_hash_unavailable", new { error = exception.GetType().Name });
+            }
+            diagnostics.CaptureNetwork();
+        }
 
         process.OutputDataReceived += (_, args) => AppendLog(run, args.Data);
         process.ErrorDataReceived += (_, args) => AppendLog(run, args.Data);
@@ -1060,6 +1124,12 @@ public sealed partial class EdgeController : IAsyncDisposable
             run.StartedAt = DateTimeOffset.Now;
             LaunchedEdgeProcessIds[process.Id] = 0;
             AppendLog(run, $"MikuN2N {BuildIdentity.Version}：本次完整日志保存到 {logPath}");
+            if (run.ExperimentalIpv6P2p)
+            {
+                AppendLog(run, run.IsN3n
+                    ? "IPv6 实验：已请求启用，正在等待 edge 确认。"
+                    : "IPv6 实验：当前使用旧版 edge，不支持此功能，本次继续使用 IPv4。");
+            }
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             process.EnableRaisingEvents = true;
@@ -1122,6 +1192,7 @@ public sealed partial class EdgeController : IAsyncDisposable
                 }
 
                 var supernodes = await run.ManagementClient.GetSupernodesAsync(cancellationToken);
+                run.Diagnostics?.Write("management_supernodes", new { run = run.SessionId, rows = supernodes });
                 var supernodeState = GetSupernodeState(supernodes);
 
                 if (supernodeState != SupernodeState.Registered)
@@ -1144,16 +1215,70 @@ public sealed partial class EdgeController : IAsyncDisposable
                     }
                 }
 
+                var anchor = GetCurrentSupernode(supernodes);
+                if (!string.Equals(anchor, run.CurrentSupernode, StringComparison.Ordinal))
+                {
+                    run.CurrentSupernode = anchor;
+                    run.SupernodeRttMs = null;
+                    if (anchor is not null)
+                    {
+                        AppendLog(run, $"中继节点：当前锚定 {anchor}。");
+                    }
+                }
+                if (run.CurrentSupernode is not null && DateTimeOffset.Now >= run.NextSupernodePingAt)
+                {
+                    run.NextSupernodePingAt = DateTimeOffset.Now + TimeSpan.FromSeconds(4);
+                    _ = MeasureSupernodeRttAsync(run);
+                }
+
                 var edges = await run.ManagementClient.GetEdgesAsync(cancellationToken);
-                run.PeerModes = GetPeerModes(edges, out var hasPunchTelemetry, out var rowMacs);
+                run.PeerRuntimeRows = edges;
+                if (run.IsN3n && !run.NativeIdentityRead)
+                {
+                    run.NativeIdentityRead = true;
+                    try
+                    {
+                        var info = await run.ManagementClient.GetInfoAsync(cancellationToken);
+                        run.NativeVersion = PeerDiscoveryService.NormalizeVersion(
+                            info.TryGetProperty("mikun2n_build_version", out var build) ? build.GetString() : null);
+                        run.Ipv6WireVersion = ReadWireVersion(info, "ipv6_wire_version");
+                        AppendLog(run, $"本机版本：客户端 {BuildIdentity.Version}，n3n 构建 {run.NativeVersion ?? "未报告"}，IPv6 协议 {run.Ipv6WireVersion?.ToString() ?? "未报告"}。");
+                        run.Diagnostics?.Write("native_identity", info);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        AppendLog(run, $"当前 edge 未能报告版本：{exception.Message}");
+                    }
+                }
+                run.Diagnostics?.Write("management_edges", new { run = run.SessionId, rows = edges });
+                if (run.Diagnostics is not null && DateTimeOffset.UtcNow >= run.NextDiagnosticsAt)
+                {
+                    run.NextDiagnosticsAt = DateTimeOffset.UtcNow.AddSeconds(30);
+                    run.Diagnostics.CaptureNetwork();
+                }
+                run.PeerModes = GetPeerModes(edges, out var hasPunchTelemetry, out var rowMacs, out var pathKeys);
                 run.PeerRowMacs = rowMacs;
+                run.PeerPathKeys = pathKeys;
                 run.NativePunchTelemetry = hasPunchTelemetry;
                 if (run.IsN3n && DateTimeOffset.Now >= run.NextNatPollAt)
                 {
                     run.NextNatPollAt = DateTimeOffset.Now + TimeSpan.FromSeconds(4);
                     try
                     {
-                        UpdateNatStatus(run, await run.ManagementClient.GetNatAsync(cancellationToken));
+                        var nat = await run.ManagementClient.GetNatAsync(cancellationToken);
+                        run.Diagnostics?.Write("management_nat", new { run = run.SessionId, rows = nat });
+                        UpdateNatStatus(run, nat);
+                        if (run.ExperimentalIpv6P2p && !run.Ipv6StatusReported && nat.Count > 0)
+                        {
+                            run.Ipv6StatusReported = true;
+                            var status = nat[0].TryGetProperty("ipv6_enabled", out var enabled) &&
+                                         enabled.ValueKind is JsonValueKind.True or JsonValueKind.False
+                                ? enabled.GetBoolean()
+                                    ? "edge 已确认启用；是否建立直连请查看好友链路状态。"
+                                    : "edge 报告开关未启用，本次继续使用 IPv4。"
+                                : "当前 edge 未报告开关状态，无法确认 IPv6 实验已生效，请使用同版本运行时。";
+                            AppendLog(run, $"IPv6 实验：{status}");
+                        }
                     }
                     catch (Exception exception)
                     {
@@ -1172,6 +1297,7 @@ public sealed partial class EdgeController : IAsyncDisposable
                 }
                 run.LogConfirmedConnected = true;
                 EnsurePeerDiscovery(run);
+                run.PeerDiscovery?.UpdateLocalIdentity(run.NativeVersion, run.Ipv6WireVersion);
                 PublishConnected(run, virtualIp);
                 try
                 {
@@ -1188,6 +1314,7 @@ public sealed partial class EdgeController : IAsyncDisposable
             }
             catch (Exception exception) when (!run.Process.HasExited && IsCurrentRun(run))
             {
+                run.Diagnostics?.Write("management_error", new { run = run.SessionId, error = exception.GetType().Name });
                 if (run.IsN3n)
                 {
                     var firstFailure = !run.ManagementUnavailable;
@@ -1370,6 +1497,8 @@ public sealed partial class EdgeController : IAsyncDisposable
         {
             return;
         }
+
+        run.Diagnostics?.Write("edge_log", new { run = run.SessionId, line });
 
         var friendlyPunchLine = GetFriendlyPunchLog(line);
         string? compatibilityLine = null;
@@ -1563,7 +1692,9 @@ public sealed partial class EdgeController : IAsyncDisposable
                     run.NodeId,
                     run.Nickname,
                     address,
-                    subnetMask);
+                    subnetMask,
+                    message => AppendLog(run, message),
+                    traceLatency: run.Diagnostics is not null);
                 discovery.PeersChanged += (_, peers) =>
                 {
                     run.Peers = peers;
@@ -1624,7 +1755,9 @@ public sealed partial class EdgeController : IAsyncDisposable
                 {
                     run.RelayedSince.Remove(peer.VirtualIp);
                 }
-                peers[index] = peer with { ConnectionMode = mode };
+                var path = GetPeerPath(run, peer);
+                var measuredPeer = run.PeerDiscovery?.ApplyPeerPath(peer, path) ?? peer;
+                peers[index] = AddPeerIdentity(run, measuredPeer) with { ConnectionMode = mode };
             }
             foreach (var key in run.RelayedSince.Keys.Where(key => !present.Contains(key)).ToArray())
             {
@@ -1634,7 +1767,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         LogPeerConnectionTransitions(run, peers);
 
         var directCount = peers.Count(peer =>
-            peer.ConnectionMode is PeerConnectionMode.Direct or PeerConnectionMode.LanDirect);
+            peer.ConnectionMode is PeerConnectionMode.Direct or PeerConnectionMode.Ipv6Direct or PeerConnectionMode.LanDirect);
         var punchingCount = peers.Count(peer =>
             peer.ConnectionMode == PeerConnectionMode.Punching);
         var relayedCount = peers.Count(peer =>
@@ -1658,6 +1791,11 @@ public sealed partial class EdgeController : IAsyncDisposable
         {
             detail = $"{detail} {run.CompatibilityHint}";
         }
+        var mismatched = peers.Count(peer => peer.Ipv6VersionMismatch);
+        if (mismatched > 0)
+        {
+            detail += $" {mismatched} 位好友的 IPv6 协议与本机不同，暂用 IPv4；请更新好友客户端。";
+        }
         PublishIfCurrent(run, new ConnectionSnapshot(
             ConnectionState.Connected,
             "已连接，可以开始游戏",
@@ -1668,7 +1806,29 @@ public sealed partial class EdgeController : IAsyncDisposable
             DateTimeOffset.Now - run.StartedAt,
             peers,
             run.NatType,
-            run.NatDescription));
+            run.NatDescription,
+            FormatSupernodeText(run, run.ActiveNodeName)));
+    }
+
+    private static HashSet<string> ResolveSupernodeHosts(string server) =>
+        SplitServers(server)
+            .Select(entry => entry.LastIndexOf(':') is var separator && separator > 0
+                ? entry[..separator]
+                : entry)
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static string FormatSupernodeText(EdgeRun run, string? activeNodeName)
+    {
+        var sockaddr = run.CurrentSupernode;
+        if (string.IsNullOrEmpty(sockaddr))
+        {
+            return "—";
+        }
+        var separator = sockaddr.LastIndexOf(':');
+        var host = separator > 0 ? sockaddr[..separator] : sockaddr;
+        var isOwn = run.SupernodeHosts.Contains(host);
+        var label = isOwn && !string.IsNullOrWhiteSpace(activeNodeName) ? activeNodeName : sockaddr;
+        return run.SupernodeRttMs is { } rtt ? $"{label} · {rtt} ms" : label;
     }
 
     private void LogPeerConnectionTransitions(EdgeRun run, IReadOnlyList<PeerSnapshot> peers)
@@ -1702,7 +1862,10 @@ public sealed partial class EdgeController : IAsyncDisposable
                             "先执行 n3n 原生打洞，必要时自动进入增强打洞。");
                         break;
                     case PeerConnectionMode.Direct:
-                        lines.Add($"P2P：已与 {peerLabel} 建立互联网 P2P 直连。");
+                        lines.Add($"P2P：已与 {peerLabel} 建立 IPv4 P2P 直连。");
+                        break;
+                    case PeerConnectionMode.Ipv6Direct:
+                        lines.Add($"P2P：已与 {peerLabel} 建立 IPv6 P2P 直连。");
                         break;
                     case PeerConnectionMode.LanDirect:
                         lines.Add($"P2P：已与 {peerLabel} 建立本地直连。");
@@ -1871,6 +2034,49 @@ public sealed partial class EdgeController : IAsyncDisposable
         }
     }
 
+    private static string? GetCurrentSupernode(IReadOnlyList<JsonElement> rows)
+    {
+        foreach (var row in rows)
+        {
+            if (row.TryGetProperty("current", out var current) &&
+                current.ValueKind == JsonValueKind.Number &&
+                current.TryGetInt32(out var value) &&
+                value == 1 &&
+                row.TryGetProperty("sockaddr", out var sockaddr) &&
+                sockaddr.ValueKind == JsonValueKind.String)
+            {
+                return sockaddr.GetString();
+            }
+        }
+        return null;
+    }
+
+    private static async Task MeasureSupernodeRttAsync(EdgeRun run)
+    {
+        var sockaddr = run.CurrentSupernode;
+        if (sockaddr is null)
+        {
+            return;
+        }
+        var separator = sockaddr.LastIndexOf(':');
+        var host = separator > 0 ? sockaddr[..separator] : sockaddr;
+        try
+        {
+            using var ping = new Ping();
+            var reply = await ping.SendPingAsync(host, 1000);
+            if (string.Equals(run.CurrentSupernode, sockaddr, StringComparison.Ordinal))
+            {
+                run.SupernodeRttMs = reply.Status == IPStatus.Success
+                    ? reply.RoundtripTime
+                    : null;
+            }
+        }
+        catch
+        {
+            // ICMP being filtered somewhere on the path only costs the display value.
+        }
+    }
+
     private static SupernodeState GetSupernodeState(IReadOnlyList<JsonElement> rows)
     {
         var foundWaiting = false;
@@ -1905,11 +2111,14 @@ public sealed partial class EdgeController : IAsyncDisposable
     private static IReadOnlyDictionary<string, PeerConnectionMode> GetPeerModes(
         IReadOnlyList<JsonElement> rows,
         out bool hasPunchTelemetry,
-        out IReadOnlyDictionary<string, string> rowMacs)
+        out IReadOnlyDictionary<string, string> rowMacs,
+        out IReadOnlyDictionary<string, string> pathKeys)
     {
         var result = new Dictionary<string, PeerConnectionMode>(StringComparer.Ordinal);
         var macs = new Dictionary<string, string>(StringComparer.Ordinal);
+        var paths = new Dictionary<string, string>(StringComparer.Ordinal);
         rowMacs = macs;
+        pathKeys = paths;
         hasPunchTelemetry = false;
         foreach (var row in rows)
         {
@@ -1921,13 +2130,15 @@ public sealed partial class EdgeController : IAsyncDisposable
                 ? punchValue.GetString()
                 : null;
             hasPunchTelemetry |= punchState is not null;
+            var ipv6 = row.TryGetProperty("transport", out var transport) &&
+                       transport.GetString() == "ipv6";
             var mode = modeValue.GetString() switch
             {
                 var value when string.Equals(value, "pSp", StringComparison.OrdinalIgnoreCase) &&
                                punchState == "forced_relay" =>
                     PeerConnectionMode.ForcedRelayed,
                 var value when string.Equals(value, "p2p", StringComparison.OrdinalIgnoreCase) =>
-                    PeerConnectionMode.Direct,
+                    ipv6 ? PeerConnectionMode.Ipv6Direct : PeerConnectionMode.Direct,
                 var value when string.Equals(value, "pSp", StringComparison.OrdinalIgnoreCase) &&
                                punchState == "failed" =>
                     PeerConnectionMode.PunchFailed,
@@ -1941,23 +2152,76 @@ public sealed partial class EdgeController : IAsyncDisposable
             var rowMac = row.TryGetProperty("macaddr", out var macValue)
                 ? NormalizeMacAddress(macValue.GetString())
                 : null;
+            var path = mode == PeerConnectionMode.Ipv6Direct
+                ? "ipv6:" + (row.TryGetProperty("ipv6_path", out var v6Path) ? v6Path.GetString() : "")
+                : mode == PeerConnectionMode.Direct
+                    ? "ipv4:" + (row.TryGetProperty("sockaddr", out var v4Path) ? v4Path.GetString() : "")
+                    : "relay";
             if (row.TryGetProperty("ip4addr", out var addressValue))
             {
                 var address = addressValue.GetString()?.Split('/', 2)[0];
-                AddPeerMode(result, $"ip:{address}", mode);
+                AddPeerMode(result, paths, $"ip:{address}", mode, path);
                 AddRowMac(macs, $"ip:{address}", rowMac);
             }
             if (row.TryGetProperty("desc", out var descriptionValue))
             {
-                AddPeerMode(result, $"name:{descriptionValue.GetString()}", mode);
+                AddPeerMode(result, paths, $"name:{descriptionValue.GetString()}", mode, path);
                 AddRowMac(macs, $"name:{descriptionValue.GetString()}", rowMac);
             }
             if (rowMac is not null)
             {
-                AddPeerMode(result, $"mac:{rowMac}", mode);
+                AddPeerMode(result, paths, $"mac:{rowMac}", mode, path);
             }
         }
         return result;
+    }
+
+    private static string? GetPeerPath(EdgeRun run, PeerSnapshot peer)
+    {
+        var paths = run.PeerPathKeys;
+        if (!paths.TryGetValue($"ip:{peer.VirtualIp}", out var path) &&
+            !paths.TryGetValue($"name:{peer.Nickname}", out path))
+        {
+            run.PeerMacAddresses.TryGetValue(peer.VirtualIp, out var mac);
+            if (mac is null || !paths.TryGetValue($"mac:{mac}", out path))
+            {
+                return null;
+            }
+        }
+        return path == "relay" ? $"relay:{run.CurrentSupernode}" : path;
+    }
+
+    private static int? ReadWireVersion(JsonElement row, string property) =>
+        row.ValueKind == JsonValueKind.Object && row.TryGetProperty(property, out var value) &&
+        value.TryGetInt32(out var version) && version is > 0 and <= 255 ? version : null;
+
+    private static PeerSnapshot AddPeerIdentity(EdgeRun run, PeerSnapshot peer)
+    {
+        run.PeerMacAddresses.TryGetValue(peer.VirtualIp, out var mac);
+        JsonElement? best = null;
+        var priority = 0;
+        foreach (var row in run.PeerRuntimeRows)
+        {
+            var match = mac is not null && row.TryGetProperty("macaddr", out var rowMac) &&
+                        NormalizeMacAddress(rowMac.GetString()) == mac ? 3 :
+                row.TryGetProperty("ip4addr", out var ip) && ip.GetString()?.Split('/', 2)[0] == peer.VirtualIp ? 2 :
+                row.TryGetProperty("desc", out var name) && name.GetString() == peer.Nickname ? 1 : 0;
+            if (match > priority)
+            {
+                priority = match;
+                best = row;
+            }
+        }
+        var nativeVersion = peer.NativeVersion;
+        var wireVersion = peer.Ipv6WireVersion;
+        if (best is { } identity)
+        {
+            nativeVersion = identity.TryGetProperty("version", out var version)
+                ? PeerDiscoveryService.NormalizeVersion(version.GetString()) ?? nativeVersion : nativeVersion;
+            wireVersion = ReadWireVersion(identity, "peer_ipv6_wire_version") ?? wireVersion;
+        }
+        return peer with { NativeVersion = nativeVersion, Ipv6WireVersion = wireVersion,
+            LocalIpv6WireVersion = run.ExperimentalIpv6P2p ? run.Ipv6WireVersion : null };
     }
 
     private static PeerConnectionMode GetPeerConnectionMode(EdgeRun run, PeerSnapshot peer)
@@ -2028,8 +2292,10 @@ public sealed partial class EdgeController : IAsyncDisposable
 
     private static void AddPeerMode(
         IDictionary<string, PeerConnectionMode> modes,
+        IDictionary<string, string> paths,
         string key,
-        PeerConnectionMode mode)
+        PeerConnectionMode mode,
+        string path)
     {
         if (key.EndsWith(':') || mode == PeerConnectionMode.Unknown)
         {
@@ -2039,12 +2305,14 @@ public sealed partial class EdgeController : IAsyncDisposable
             PeerModePriority(mode) > PeerModePriority(existing))
         {
             modes[key] = mode;
+            paths[key] = path;
         }
     }
 
     private static int PeerModePriority(PeerConnectionMode mode) => mode switch
     {
-        PeerConnectionMode.LanDirect => 6,
+        PeerConnectionMode.LanDirect => 7,
+        PeerConnectionMode.Ipv6Direct => 6,
         PeerConnectionMode.Direct => 5,
         PeerConnectionMode.ForcedRelayed => 4,
         PeerConnectionMode.PunchFailed => 3,
@@ -2109,20 +2377,25 @@ public sealed partial class EdgeController : IAsyncDisposable
         string? adapterId,
         int edgePort,
         int managementPort,
-        string managementPassword) =>
+        string managementPassword,
+        bool experimentalIpv6P2p) =>
         string.Join('\n',
         ((string?[])
         [
             "# Generated by MikuN2N. The encryption key is passed through N3N_KEY.",
             "[community]",
             $"name={community}",
-            $"supernode={server}",
+            .. SplitServers(server).Select(entry => $"supernode={entry}"),
             string.Empty,
             "[connection]",
             $"description={nickname}",
+            // With several federated supernodes, anchor to the lowest-RTT one so
+            // relayed traffic enters the backbone at the nearest node.
+            SplitServers(server).Count > 1 ? "supernode_selection=rtt" : null,
             $"bind={edgePort}",
             "register_pkt_ttl=3",
             "mikun2n_punch=true",
+            experimentalIpv6P2p ? "mikun2n_ipv6=true" : null,
             "mikun2n_punch_grace=5",
             "mikun2n_punch_budget=25",
             "mikun2n_punch_max_packets=12000",
@@ -2144,6 +2417,17 @@ public sealed partial class EdgeController : IAsyncDisposable
             "verbose=2",
             string.Empty
         ]).Where(line => line is not null));
+
+    /// <summary>
+    /// The server box accepts several supernode endpoints in one string so a
+    /// federation can be listed; separators follow whatever users may type.
+    /// </summary>
+    public static IReadOnlyList<string> SplitServers(string value) =>
+        value.Split(
+                [',', ';', '、', '，', '；', ' ', '\t'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     private static int FindAvailableUdpPort()
     {
@@ -2310,8 +2594,11 @@ public sealed partial class EdgeController : IAsyncDisposable
         }
     }
 
-    private void Publish(ConnectionSnapshot snapshot) =>
+    private void Publish(ConnectionSnapshot snapshot)
+    {
+        _parameters?.Diagnostics?.Write("connection_snapshot", snapshot);
         SnapshotChanged?.Invoke(this, snapshot);
+    }
 
     private static void TryCancel(CancellationTokenSource? cancellation)
     {
@@ -2331,7 +2618,10 @@ public sealed partial class EdgeController : IAsyncDisposable
         string Nickname,
         string NodeId,
         string EncryptionKey,
-        EdgeEngine Engine);
+        EdgeEngine Engine,
+        string? NodeName,
+        bool ExperimentalIpv6P2p,
+        TestDiagnosticsSession? Diagnostics);
 
     private enum EdgeEngine
     {
@@ -2361,14 +2651,24 @@ public sealed partial class EdgeController : IAsyncDisposable
         public bool IsN3n { get; } = isN3n;
         public string NodeId { get; } = nodeId;
         public string Nickname { get; } = nickname;
+        /// <summary>Hosts of the node this run connects to; anything else is another federation member.</summary>
+        public IReadOnlySet<string> SupernodeHosts { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+        /// <summary>User-visible name of the selected node, shown instead of its raw address.</summary>
+        public string? ActiveNodeName { get; init; }
         public object LogGate { get; } = new();
         public object DiscoveryGate { get; } = new();
         public object PeerModeGate { get; } = new();
         public object RelayPolicyGate { get; } = new();
         public List<string> LogLines { get; } = [];
         public IReadOnlyList<PeerSnapshot> Peers { get; set; } = [];
+        public IReadOnlyList<JsonElement> PeerRuntimeRows { get; set; } = [];
+        public bool NativeIdentityRead { get; set; }
+        public string? NativeVersion { get; set; }
+        public int? Ipv6WireVersion { get; set; }
         public IReadOnlyDictionary<string, PeerConnectionMode> PeerModes { get; set; } =
             new Dictionary<string, PeerConnectionMode>();
+        public IReadOnlyDictionary<string, string> PeerPathKeys { get; set; } =
+            new Dictionary<string, string>();
         /// <summary>Edge MAC per management-row key ("ip:x" / "name:x"), used to address a peer whose virtual IPv4 n3n never learned.</summary>
         public IReadOnlyDictionary<string, string> PeerRowMacs { get; set; } =
             new Dictionary<string, string>();
@@ -2397,6 +2697,14 @@ public sealed partial class EdgeController : IAsyncDisposable
         public DateTimeOffset NextManagementRetryAt { get; set; }
         public DateTimeOffset NextNatPollAt { get; set; }
         public bool NatPollWarningLogged { get; set; }
+        public bool ExperimentalIpv6P2p { get; init; }
+        public TestDiagnosticsSession? Diagnostics { get; init; }
+        public DateTimeOffset NextDiagnosticsAt { get; set; }
+        public bool Ipv6StatusReported { get; set; }
+        /// <summary>Sockaddr of the supernode the edge is currently anchored to (get_supernodes current=1).</summary>
+        public string? CurrentSupernode { get; set; }
+        public long? SupernodeRttMs { get; set; }
+        public DateTimeOffset NextSupernodePingAt { get; set; }
         public DateTimeOffset NextRelayReconcileAt { get; set; }
         public bool RelayPolicyRestored { get; set; }
         public bool RelayReconcileWarningLogged { get; set; }
