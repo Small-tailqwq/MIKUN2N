@@ -297,6 +297,17 @@
      reordering, fragmentation, session changes and lazy allocation lifecycle.
      IPv6 wire generation remains 3, compatible with 0.5.8-2.
 
+ 49. 0.5.8-4: Preserve admitted fragments when later traffic advances the replay
+     window. Allocate datagram IDs only for fragmented sends, including DATA
+     converted after EMSGSIZE; 1200 unfragmented sends no longer consume IDs.
+     An assembly admitted before a global ID jump retains its fixed two-second
+     deadline; completed/expired IDs still cannot reopen a slot. Allocation
+     failure emits a rate-limited warning. Generation 3 remains unchanged.
+     Export corresponding source directly from tracked native worktree files,
+     excluding generated configuration/build outputs. Compare every archive
+     entry against its source bytes and scan decompressed contents for personal
+     paths; the validation report records actual mismatches and per-file hashes.
+
 构建要求：Windows 目标需要在 CFLAGS 中带上 `-std=gnu17`（随包的旧 src/win32/getopt.c 在本
 工具链的 C23 默认标准下编译不过），并带上 `-ffile-prefix-map=<构建路径>=<占位路径>`，把调试
 信息里的绝对路径映射掉。曾经发布的二进制内嵌了构建机的用户名与目录结构（`Users/<name>/.../
@@ -311,4 +322,5 @@ n3n-build/...` 共 13 条），加映射后重编已清零。重编后请重新�
 
 注意：分发 n2n/n3n 二进制时必须同时遵守 GPLv3 许可证并提供对应源代码。
 Windows source build: run sh scripts/build-mikun2n-windows.sh from the extracted source root in Git Bash with MinGW-w64 on PATH.
+Source packaging: tools/package-native-source.py --source <patched-root> --archive Runtime/n3n-3.4.4-source.zip --report <validation.json>. Generated config.mak/configure/headers are excluded and recreated by the build scripts.
 Linux server build: use supernode/build-supernode.sh from the MikuN2N source release; it runs autogen.sh before configure.

@@ -704,8 +704,7 @@ int mikun2n_ipv6_send (struct n3n_runtime_data *eee, struct peer_info *peer,
     if(!size || size > N2N_PKT_BUF_SIZE) return 0;
     unsigned budget = min(peer->mikun2n_ipv6_path_bytes, IPV6_RX_LIMIT);
     if(budget < IPV6_SAFE_UDP_SIZE) return 0;
-    uint64_t id = ++eee->mikun2n_ipv6_datagram_id;
-    if(!id) id = ++eee->mikun2n_ipv6_datagram_id;
+    uint64_t id = 0;
     size_t offset = 0;
     int fragmented = size + IPV6_FRAME_SIZE > budget;
     if(fragmented && now_ms >= peer->mikun2n_ipv6_oversize_log_ms) {
@@ -715,6 +714,11 @@ int mikun2n_ipv6_send (struct n3n_runtime_data *eee, struct peer_info *peer,
         peer->mikun2n_ipv6_oversize_log_ms = now_ms + 10000;
     }
     while(offset < size) {
+        // Allocate only for fragments, including a DATA send retried after EMSGSIZE.
+        if(fragmented && !id) {
+            id = ++eee->mikun2n_ipv6_datagram_id;
+            if(!id) id = ++eee->mikun2n_ipv6_datagram_id;
+        }
         unsigned header = fragmented ? IPV6_FRAGMENT_HEADER : IPV6_FRAME_SIZE;
         size_t chunk = min(size - offset, budget - header);
         ipv6_header(eee, peer, packet, fragmented ? IPV6_FRAGMENT : IPV6_DATA, fragmented ? id : 0);
@@ -894,7 +898,14 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
            size - IPV6_FRAGMENT_HEADER > (size_t)(total - offset)) return 0;
         if(!peer->mikun2n_ipv6_reassembly) {
             peer->mikun2n_ipv6_reassembly = calloc(1, sizeof(*peer->mikun2n_ipv6_reassembly));
-            if(!peer->mikun2n_ipv6_reassembly) return 0;
+            if(!peer->mikun2n_ipv6_reassembly) {
+                static uint64_t allocation_warning_ms;
+                if(now_ms >= allocation_warning_ms) {
+                    traceEvent(TRACE_WARNING, "IPv6 fragment dropped: cannot allocate reassembly buffer");
+                    allocation_warning_ms = now_ms + 10000;
+                }
+                return 0;
+            }
         }
         size_t assembled = mikun2n_ipv6_reassemble(peer->mikun2n_ipv6_reassembly, now_ms,
                 challenge, ipv6_read_u16(data + 41), ipv6_read_u16(data + 43),

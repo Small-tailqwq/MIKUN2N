@@ -1,6 +1,6 @@
 # IPv6 transport, generation 3
 
-The 0.5.8-3 test build uses a bounded, two-level packetization-layer discovery
+The 0.5.8-4 test build uses a bounded, two-level packetization-layer discovery
 profile using [RFC 8899](https://www.rfc-editor.org/rfc/rfc8899.html) principles. This is
 not a full general-purpose DPLPMTUD state machine. It separates each direction's
 confirmed UDP size from peer receive capacity, path liveness and larger probes.
@@ -44,7 +44,8 @@ the inner encrypted n3n bytes are unchanged. No application payload is logged.
 An edge allocates four assembly slots on the first valid fragment from a checked
 peer, each bounded by the n3n packet buffer (2048 bytes), with a fixed two-second
 deadline. The allocation is freed on session reset or peer destruction; the shared
-peer structure contains only a pointer, so supernodes allocate no assembly buffers. Identical overlapping bytes are ignored;
+peer structure contains only a pointer, so supernodes allocate no assembly buffers.
+Allocation failures emit a rate-limited warning. Identical overlapping bytes are ignored;
 conflicting overlap or inconsistent total length discards that assembly. A 1024-ID
 sliding bitmap rejects completed/expired/conflicting assemblies. IDs older than the
 window remain rejected even after bitmap reuse while fragments keep arriving;
@@ -52,8 +53,12 @@ high rates cannot reopen duplicate delivery. After two seconds without accepted
 fragments the history expires, retaining generation-3 compatibility with older
 senders that recreate a peer record and reset its IDs. Duplicates delayed beyond
 that idle expiry can be delivered, as with the previous two-second cache. New
-senders allocate IDs across the edge session so recreating a peer cannot reuse
-an ID. Legitimate reordering beyond the sequence window is dropped. Invalid ranges,
+senders allocate IDs only for fragmented datagrams across the edge session, so
+recreating a peer cannot reuse an ID and unfragmented traffic consumes no IDs.
+An already admitted assembly keeps its original two-second deadline even when
+later IDs advance the window. A first fragment arriving outside the 1024-ID window
+cannot start an assembly; the ID distance is shared across all peers sent to by
+the source edge. Invalid ranges,
 unknown sessions, wrong endpoints and excess concurrent assemblies are rejected.
 Fragment loss drops the original UDP datagram; there is no reliability/retry layer.
 A partially sent datagram is never replayed simultaneously through IPv4. With
@@ -61,8 +66,8 @@ independent fragment loss probability p, a datagram split into two fragments
 succeeds with probability (1-p)^2; correlated loss can differ. Fragmentation thus
 increases datagram loss, and this transport deliberately adds no retransmissions.
 
-Native summaries expose sent/received fragments, completed assemblies, transient
-drops, path expiry and send errors. Obsolete `oversize_fallback_*` counters were
+Native summaries expose sent/received fragments, completed assemblies and transient
+drops. Individual events report path expiry and send errors. Obsolete `oversize_fallback_*` counters were
 removed in 0.5.8-3; inspect fragment counts and actual path/send-failure events.
 
 `get_edges` retains `ipv6_checked_udp_bytes` (the confirmed outbound UDP limit,
@@ -95,6 +100,8 @@ dotnet run --project tools/offline-tests/OfflineTests.csproj -- "$env:TEMP/MikuN
 python tools/offline-tests/test_server.py artifacts/offline-server
 ```
 
-These checks passed for 0.5.8-3, including 1200 completed datagrams followed by
-duplicate replay, in-window reordering and session reset/freeing. They do not establish real public-IPv6/NAT66
+The 0.5.8-4 checks also cover 1200 unfragmented sends without ID consumption,
+an admitted assembly surviving an ID jump until its deadline, real 64 MiB log
+rotation, exact uploaded bytes/record/chunk sequences, retained chunks after 507,
+and manual resume/revocation during capacity backoff. They do not establish real public-IPv6/NAT66
 behavior, both WPF themes, sustained game traffic or a reduction in the cloud bill.

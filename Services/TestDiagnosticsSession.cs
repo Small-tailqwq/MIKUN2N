@@ -17,6 +17,7 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
     private const int MaxSegments = 4;
     private const int ChunkBytes = 128 * 1024;
     private readonly object _gate = new();
+    private readonly object _statusGate = new();
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly TestBuildProfile _profile;
     private readonly string _directory;
@@ -27,8 +28,9 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
     private readonly List<Segment> _segments = [];
     private readonly Dictionary<string, JsonNode?> _context = [];
     // Status sinks enqueue UI work; they must not synchronously wait for a session
-    // operation. Write-error notifications may originate while _gate is held.
+    // operation. Revisions and serialized dispatch prevent stale snapshots winning.
     private readonly Action<string> _status;
+    private long _statusRevision;
     private CancellationTokenSource? _uploadCancellation;
     private HttpClient? _client;
     private Task _worker = Task.CompletedTask;
@@ -48,11 +50,33 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
         public string Path { get; } = path;
         public FileStream File { get; } = file;
         public long Ack;
+        public long AbandonedBytes;
         public int Chunk;
         public bool Allowed = allowed;
         public bool Removed;
     }
     private sealed record Pending(Segment Segment, int Chunk, byte[] Bytes);
+    private sealed record StatusUpdate(long Revision, string Text);
+
+    // Capture under _gate, publish after releasing it. No external callback holds _gate.
+    private StatusUpdate CaptureStatus(string text) => new(++_statusRevision, text);
+
+    private void PublishStatus(StatusUpdate? update)
+    {
+        if (update is null) return;
+        lock (_statusGate)
+        {
+            lock (_gate) if (update.Revision != _statusRevision) return;
+            _status(update.Text);
+        }
+    }
+
+    private void SetStatus(string text)
+    {
+        StatusUpdate update;
+        lock (_gate) update = CaptureStatus(text);
+        PublishStatus(update);
+    }
 
     public TestDiagnosticsSession(TestBuildProfile profile, bool consent, string encryptionKey, Action<string> status)
         : this(profile, consent, encryptionKey, status,
@@ -72,9 +96,9 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
             architecture = RuntimeInformation.ProcessArchitecture.ToString(), runtime = RuntimeInformation.FrameworkDescription,
             utcOffsetMinutes = TimeZoneInfo.Local.GetUtcOffset(DateTime.Now).TotalMinutes,
             uploadConsent = consent, retentionHours = 24 });
-        if (consent) StartWorker();
-        _status(_storageFailed ? "详细日志写入已暂停；可点击恢复日志。" :
+        SetStatus(_storageFailed ? "详细日志写入已暂停；可点击恢复日志。" :
             consent ? "详细日志正在记录 · 等待服务器接收" : "详细日志正在记录 · 仅保存在本机");
+        if (consent) StartWorker();
     }
 
     private void Rotate(string reason)
@@ -88,7 +112,8 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
             File.Delete(oldest.Path);
             oldest.File.Dispose();
             oldest.Removed = true; _segments.RemoveAt(0);
-            _droppedBytes += unacknowledged;
+            // Receiver-rejected bytes were already counted when the segment was abandoned.
+            _droppedBytes += unacknowledged - oldest.AbandonedBytes;
         }
         Directory.CreateDirectory(_directory);
         var id = _segmentNumber == 0 ? SessionId : Guid.NewGuid().ToString("N");
@@ -120,6 +145,7 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
 
     public void Write(string kind, object? data)
     {
+        StatusUpdate? status = null;
         lock (_gate)
         {
             if (_disposed) return;
@@ -135,9 +161,10 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 _storageFailed = true;
-                _status("详细日志写入已暂停；可点击恢复日志，联机不受影响。");
+                status = CaptureStatus("详细日志写入已暂停；可点击恢复日志，联机不受影响。");
             }
         }
+        PublishStatus(status);
     }
 
     private Pending? ReadChunk()
@@ -179,14 +206,14 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
     private async Task UploadLoopAsync(HttpClient client, CancellationToken token)
     {
         Pending? pending = null;
-        int failures = 0, capacityFailures = 0; long reportAt = 0;
+        int failures = 0; long reportAt = 0;
         try
         {
             while (!token.IsCancellationRequested)
             {
                 lock (_gate)
                     if (pending is not null && (pending.Segment.Removed || !pending.Segment.Allowed))
-                    { pending = null; failures = capacityFailures = 0; }
+                    { pending = null; failures = 0; }
                 pending ??= ReadChunk();
                 if (pending is null)
                 {
@@ -199,16 +226,24 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
                     body.Headers.ContentType = new MediaTypeHeaderValue("application/x-ndjson");
                     using var response = await client.PostAsync($"v1/logs/{_profile.BatchId}/{pending.Segment.Id}/{pending.Chunk:D8}", body, token);
                     var code = (int)response.StatusCode;
-                    capacityFailures = code == 507 ? capacityFailures + 1 : 0;
-                    // Conflicts cannot be repaired by replaying the same immutable
-                    // chunk. A repeated capacity refusal must not pin the oldest segment.
-                    if (code is 409 or 410 || capacityFailures >= 3)
+                    if (code == 507)
+                    {
+                        if (++failures == 1)
+                            Write("upload_capacity_wait", new { segment = pending.Segment.Id, chunk = pending.Chunk, retrySeconds = 30 });
+                        SetStatus("服务器空间暂时不足，30 秒后重试；本机最多保留本次连接最近 256 MiB 详细记录。");
+                        // Capacity is temporary. Preserve the immutable chunk; every 507
+                        // waits, even if local rotation replaces its segment in the meantime.
+                        await _retryDelay(TimeSpan.FromSeconds(30), token);
+                        continue;
+                    }
+                    // Conflicts/expiry cannot be repaired by replaying the same chunk.
+                    if (code is 409 or 410)
                     {
                         AbandonSegment(pending.Segment, code);
-                        pending = null; failures = capacityFailures = 0;
+                        pending = null; failures = 0;
                         // A receiver rejecting every fresh segment must not cause
                         // unbounded rotation or a tight retry loop.
-                        await _retryDelay(TimeSpan.FromSeconds(code == 507 ? 30 : 3), token);
+                        await _retryDelay(TimeSpan.FromSeconds(3), token);
                         continue;
                     }
                     if (!response.IsSuccessStatusCode) throw new HttpRequestException("Upload rejected", null, response.StatusCode);
@@ -222,7 +257,7 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
                     {
                         ReportDelivery(); reportAt = _clock.ElapsedMilliseconds + 30000;
                     }
-                    failures = capacityFailures = 0;
+                    failures = 0;
                 }
                 catch (Exception exception) when (!token.IsCancellationRequested && exception is HttpRequestException or TaskCanceledException)
                 {
@@ -230,7 +265,7 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
                     {
                         Write("upload_failure", new { error = exception.GetType().Name,
                             httpStatus = exception is HttpRequestException http ? (int?)http.StatusCode : null });
-                        _status("日志暂未送达，正在重试；本机最多保留本次连接最近 256 MiB 详细记录。");
+                        SetStatus("日志暂未送达，正在重试；本机最多保留本次连接最近 256 MiB 详细记录。");
                     }
                     await _retryDelay(TimeSpan.FromSeconds(Math.Min(30, failures * 3)), token);
                 }
@@ -242,33 +277,36 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
         {
             Write("upload_worker_stopped", new { error = exception.GetType().Name });
             _uploadAllowed = false;
-            _status("上传已暂停；可点击恢复日志，联机不受影响。");
+            SetStatus("上传已暂停；可点击恢复日志，联机不受影响。");
         }
     }
 
     private void AbandonSegment(Segment segment, int httpStatus)
     {
         long bytes;
+        StatusUpdate status;
         lock (_gate)
         {
             if (segment.Removed || !segment.Allowed) return;
             segment.Allowed = false;
             bytes = segment.File.Length - segment.Ack;
+            segment.AbandonedBytes = bytes;
             _abandonedBytes += bytes;
             if (ReferenceEquals(segment, _current) && !_finishing) Rotate("receiver_rejected");
+            status = CaptureStatus("一段日志未能送达，已跳过并继续后续上传；该段仍按本机容量与保留策略保存。");
         }
         Write("upload_segment_abandoned", new { segment = segment.Id, httpStatus, unacknowledgedBytes = bytes });
-        _status("一段日志未能送达，已跳过并继续后续上传；该段仍按本机容量与保留策略保存。");
+        PublishStatus(status);
     }
 
     private void ReportDelivery()
     {
-        string status;
+        StatusUpdate status;
         lock (_gate)
-            status = $"{(_storageFailed ? "记录已暂停" : "正在记录")} · 服务器已接收 {_acknowledgedBytes / 1048576.0:F1} MiB · 分段 {_segmentNumber}" +
+            status = CaptureStatus($"{(_storageFailed ? "记录已暂停" : "正在记录")} · 服务器已接收 {_acknowledgedBytes / 1048576.0:F1} MiB · 分段 {_segmentNumber}" +
                      (_droppedBytes > 0 ? $" · 已轮转 {_droppedBytes / 1048576.0:F1} MiB 未确认记录" : "") +
-                     (_abandonedBytes > 0 ? $" · 已跳过 {_abandonedBytes / 1048576.0:F1} MiB 未送达记录" : "");
-        _status(status);
+                     (_abandonedBytes > 0 ? $" · 已跳过 {_abandonedBytes / 1048576.0:F1} MiB 未送达记录" : ""));
+        PublishStatus(status);
     }
 
     private async Task StopWorkerAsync()
@@ -288,7 +326,7 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
         {
             await StopWorkerAsync();
             Write("upload_revoked", new { acknowledgedBytes = _acknowledgedBytes });
-            _status("已停止上传 · 后续日志仅保存在本机");
+            SetStatus("已停止上传 · 后续日志仅保存在本机");
         }
         finally { _lifecycle.Release(); }
     }
@@ -303,13 +341,13 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
             _uploadAllowed = consent;
             lock (_gate) Rotate("manual_resume");
             Write("diagnostics_resumed", new { uploadConsent = consent });
+            SetStatus(consent ? "详细日志已恢复 · 仅上传恢复后的新记录" : "详细日志已恢复 · 仅保存在本机");
             if (consent) StartWorker();
-            _status(consent ? "详细日志已恢复 · 仅上传恢复后的新记录" : "详细日志已恢复 · 仅保存在本机");
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             _storageFailed = true; _uploadAllowed = false;
-            _status("详细日志仍无法写入，请检查磁盘后再次恢复。");
+            SetStatus("详细日志仍无法写入，请检查磁盘后再次恢复。");
         }
         finally { _lifecycle.Release(); }
     }
@@ -325,16 +363,16 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
             _finishing = true;
             if (await Task.WhenAny(_worker, Task.Delay(8000)) != _worker) _uploadCancellation?.Cancel();
             await StopWorkerAsync();
-            string status;
+            StatusUpdate status;
             lock (_gate)
             {
                 _disposed = true;
                 foreach (var segment in _segments) segment.File.Dispose();
                 _secrets.Clear(); _context.Clear();
-                status = _storageFailed || _droppedBytes > 0 || _abandonedBytes > 0
-                    ? "本次诊断记录不完整，请保留本机日志。" : "本次诊断记录已结束，未送达部分保留在本机。";
+                status = CaptureStatus(_storageFailed || _droppedBytes > 0 || _abandonedBytes > 0
+                    ? "本次诊断记录不完整，请保留本机日志。" : "本次诊断记录已结束，未送达部分保留在本机。");
             }
-            _status(status);
+            PublishStatus(status);
         }
         finally { _lifecycle.Release(); }
     }

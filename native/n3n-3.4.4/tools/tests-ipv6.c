@@ -105,6 +105,19 @@ int main(void) {
     assert(deliver(0,b,&addr_a,1113,out)==0 && deliver(1,b,&addr_a,1114,out)==0);
     puts("PASS: oversized DATA stays IPv6, reorder, duplicates, exact reassembly");
 
+    uint64_t fragment_id=a->mikun2n_ipv6_datagram_id;
+    for(unsigned i=0;i<1200;i++) {
+        sent_count=0;
+        assert(mikun2n_ipv6_send(a,ab,original,100,1120));
+        assert(sent_count==1 && sent_packets[0].bytes[4]==IPV6_DATA);
+        assert(ipv6_get_u64(sent_packets[0].bytes+33)==0);
+        assert(a->mikun2n_ipv6_datagram_id==fragment_id);
+    }
+    sent_count=0;
+    assert(mikun2n_ipv6_send(a,ab,original,sizeof(original),1130));
+    assert(ipv6_get_u64(sent_packets[0].bytes+33)==fragment_id+1);
+    puts("PASS: 1200 unfragmented DATA packets do not consume fragment IDs");
+
     struct peer_info replacement={0};
     memcpy(replacement.mac_addr,ab->mac_addr,6);
     replacement.mikun2n_ipv6_token=ab->mikun2n_ipv6_token;
@@ -152,6 +165,18 @@ int main(void) {
     printf("PASS: 1200 datagrams cannot reopen duplicates; in-window reorder; peer=%u bytes, lazy assembly=%u bytes\n",
            (unsigned)sizeof(*ab),(unsigned)sizeof(state));
 
+    memset(&state,0,sizeof(state));
+    assert(!mikun2n_ipv6_reassemble(&state,10000,10,20,0,original,10,out));
+    assert(mikun2n_ipv6_reassemble(&state,10001,2000,10,0,original,10,out)==10);
+    assert(mikun2n_ipv6_reassemble(&state,11999,10,20,10,original+10,10,out)==20);
+    assert(!memcmp(out,original,20));
+    assert(!mikun2n_ipv6_reassemble(&state,11999,10,20,0,original,10,out));
+    memset(&state,0,sizeof(state));
+    assert(!mikun2n_ipv6_reassemble(&state,10000,10,20,0,original,10,out));
+    assert(mikun2n_ipv6_reassemble(&state,10001,2000,10,0,original,10,out)==10);
+    assert(!mikun2n_ipv6_reassemble(&state,12000,10,20,10,original+10,10,out));
+    puts("PASS: admitted assembly survives global ID jumps until its fixed deadline; duplicates stay rejected");
+
     uint64_t token=ba->mikun2n_ipv6_token;ba->mikun2n_ipv6_token++;
     assert(deliver(0,b,&addr_a,3400,out)==0);ba->mikun2n_ipv6_token=token;
     sent_packets[0].bytes[3]=2;assert(deliver(0,b,&addr_a,3400,out)==0);sent_packets[0].bytes[3]=3;
@@ -173,6 +198,8 @@ int main(void) {
     fail_next=EMSGSIZE;
 #endif
     assert(mikun2n_ipv6_send(a,ab,original,sizeof(original),8100)==1 && sent_count==2);
+    assert(ipv6_get_u64(sent_packets[0].bytes+33)>fragment_id);
+    assert(ipv6_get_u64(sent_packets[0].bytes+33)==ipv6_get_u64(sent_packets[1].bytes+33));
     assert(ab->mikun2n_ipv6_path_bytes==1232 && ab->mikun2n_ipv6_valid_until_ms==100000);
 #ifdef _WIN32
     fail_next=WSAEWOULDBLOCK;

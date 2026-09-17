@@ -65,7 +65,9 @@ static inline size_t mikun2n_ipv6_reassemble(mikun2n_ipv6_reassembly_t *state, u
         if(item->id == id) slot = item;
         if(!item->id && !free_slot) free_slot = item;
     }
-    if(mikun2n_ipv6_fragment_retired(state, id)) return 0;
+    // A live assembly keeps its original deadline even when later global IDs
+    // advance past the replay window. Retired IDs still cannot open a new slot.
+    if(!slot && mikun2n_ipv6_fragment_retired(state, id)) return 0;
     state->replay_until = now + MIKUN2N_REASSEMBLY_MS;
     if(!slot) {
         if(!free_slot) return 0;
