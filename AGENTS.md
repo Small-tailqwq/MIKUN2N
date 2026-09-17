@@ -15,15 +15,26 @@ dotnet build
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/win-x64
 ```
 
-构建输出在 `bin/Debug/net9.0-windows/`。没有测试工程也没有 lint 步骤，验证靠手工构建与运行；改动连接、进程或网络逻辑后必须实际启动程序并连接，因为进程生命周期、TAP 网卡状态与 UDP 发现这些核心行为无法用单元测试覆盖。
+构建输出在 `bin/Debug/net9.0-windows/`。没有 lint 步骤。
+
+改动后的最小冷检查（不启动程序、不联网、不需要授权）：
+
+| 改动范围 | 检查 |
+|---|---|
+| 任意 C# 代码 | `dotnet build` |
+| 诊断会话、上传授权、日志轮转 | `dotnet run --project tools/offline-tests -- <一个空临时目录>`（会写出 64 MiB 分段，别指向仓库） |
+| 原生 IPv6 尺寸发现、分片、重组 | patched 源码树 `make` 后运行 `tools/tests-ipv6.exe`；wire 编解码用 `tests-wire` |
+| 连接、进程生命周期、TAP 网卡、UDP 发现 | 没有单元测试能覆盖，必须实机连接；这属于需要用户明确授权的验证，不要自行启动程序 |
+
+XAML 能编译只说明语法正确：界面改动按下面「界面主题」一节在两套主题下实际运行确认。
 
 程序是单实例的（命名互斥体 `Local\MikuN2N.SingleInstance`），第二次启动只弹一个消息框后退出。
 
 ## 代码地图
 
-入口在根目录：`App.xaml.cs`（启动/主题/单实例/托盘/日志清理接线，并负责把旧格式设置就地升级）、`MainWindow.xaml.cs`（主界面与接线）、`SettingsWindow.xaml.cs`（常规/关于/节点三个页签）、`NodeEditDialog.xaml.cs`（单个节点的表单）、`CloseBehaviorDialog.xaml.cs`、`ConflictingProcessDialog.xaml.cs`。`Models/` 是数据模型，其中 `SupernodeNode` 是一个节点的「名称 + 服务器地址 + 小组名称」。
+入口在根目录：`App.xaml.cs`（启动/主题/单实例/托盘/日志清理接线，并负责把旧格式设置就地升级）、`MainWindow.xaml.cs`（主界面与接线）、`SettingsWindow.xaml.cs`（常规/关于/节点三个页签）、`NodeEditDialog.xaml.cs`（单个节点的表单）、`CloseBehaviorDialog.xaml.cs`、`ConflictingProcessDialog.xaml.cs`、`LogUploadConsentDialog.xaml.cs`（诊断上传授权弹窗，只在测试包里出现）。`Models/` 是数据模型，其中 `SupernodeNode` 是一个节点的「名称 + 服务器地址 + 小组名称」。
 
-`Services/` 一览（`Runtime/` 下是与发布包一起分发的第三方二进制与说明；`tools/` 是本地验证与实验脚本；`tools/natpunch/` 是打洞算法的独立参考实现）：
+`Services/` 一览（`Runtime/` 下是与发布包一起分发的第三方二进制与说明；`tools/` 是本地验证与实验脚本；`tools/natpunch/` 是打洞算法的独立参考实现，`tools/offline-tests/` 是客户端侧的离线回归工程，跑法见上面「构建与运行」）：
 
 | 文件 | 职责 |
 |---|---|
@@ -40,6 +51,9 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 | `AppIconService.cs` | 运行时用 `DrawingVisual` → `RenderTargetBitmap` 生成图标，并设置进程 AppUserModelID 以正确分组任务栏 |
 | `BuildIdentity.cs` | 从程序集元数据（informational version，回退 assembly version）解析显示版本，供主界面/设置/托盘提示读取 |
 | `EasterEggManager.cs` + `EasterEggVisualController.cs` | 自包含的彩蛋（设置里的老虎机 → 飞虫/蜘蛛追逐动画 → 彩虹 jackpot），与连通性逻辑无关，推理核心行为时可直接跳过 |
+| `TestBuildProfile.cs` | 私有测试包内嵌的配置（批次、节点、上传地址、证书指纹、STUN 观察者）；读不到该资源时返回 null，普通构建因此不创建任何诊断会话 |
+| `TestDiagnosticsSession.cs` | 诊断会话：按 64 MiB 滚动分段记录与脱敏，按 128 KiB 分块上传；不重连即可继续记录或恢复上传，状态经 `IsRecording`/`UploadAllowed` 暴露给界面 |
+| `DiagnosticUploadConsent.cs` | 把「始终允许」绑定成「当前节点 + 接收地址 + 证书指纹」的 SHA256；节点编辑、删除、切换都会使其失效 |
 
 ### EdgeController 不变量
 
@@ -65,12 +79,14 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 - 应用版本由 `MikuN2N.csproj` 的 `<BaseVersion>` 和 `<BuildNumber>` 组成，格式为 `0.5.8-1`、`0.5.8-2`，不再追加时间戳。每次交付新的测试包或发布包前将构建序号加一；同一交付的编译重试不加号。`BaseVersion` 变化时序号重置为 `1`。显示处一律经 `Services/BuildIdentity.cs` 读取。重建原生 edge 前运行 `tools/sync-native-version.ps1 -PatchedSource <源码目录>`，使原生构建标识与本次版本一致；单独替换 edge 时仍显示实际运行二进制报告的标识，不用客户端版本冒充。IPv6 兼容性按握手协议代次判断，不按构建号是否相同判断。
 - 本仓库按开源发布对待：节点地址、小组名称、联机密钥与个人机器路径只允许出现在 `*.local.md`（已被 gitignore）里，不要写进代码、默认值、测试脚本或受版本控制的文档。
 - `Runtime/` 分发第三方二进制（n3n edge、TAP-Windows 安装器）及其 GPLv3 许可证与源码归档 `n3n-3.4.4-source.zip`。改动打包内容时保持许可证与源码可得性义务完整，规则见 `Runtime/README.txt`。
+- 每交付一版就打一个提交，标题为 `0.5.8-2: <本版做了什么>`，正文写改动与理由，并用同名 tag 标记该提交（`0.5.8-1`、`0.5.8-2`）。审阅某一版改了什么，直接 `git diff <上一版>..<这一版>`，不要靠解压发布包逐文件比对。原生侧改动在 `n3n-build` 仓库用同样的粒度提交与打 tag。
+- 每轮的发布包、离线测试日志、验证 JSON 与改动前快照留在 `artifacts/<版本>/`（不进版本控制）。审阅、发布核对或追查历史版本时先看那里的 `*-validation.json` 与 `*-tests*.log`；要对照上一版源码就看 `before/`。
 
 ## 边缘补丁与打洞算法
 
 `Runtime/n3n-edge.exe` 是本地修改版而非上游原版，这份补丁是本项目的核心工程贡献，也是合规的连接/互操作工程（面向自有 P2P 会话的 RFC 对齐 NAT 行为发现与打洞调度），不是安全绕过或逆向工具。
 
-**补丁清单的唯一权威来源是 `Runtime/README.txt`**（随发布包分发、按版本编号）。不要在本文件或其他地方再抄一份——已经出现过副本落后 18 项、并与 README 就冷却策略表述矛盾的情况。要看当前实际生效的行为读那份清单，不要依赖任何摘要。
+**补丁清单的唯一权威来源是 `Runtime/README.txt`**（随发布包分发、按版本编号）。不要在本文件或其他地方再抄一份——历史上那份副本长期落后于 README，并与它关于冷却策略的表述互相矛盾。要看当前实际生效的行为读那份清单，不要依赖任何摘要。
 
 改动补丁、重建 `n3n-edge.exe` 或调试打洞失败时，加载 skill `mikun2n-edge-patch`，其中记录了源码树与构建工具链位置、n3n 与 natpunch 两侧的重建步骤，以及打洞算法的参考实现（`tools/natpunch/`）。
 
@@ -79,4 +95,6 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 - `supernode/README.md`：自建 supernode 的完整步骤（装 n3n、跑安装脚本、填进客户端、联邦、排查）。
 - `docs/FEDERATION.md`：多 supernode 联邦的设计、测试部署与已知边界（当前暂缓推进）。
 - `docs/故障排查.md`、`docs/P2P打洞融合方案.md`、`docs/NATPUNCH-V7阶段总结.md`：打洞与中继问题的历史排查结论与方案。
+- `docs/IPV6-TRANSPORT.md`：IPv6 实验传输的分层契约（尺寸发现、分片、回退边界与已知限制）。
+- `supernode/DIAGNOSTICS.md`、`supernode/TRAFFIC.md`：诊断接收端与流量统计的部署、口径和限制。
 - `docs/V7*.md`、`docs/第*测试.md`、`docs/打洞测试*.md`：逐轮实测日志，只在需要查证某次现场数据时读。

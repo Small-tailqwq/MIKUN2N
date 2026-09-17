@@ -18,8 +18,10 @@ patched 源码树与工具链都在仓库外，路径因机器而异，不要写
 | `$PatchedSource` | n3n 3.4.4 patched 源码树 | 与 MikuN2N 仓库同级的 `n3n-build\n3n-3.4.4-patched` |
 | `$ToolchainBin` | MinGW-w64 的 `bin` 目录（默认不在 PATH 上） | `%USERPROFILE%\mingw64\mingw64\bin` |
 
-`n3n-build/` 是独立 git 仓库，不在 MikuN2N 仓库内，也不随仓库分发；里面有
-`n3n-edge.exe.original-backup`、`backups/` 与 `pre-0.4.*` 快照。
+`n3n-build/` 是独立 git 仓库，不在 MikuN2N 仓库内，也不随仓库分发。它按版本提交并打同名 tag
+（`0.5.8-1`、`0.5.8-2`）：看原生改动用 `git diff <上一版>..<这一版>`，不要再解压
+`Runtime/n3n-3.4.4-source.zip` 逐文件比对。仓库里另有 `n3n-edge.exe.original-backup` 与
+`backups/`（改动前的原始二进制与快照，已被 gitignore）。
 
 - 打洞算法参考实现：`tools/natpunch/`（Windows UDP NAT4 打洞实验工具 v7.x，C 源码 + 协调服务器 + 日志分析），edge 侧的 bank 模型、cone 逃逸、fast/volatile 判定都从它移植或对齐
 - 打包产物：`Runtime/n3n-edge.exe`、`Runtime/n3n-3.4.4-source.zip`、`Runtime/README.txt`
@@ -39,6 +41,7 @@ patched 源码树与工具链都在仓库外，路径因机器而异，不要写
    ```
 
    Windows 目标需要在 `config.mak` 的 `CFLAGS` 里保留 `-std=gnu17`（当前为 `-g -O2 -std=gnu17`），否则随包的旧 `src/win32/getopt.c` 在当前 GCC 的 C23 默认标准下编译失败。
+   构建完先跑离线回归：`tools/tests-ipv6.exe`（方向性尺寸、短 ACK 绑定、分片乱序/重复/过期/重叠、错误会话与端点拒绝、大探测丢失后保活仍在、EMSGSIZE 与瞬态失败）与 `tests-wire`（wire 编解码）。它们通过只说明协议层正确，不代替双端实机。
 3. 把新二进制拷到 `Runtime/n3n-edge.exe`，并在 `Runtime/README.txt` 的编号补丁清单末尾追加一条：版本前缀 + 问题现象（含实测数据）+ 改动点 + 影响范围。清单要写"为什么"，不要逐行复述代码。
 4. 重新打包源码：把 patched 源码树的源码（不含 `.o`、`.exe` 等构建产物）打成 `Runtime/n3n-3.4.4-source.zip`，替换旧文件。GPLv3 要求分发二进制时提供对应源码，归档必须与刚发布的二进制同源——打包后用字节数或哈希核对 `src/edge_utils.c`、`src/management.c` 等关键文件在归档与源码树中一致。
 5. 客户端侧的配套改动（管理方法、界面文案、设置项）在 MikuN2N 仓库里完成，并实际运行程序验证连接行为。
@@ -58,7 +61,7 @@ gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.1.exe natpunch.c -lws2_32
 
 ## 不要在别处复制补丁清单
 
-补丁清单的唯一权威来源是 `Runtime/README.txt`，它随发布包分发、按版本编号。`AGENTS.md` 只保留指针，不再维护副本——历史上那份副本落后了 19 项，并与 README 就冷却策略的表述互相矛盾。
+补丁清单的唯一权威来源是 `Runtime/README.txt`，它随发布包分发、按版本编号。`AGENTS.md` 只保留指针，不再维护副本——历史上那份副本长期落后于 README，并与它关于冷却策略的表述互相矛盾。
 
 ## 读什么
 
@@ -66,4 +69,5 @@ gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.1.exe natpunch.c -lws2_32
 - 打洞算法的设计与实测策略：`tools/natpunch/README.md`
 - 多 supernode 联邦（含测试节点、部署方式、已知偏差）：`docs/FEDERATION.md`
 - 现场故障排查结论与历代方案：`docs/故障排查.md`、`docs/P2P打洞融合方案.md`、`docs/NATPUNCH-V7阶段总结.md`
+- 某轮交付包含什么、验证到什么程度：`artifacts/<版本>/`（`*-validation.json`、`*-tests*.log`、`使用说明.txt`，不进版本控制）
 - 逐轮实测数据：`docs/V7*.md`、`docs/第*测试.md`、`docs/打洞测试*.md`
