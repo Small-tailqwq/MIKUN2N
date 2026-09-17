@@ -281,6 +281,22 @@
      expose directional limits and fragment counters. Offline tests cover sizes,
      reordering, duplicates, expiry, wrong sessions/endpoints and socket errors.
 
+ 48. 0.5.8-3: Correct diagnostics and bound duplicate delivery under load.
+     Remove obsolete oversize_fallback counters, the duplicate ipv6_tx_udp_bytes
+     alias and generation-derived ipv6_fragmentation flag. Keep the checked
+     outbound size and peer-advertised receive ceiling for API/raw diagnostic
+     consumers; the latter is not a reverse-path measurement. Replace the
+     64-entry/time-based completed-ID cache with a 1024-ID sliding replay window:
+     aged-out IDs stay rejected during an active fragment stream, so sustained
+     traffic cannot reopen duplicate delivery. The two-second idle expiry remains
+     compatible with older generation-3 senders. New sender IDs survive peer
+     recreation within the edge session. Reassembly storage is allocated only when an edge first
+     accepts a valid fragment and freed on session/peer teardown; supernodes do
+     not allocate these buffers. IPV6_DONTFRAG failures emit ordinary warnings.
+     Native regressions are built by make and cover high-rate ID reuse, bounded
+     reordering, fragmentation, session changes and lazy allocation lifecycle.
+     IPv6 wire generation remains 3, compatible with 0.5.8-2.
+
 构建要求：Windows 目标需要在 CFLAGS 中带上 `-std=gnu17`（随包的旧 src/win32/getopt.c 在本
 工具链的 C23 默认标准下编译不过），并带上 `-ffile-prefix-map=<构建路径>=<占位路径>`，把调试
 信息里的绝对路径映射掉。曾经发布的二进制内嵌了构建机的用户名与目录结构（`Users/<name>/.../

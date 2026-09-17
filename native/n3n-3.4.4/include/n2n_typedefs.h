@@ -664,6 +664,7 @@ struct n3n_runtime_data {
     SOCKET mikun2n_ipv6_socket;
     n2n_sock_t mikun2n_ipv6_address;
     uint64_t mikun2n_ipv6_token;
+    uint64_t mikun2n_ipv6_datagram_id; /* Session-wide: peer expiry must not reuse IDs. */
     uint64_t mikun2n_ipv6_refresh_ms;
     n2n_sock_t mikun2n_ipv6_mapped_address;
     uint64_t mikun2n_ipv6_mapped_ms;

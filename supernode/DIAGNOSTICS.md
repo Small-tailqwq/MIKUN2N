@@ -4,6 +4,22 @@ The private test build defaults to **每次询问** on each manual connection. D
 
 The main window can stop uploading or resume diagnostic recording/uploading without restarting the client, edge, or connection. Resume follows the selected consent mode and starts a new segment; refused/revoked records are never replayed. Each connection retains at most four 64 MiB segments (256 MiB) locally, rotating its oldest segment when full. Storage errors pause recording with a visible recovery action. Receiver outages retry within those bounds; lost unacknowledged segments are reported as incomplete delivery. Disconnect/exit attempts a final flush for at most eight seconds. A later connection never uploads earlier files.
 
+A segment rejected with 409 (sequence/content conflict) or 410 (expired) is
+abandoned for upload immediately. Three consecutive 507 capacity responses also
+abandon that segment, then back off for 30 seconds; 409/410 use a three-second
+backoff to avoid rapid rotation if every new segment is rejected. Other network
+failures retain the immutable chunk for idempotent retry within the normal rolling
+limit. A newer segment can proceed; if the current segment was rejected, the
+client starts a fresh segment. Local files remain subject to their existing quota
+and retention. `upload_segment_abandoned` records the segment, HTTP status and
+unacknowledged bytes, and the UI marks delivery incomplete. These transitions
+preserve consent and never re-enable an upload after revocation.
+
+The receiver's expired-ID set is in memory. After a restart, a retry of a nonzero
+chunk from an already evicted segment can return 409 instead of 410; both statuses
+now take the same client recovery path. No server update or extra server state is
+needed for this fix.
+
 Records include UTC, a monotonic offset, batch/session/event identifiers, build and edge hashes, network interface addresses, NAT results, peer transport/latency, connection changes and raw edge diagnostic events. IPv6 diagnostics describe address selection, candidate refreshes, probe sends and matched PONG RTT, expirations, send failures, rejection counters and traffic totals. They do not capture packet payloads, keys, passwords, unrelated files or historical logs. Known session credentials and the local user-profile path are redacted from diagnostic string fields. These records still contain personal network metadata and nicknames; the consent dialog describes that scope.
 
 The current clients use IPv6 wire generation 3 with directional size discovery and bounded fragmentation; see [IPv6 transport](../docs/IPV6-TRANSPORT.md). `pong_matched` reports checked bytes, the peer's receive lease and `data_ready`; `data_path_ready` marks DATA selection. `data_fragmented` and periodic fragment/reassembly counters distinguish larger-packet handling from actual fallback. `version_mismatch` leaves generation 1/2 clients on IPv4. `peer_readiness_expired`, path expiry and hard send failures record real fallback. Scan pause/resume events explain stopped IPv4 punch counters while IPv6 is stable. No supernode wire update is needed; both clients need generation 3.

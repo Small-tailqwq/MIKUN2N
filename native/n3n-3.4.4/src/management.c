@@ -805,9 +805,7 @@ static void jsonrpc_get_edges_row (strbuf_t **reply, struct peer_info *peer, con
                 "\"mode\":\"%s\","
                 "\"transport\":\"%s\","
                 "\"ipv6_rtt_ms\":%u,"
-                "\"ipv6_tx_udp_bytes\":%u,"
                 "\"ipv6_peer_rx_udp_bytes\":%u,"
-                "\"ipv6_fragmentation\":%s,"
                 "\"ipv6_checked_udp_bytes\":%u,"
                 "\"ipv6_wire_version\":%u,"
                 "\"peer_ipv6_wire_version\":%u,"
@@ -841,9 +839,7 @@ static void jsonrpc_get_edges_row (strbuf_t **reply, struct peer_info *peer, con
                 mode,
                 ipv6 ? "ipv6" : "ipv4",
                 ipv6 ? peer->mikun2n_ipv6_rtt_ms : 0,
-                ipv6 ? peer->mikun2n_ipv6_path_bytes : 0,
                 peer->mikun2n_ipv6_peer_rx_limit,
-                peer->mikun2n_ipv6_wire_version == 3 ? "true" : "false",
                 ipv6 ? peer->mikun2n_ipv6_path_bytes : 0,
                 MIKUN2N_IPV6_WIRE_VERSION,
                 peer->mikun2n_ipv6_wire_version,

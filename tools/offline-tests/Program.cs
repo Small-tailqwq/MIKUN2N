@@ -81,12 +81,65 @@ using(var row = JsonDocument.Parse(reader.ReadToEnd().Split('\n',StringSplitOpti
 await session.DisposeAsync();
 Console.WriteLine("PASS: no requests before consent, redaction, no refused/revoked backlog, bounded rotation, in-session resume");
 
+foreach (var statusCode in new[] { 409, 410, 507 })
+{
+    var handler = new SegmentRejector(statusCode);
+    var retryDelays = new ConcurrentQueue<TimeSpan>();
+    var recovery = new TestDiagnosticsSession(profile, true, "", _ => { }, Path.Combine(root,"recovery-"+statusCode),
+        () => handler, (delay, token) => { retryDelays.Enqueue(delay); return Task.Delay(1,token); });
+    await handler.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    var blockedPath = recovery.LogPath;
+    if (statusCode == 409)
+    {
+        // Reproduce an old pending segment with a newer segment already waiting.
+        var gate = typeof(TestDiagnosticsSession).GetField("_gate",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(recovery)!;
+        lock(gate) typeof(TestDiagnosticsSession).GetMethod("Rotate",BindingFlags.Instance|BindingFlags.NonPublic)!
+            .Invoke(recovery,["test_next_segment"]);
+        recovery.Write("next_segment_marker",new { });
+    }
+    handler.Release.TrySetResult();
+    await handler.NextSegment.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    Check(handler.RejectedRequests == (statusCode == 507 ? 3 : 1), "bounded rejected-chunk retries");
+    Check(recovery.IsRecording && recovery.UploadAllowed && File.Exists(blockedPath), "skip preserves local logging and valid consent");
+    if(statusCode == 507) Check(retryDelays.Contains(TimeSpan.FromSeconds(30)),"capacity failure backs off after skipping");
+    await recovery.StopUploadAsync();
+    var requestsAfterStop = handler.Requests;
+    recovery.Write("after_recovery_revocation",new { }); await Task.Delay(100);
+    Check(handler.Requests == requestsAfterStop,"recovery cannot bypass revocation");
+    await recovery.DisposeAsync();
+}
+Console.WriteLine("PASS: old-segment 409, current-segment 410/507 recovery, bounded retries/backoff and revocation");
+
 sealed class FakeUpload(ConcurrentQueue<string> delivered) : HttpMessageHandler
 {
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         delivered.Enqueue(await request.Content!.ReadAsStringAsync(cancellationToken));
+        return new HttpResponseMessage(HttpStatusCode.Created);
+    }
+}
+
+sealed class SegmentRejector(int statusCode) : HttpMessageHandler
+{
+    public readonly TaskCompletionSource FirstRequest = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public readonly TaskCompletionSource NextSegment = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private string? _blockedId;
+    public int RejectedRequests, Requests;
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token)
+    {
+        Requests++;
+        var id = request.RequestUri!.Segments[^2];
+        _blockedId ??= id;
+        if(id == _blockedId)
+        {
+            RejectedRequests++;
+            FirstRequest.TrySetResult();
+            await Release.Task.WaitAsync(token);
+            return new HttpResponseMessage((HttpStatusCode)statusCode);
+        }
+        NextSegment.TrySetResult();
         return new HttpResponseMessage(HttpStatusCode.Created);
     }
 }

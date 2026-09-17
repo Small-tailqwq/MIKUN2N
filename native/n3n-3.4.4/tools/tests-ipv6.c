@@ -44,7 +44,7 @@ static struct peer_info *ab, *ba;
 static n2n_sock_t addr_a, addr_b;
 static void setup(void) {
     a = calloc(1,sizeof(*a)); b = calloc(1,sizeof(*b));
-    ab = calloc(1,sizeof(*ab)); ba = calloc(1,sizeof(*ba));
+    ab = peer_info_malloc(null_mac); ba = peer_info_malloc(null_mac);
     assert(a && b && ab && ba);
     addr_a.family = addr_b.family = AF_INET6; addr_a.port = addr_b.port = 50001;
     addr_a.addr.v6[0] = addr_b.addr.v6[0] = 0x26;
@@ -94,6 +94,7 @@ int main(void) {
     assert(sock_equal(&ab->mikun2n_ipv6_path_address,&addr_b));
     puts("PASS: same-session candidate refresh preserves checked mapping and size");
 
+    assert(!ba->mikun2n_ipv6_reassembly);
     sent_count=0; ab->mikun2n_ipv6_path_bytes=1232;
     assert(mikun2n_ipv6_send(a,ab,original,sizeof(original),1100)==1 && sent_count==2);
     assert(sent_packets[0].size<=1232 && sent_packets[1].size<=1232);
@@ -104,10 +105,24 @@ int main(void) {
     assert(deliver(0,b,&addr_a,1113,out)==0 && deliver(1,b,&addr_a,1114,out)==0);
     puts("PASS: oversized DATA stays IPv6, reorder, duplicates, exact reassembly");
 
-    memset(&ba->mikun2n_ipv6_reassembly,0,sizeof(ba->mikun2n_ipv6_reassembly));
+    struct peer_info replacement={0};
+    memcpy(replacement.mac_addr,ab->mac_addr,6);
+    replacement.mikun2n_ipv6_token=ab->mikun2n_ipv6_token;
+    replacement.mikun2n_ipv6_path_address=addr_b;
+    replacement.mikun2n_ipv6_seen_ms=1000;
+    replacement.mikun2n_ipv6_valid_until_ms=replacement.mikun2n_ipv6_peer_ready_until_ms=7000;
+    replacement.mikun2n_ipv6_path_bytes=1232;
+    uint64_t previous_id=ipv6_get_u64(sent_packets[0].bytes+33);
+    sent_count=0;
+    assert(mikun2n_ipv6_send(a,&replacement,original,sizeof(original),1150));
+    assert(ipv6_get_u64(sent_packets[0].bytes+33)>previous_id);
+    assert(!deliver(0,b,&addr_a,1151,out) && deliver(1,b,&addr_a,1152,out)==sizeof(original));
+    puts("PASS: recreating a sender peer does not reuse fragment IDs");
+
+    memset(ba->mikun2n_ipv6_reassembly,0,sizeof(*ba->mikun2n_ipv6_reassembly));
     assert(deliver(0,b,&addr_a,1200,out)==0);
     assert(deliver(1,b,&addr_a,3201,out)==0);
-    memset(&ba->mikun2n_ipv6_reassembly,0,sizeof(ba->mikun2n_ipv6_reassembly));
+    memset(ba->mikun2n_ipv6_reassembly,0,sizeof(*ba->mikun2n_ipv6_reassembly));
     assert(deliver(0,b,&addr_a,3300,out)==0);
     sent_packets[0].bytes[IPV6_FRAGMENT_HEADER]^=1;
     assert(deliver(0,b,&addr_a,3301,out)==0);
@@ -123,6 +138,19 @@ int main(void) {
     assert(!mikun2n_ipv6_reassemble(&state,3001,9,1342,0,original,10,out));
     assert(state.slots[0].id==9);
     puts("PASS: bounded memory, range rejection, expired-slot reuse");
+
+    memset(&state,0,sizeof(state));
+    for(uint64_t id=1;id<=1200;id++)
+        assert(mikun2n_ipv6_reassemble(&state,4000,id,10,0,original,10,out)==10);
+    for(uint64_t id=1;id<=1200;id++)
+        assert(!mikun2n_ipv6_reassemble(&state,4001,id,10,0,original,10,out));
+    assert(mikun2n_ipv6_reassemble(&state,9000,1,10,0,original,10,out)==10);
+    assert(!mikun2n_ipv6_reassemble(&state,9000,1,10,0,original,10,out));
+    assert(mikun2n_ipv6_reassemble(&state,9001,1300,10,0,original,10,out)==10);
+    assert(mikun2n_ipv6_reassemble(&state,9001,1250,10,0,original,10,out)==10);
+    assert(!mikun2n_ipv6_reassemble(&state,9002,1250,10,0,original,10,out));
+    printf("PASS: 1200 datagrams cannot reopen duplicates; in-window reorder; peer=%u bytes, lazy assembly=%u bytes\n",
+           (unsigned)sizeof(*ab),(unsigned)sizeof(state));
 
     uint64_t token=ba->mikun2n_ipv6_token;ba->mikun2n_ipv6_token++;
     assert(deliver(0,b,&addr_a,3400,out)==0);ba->mikun2n_ipv6_token=token;
@@ -162,10 +190,12 @@ int main(void) {
     assert(!ab->mikun2n_ipv6_valid_until_ms);
     ab->mikun2n_ipv6_valid_until_ms=8199;assert(!mikun2n_ipv6_send(a,ab,original,100,8200));
     puts("PASS: EMSGSIZE fragments in place, transient queue failure preserves path, base-size failure and real expiry fall back");
+    ab->mikun2n_ipv6_reassembly=calloc(1,sizeof(*ab->mikun2n_ipv6_reassembly));
+    assert(ab->mikun2n_ipv6_reassembly);
     refreshed.mikun2n_ipv6_token++;
     mikun2n_ipv6_update_peer(ab,&refreshed,8300);
-    assert(!ab->mikun2n_ipv6_path_bytes && !ab->mikun2n_ipv6_peer_ready_until_ms);
+    assert(!ab->mikun2n_ipv6_path_bytes && !ab->mikun2n_ipv6_peer_ready_until_ms && !ab->mikun2n_ipv6_reassembly);
     puts("PASS: a new peer session revokes previous path proof");
-    HASH_DEL(a->known_peers,ab);HASH_DEL(b->known_peers,ba);free(ab);free(ba);free(a);free(b);
+    HASH_DEL(a->known_peers,ab);HASH_DEL(b->known_peers,ba);peer_info_free(ab);peer_info_free(ba);free(a);free(b);
     return 0;
 }

@@ -1,7 +1,7 @@
 # IPv6 transport, generation 3
 
-The 0.5.8-2 test build uses a bounded, two-level packetization-layer discovery
-profile based on [RFC 8899](https://www.rfc-editor.org/rfc/rfc8899.html). This is
+The 0.5.8-3 test build uses a bounded, two-level packetization-layer discovery
+profile using [RFC 8899](https://www.rfc-editor.org/rfc/rfc8899.html) principles. This is
 not a full general-purpose DPLPMTUD state machine. It separates each direction's
 confirmed UDP size from peer receive capacity, path liveness and larger probes.
 
@@ -9,7 +9,9 @@ confirmed UDP size from peer receive capacity, path liveness and larger probes.
 
 - The base UDP payload is 1232 bytes (1280 minus IPv6/UDP headers). Initial
   probes and keepalives use that size. `IPV6_DONTFRAG` must succeed before the
-  transport starts; probes cannot silently pass through IP fragmentation.
+  transport starts; probes cannot silently pass through IP fragmentation. Failure
+  disables the IPv6 transport and emits a warning even without detailed diagnostics.
+  The Windows test build supports this socket option; other targets must provide it.
 - A 47-byte PONG acknowledges the exact probe size, challenge and source
   endpoint, session and wire generation. Its short size avoids imposing the
   reverse direction's MTU on the measured forward direction. Maximum accepted
@@ -39,19 +41,38 @@ fragment uses the existing session header plus a 64-bit datagram ID, 16-bit tota
 length and 16-bit offset (45-byte header). Reassembly precedes normal n3n decoding;
 the inner encrypted n3n bytes are unchanged. No application payload is logged.
 
-Each peer has four assembly slots, each bounded by the n3n packet buffer (2048
-bytes), with a fixed two-second deadline. Identical overlapping bytes are ignored;
-conflicting overlap or inconsistent total length discards that assembly. The most
-recent 64 completed IDs are suppressed for up to two seconds. Invalid ranges,
+An edge allocates four assembly slots on the first valid fragment from a checked
+peer, each bounded by the n3n packet buffer (2048 bytes), with a fixed two-second
+deadline. The allocation is freed on session reset or peer destruction; the shared
+peer structure contains only a pointer, so supernodes allocate no assembly buffers. Identical overlapping bytes are ignored;
+conflicting overlap or inconsistent total length discards that assembly. A 1024-ID
+sliding bitmap rejects completed/expired/conflicting assemblies. IDs older than the
+window remain rejected even after bitmap reuse while fragments keep arriving;
+high rates cannot reopen duplicate delivery. After two seconds without accepted
+fragments the history expires, retaining generation-3 compatibility with older
+senders that recreate a peer record and reset its IDs. Duplicates delayed beyond
+that idle expiry can be delivered, as with the previous two-second cache. New
+senders allocate IDs across the edge session so recreating a peer cannot reuse
+an ID. Legitimate reordering beyond the sequence window is dropped. Invalid ranges,
 unknown sessions, wrong endpoints and excess concurrent assemblies are rejected.
 Fragment loss drops the original UDP datagram; there is no reliability/retry layer.
-A partially sent datagram is never replayed simultaneously through IPv4.
+A partially sent datagram is never replayed simultaneously through IPv4. With
+independent fragment loss probability p, a datagram split into two fragments
+succeeds with probability (1-p)^2; correlated loss can differ. Fragmentation thus
+increases datagram loss, and this transport deliberately adds no retransmissions.
 
 Native summaries expose sent/received fragments, completed assemblies, transient
-drops, path expiry and send errors. `get_edges` exposes `ipv6_tx_udp_bytes`,
-`ipv6_peer_rx_udp_bytes` and `ipv6_fragmentation` alongside the native build and
-wire generation. These are transport limits, not an instruction to change a
-router's IPv6 MTU or the peer's TAP setting.
+drops, path expiry and send errors. Obsolete `oversize_fallback_*` counters were
+removed in 0.5.8-3; inspect fragment counts and actual path/send-failure events.
+
+`get_edges` retains `ipv6_checked_udp_bytes` (the confirmed outbound UDP limit,
+zero while inactive) and `ipv6_peer_rx_udp_bytes` (the peer's advertised receive
+ceiling). The redundant `ipv6_tx_udp_bytes` alias and generation-derived
+`ipv6_fragmentation` flag were removed. The receive ceiling is not a measurement
+of the reverse path. Obtain the reverse outbound limit from the other endpoint's
+row. These fields are intended for local API consumers and consented raw
+`management_edges` diagnostic records; the friend UI does not display them.
+They do not change a router's IPv6 MTU or the peer's TAP setting.
 
 ## Compatibility and validation
 
@@ -64,16 +85,16 @@ enabled in the private profile.
 `tools/tests-ipv6.c` in the corresponding native source intercepts all sends and
 checks asymmetric sizes, loss, reorder, duplicates, expiry, bounded buffers,
 session/endpoint rejection and local send errors without opening sockets. Build
-the native tree first, then compile it with the same includes and static libraries
-as `tests-wire` (on Windows add `-lnetapi32 -lws2_32 -liphlpapi`). Run the native
-wire check too. The source archive contains both checks.
+the native tree first; `make` now builds this check alongside `tests-wire`. Run
+both executables. The source archive contains both checks.
 
 Client/receiver offline checks:
 
 ```powershell
-dotnet run --project tools/offline-tests/OfflineTests.csproj -- artifacts/offline-logs
+dotnet run --project tools/offline-tests/OfflineTests.csproj -- "$env:TEMP/MikuN2N-offline-check"
 python tools/offline-tests/test_server.py artifacts/offline-server
 ```
 
-These checks passed for 0.5.8-2. They do not establish real public-IPv6/NAT66
+These checks passed for 0.5.8-3, including 1200 completed datagrams followed by
+duplicate replay, in-window reordering and session reset/freeing. They do not establish real public-IPv6/NAT66
 behavior, both WPF themes, sustained game traffic or a reduction in the cloud bill.

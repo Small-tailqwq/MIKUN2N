@@ -165,8 +165,8 @@ struct peer_info {
     uint64_t mikun2n_ipv6_search_ms;
     uint8_t mikun2n_ipv6_large_failures;
     uint16_t mikun2n_ipv6_peer_rx_limit;
-    uint64_t mikun2n_ipv6_datagram_id;
-    mikun2n_ipv6_reassembly_t mikun2n_ipv6_reassembly;
+    /* Allocated only by an edge receiving fragments; supernodes never allocate it. */
+    mikun2n_ipv6_reassembly_t *mikun2n_ipv6_reassembly;
 
     UT_hash_handle hh;     /* makes this structure hashable */
 };

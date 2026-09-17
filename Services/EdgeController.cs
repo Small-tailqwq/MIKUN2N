@@ -1212,14 +1212,16 @@ public sealed partial class EdgeController : IAsyncDisposable
                 }
                 else
                 {
-                    if (run.RegistrationFailureStartedMs != 0)
-                        run.Diagnostics?.Write("registration_recovered", new { run = run.SessionId,
-                            elapsedMs = Environment.TickCount64 - run.RegistrationFailureStartedMs });
+                    long failureStarted;
                     lock (_stateGate)
                     {
+                        failureStarted = run.RegistrationFailureStartedMs;
                         run.RegistrationFailureStartedMs = 0;
                         run.RegistrationBlocked = false;
                     }
+                    if (failureStarted != 0)
+                        run.Diagnostics?.Write("registration_recovered", new { run = run.SessionId,
+                            elapsedMs = Environment.TickCount64 - failureStarted });
                 }
 
                 run.AddressConflict = false;
@@ -1394,17 +1396,20 @@ public sealed partial class EdgeController : IAsyncDisposable
         }
     }
 
-    private static bool KeepRegistrationRenewal(EdgeRun run, SupernodeState state)
+    private bool KeepRegistrationRenewal(EdgeRun run, SupernodeState state)
     {
-        if (run.RegistrationFailureStartedMs == 0)
+        lock (_stateGate)
         {
-            run.RegistrationFailureStartedMs = Environment.TickCount64;
-            run.Diagnostics?.Write("registration_wait_started", new { run = run.SessionId,
-                established = run.LogConfirmedConnected, state = state.ToString(), graceMs = 10000 });
+            if (run.RegistrationFailureStartedMs == 0)
+            {
+                run.RegistrationFailureStartedMs = Environment.TickCount64;
+                run.Diagnostics?.Write("registration_wait_started", new { run = run.SessionId,
+                    established = run.LogConfirmedConnected, state = state.ToString(), graceMs = 10000 });
+            }
+            return run.LogConfirmedConnected && !run.AddressConflict &&
+                   state == SupernodeState.Waiting &&
+                   Environment.TickCount64 - run.RegistrationFailureStartedMs < 10000;
         }
-        return run.LogConfirmedConnected && !run.AddressConflict &&
-               state == SupernodeState.Waiting &&
-               Environment.TickCount64 - run.RegistrationFailureStartedMs < 10000;
     }
 
     private void PublishWaitingState(EdgeRun run, SupernodeState state, int failedPolls)
@@ -2073,6 +2078,8 @@ public sealed partial class EdgeController : IAsyncDisposable
             if (!_wantConnected || !ReferenceEquals(_currentRun, run)) return;
             if (snapshot.State == ConnectionState.Connected &&
                 (run.RegistrationBlocked || run.AddressConflict || run.Process.HasExited)) return;
+            // Preserve snapshot order under the state lock. Subscribers must enqueue
+            // UI work without synchronously waiting for this controller or its tasks.
             Publish(snapshot);
         }
     }
@@ -2738,7 +2745,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         public volatile bool LogConfirmedConnected;
         public volatile bool ManagementUnavailable;
         public volatile bool RegistrationBlocked;
-        public long RegistrationFailureStartedMs;
+        public long RegistrationFailureStartedMs; // Read and written only under _stateGate.
         public DateTimeOffset NextManagementRetryAt { get; set; }
         public DateTimeOffset NextNatPollAt { get; set; }
         public bool NatPollWarningLogged { get; set; }

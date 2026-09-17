@@ -51,7 +51,6 @@ static int ipv6_diagnostics (void) {
 #define V6_DIAG(format, ...) do { if(ipv6_diagnostics()) \
     traceEvent(TRACE_NORMAL, "MikuN2N v6diag " format, ##__VA_ARGS__); } while(0)
 static uint64_t diag_rx_data, diag_tx_data, diag_rx_bytes, diag_tx_bytes;
-static uint64_t diag_oversize_packets, diag_oversize_bytes;
 static uint64_t diag_tx_fragments, diag_rx_fragments, diag_reassembled, diag_transient_drops;
 static uint64_t diag_reject_header, diag_reject_peer, diag_reject_pong, diag_reject_inactive;
 
@@ -406,7 +405,8 @@ static void ipv6_refresh (struct n3n_runtime_data *eee) {
         peer->mikun2n_ipv6_search_ms = 0;
         peer->mikun2n_ipv6_peer_rx_limit = 0;
         peer->mikun2n_ipv6_large_failures = 0;
-        memset(&peer->mikun2n_ipv6_reassembly, 0, sizeof(peer->mikun2n_ipv6_reassembly));
+        free(peer->mikun2n_ipv6_reassembly);
+        peer->mikun2n_ipv6_reassembly = NULL;
         peer->mikun2n_ipv6_probe_bytes = 0;
         peer->mikun2n_ipv6_path_bytes = 0;
         peer->mikun2n_ipv6_peer_ready_until_ms = 0;
@@ -421,7 +421,8 @@ static void ipv6_refresh (struct n3n_runtime_data *eee) {
         peer->mikun2n_ipv6_search_ms = 0;
         peer->mikun2n_ipv6_peer_rx_limit = 0;
         peer->mikun2n_ipv6_large_failures = 0;
-        memset(&peer->mikun2n_ipv6_reassembly, 0, sizeof(peer->mikun2n_ipv6_reassembly));
+        free(peer->mikun2n_ipv6_reassembly);
+        peer->mikun2n_ipv6_reassembly = NULL;
         peer->mikun2n_ipv6_probe_bytes = 0;
         peer->mikun2n_ipv6_path_bytes = 0;
         peer->mikun2n_ipv6_peer_ready_until_ms = 0;
@@ -439,11 +440,14 @@ static void ipv6_refresh (struct n3n_runtime_data *eee) {
             setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&one, sizeof(one));
 #ifdef IPV6_DONTFRAG
             if(setsockopt(fd, IPPROTO_IPV6, IPV6_DONTFRAG, (const char *)&one, sizeof(one)) != 0) {
-                V6_DIAG("dontfrag_failed error=%d; size discovery unavailable, using IPv4", ipv6_socket_error());
+                int error = ipv6_socket_error();
+                traceEvent(TRACE_WARNING, "MikuN2N IPv6 disabled: IPV6_DONTFRAG failed (error=%d); using IPv4", error);
+                V6_DIAG("dontfrag_failed error=%d; size discovery unavailable, using IPv4", error);
                 closesocket(fd);
                 return;
             }
 #else
+            traceEvent(TRACE_WARNING, "MikuN2N IPv6 disabled: IPV6_DONTFRAG unavailable; using IPv4");
             V6_DIAG("dontfrag_unavailable; size discovery unavailable, using IPv4");
             closesocket(fd);
             return;
@@ -499,7 +503,8 @@ void mikun2n_ipv6_update_peer (struct peer_info *peer, const n2n_PEER_INFO_t *in
         peer->mikun2n_ipv6_search_ms = 0;
         peer->mikun2n_ipv6_peer_rx_limit = 0;
         peer->mikun2n_ipv6_large_failures = 0;
-        memset(&peer->mikun2n_ipv6_reassembly, 0, sizeof(peer->mikun2n_ipv6_reassembly));
+        free(peer->mikun2n_ipv6_reassembly);
+        peer->mikun2n_ipv6_reassembly = NULL;
         peer->mikun2n_ipv6_probe_bytes = 0;
         peer->mikun2n_ipv6_path_bytes = 0;
         peer->mikun2n_ipv6_peer_ready_until_ms = 0;
@@ -675,12 +680,11 @@ void mikun2n_ipv6_tick (struct n3n_runtime_data *eee, uint64_t now_ms) {
     if(!eee->conf.mikun2n_ipv6 || !eee->conf.allow_p2p || eee->conf.connect_tcp || !eee->last_sup)
         return;
     if(now_ms >= eee->mikun2n_ipv6_refresh_ms) {
-        V6_DIAG("summary monotonic_ms=%llu tx_packets=%llu tx_bytes=%llu rx_packets=%llu rx_bytes=%llu reject_header=%llu reject_peer=%llu reject_pong=%llu reject_inactive=%llu oversize_fallback_packets=%llu oversize_fallback_bytes=%llu tx_fragments=%llu rx_fragments=%llu reassembled=%llu transient_drops=%llu",
+        V6_DIAG("summary monotonic_ms=%llu tx_packets=%llu tx_bytes=%llu rx_packets=%llu rx_bytes=%llu reject_header=%llu reject_peer=%llu reject_pong=%llu reject_inactive=%llu tx_fragments=%llu rx_fragments=%llu reassembled=%llu transient_drops=%llu",
                 (unsigned long long)now_ms, (unsigned long long)diag_tx_data, (unsigned long long)diag_tx_bytes,
                 (unsigned long long)diag_rx_data, (unsigned long long)diag_rx_bytes,
                 (unsigned long long)diag_reject_header, (unsigned long long)diag_reject_peer,
                 (unsigned long long)diag_reject_pong, (unsigned long long)diag_reject_inactive,
-                (unsigned long long)diag_oversize_packets, (unsigned long long)diag_oversize_bytes,
                 (unsigned long long)diag_tx_fragments, (unsigned long long)diag_rx_fragments,
                 (unsigned long long)diag_reassembled, (unsigned long long)diag_transient_drops);
         eee->mikun2n_ipv6_refresh_ms = now_ms + 10000;
@@ -700,8 +704,8 @@ int mikun2n_ipv6_send (struct n3n_runtime_data *eee, struct peer_info *peer,
     if(!size || size > N2N_PKT_BUF_SIZE) return 0;
     unsigned budget = min(peer->mikun2n_ipv6_path_bytes, IPV6_RX_LIMIT);
     if(budget < IPV6_SAFE_UDP_SIZE) return 0;
-    uint64_t id = ++peer->mikun2n_ipv6_datagram_id;
-    if(!id) id = ++peer->mikun2n_ipv6_datagram_id;
+    uint64_t id = ++eee->mikun2n_ipv6_datagram_id;
+    if(!id) id = ++eee->mikun2n_ipv6_datagram_id;
     size_t offset = 0;
     int fragmented = size + IPV6_FRAME_SIZE > budget;
     if(fragmented && now_ms >= peer->mikun2n_ipv6_oversize_log_ms) {
@@ -867,7 +871,8 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
                 (unsigned)(probe - peer->mikun2n_ipv6_probes), IPV6_PATH_TTL_MS, peer->mikun2n_ipv6_path_bytes, ready_ms, active);
         probe->challenge = 0;
         if(changed) {
-            memset(&peer->mikun2n_ipv6_reassembly, 0, sizeof(peer->mikun2n_ipv6_reassembly));
+            if(peer->mikun2n_ipv6_reassembly)
+                memset(peer->mikun2n_ipv6_reassembly->slots, 0, sizeof(peer->mikun2n_ipv6_reassembly->slots));
             peer->mikun2n_ipv6_search_ms = now_ms + 1000;
             peer->mikun2n_ipv6_large_failures = 0;
             // Late replies to the old mapping must not switch the route back.
@@ -884,7 +889,14 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
     } else if(kind == IPV6_FRAGMENT && size > IPV6_FRAGMENT_HEADER &&
               ipv6_receive_ready(eee, peer, now_ms) && sock_equal(sender, &peer->mikun2n_ipv6_path_address)) {
         diag_rx_fragments++;
-        size_t assembled = mikun2n_ipv6_reassemble(&peer->mikun2n_ipv6_reassembly, now_ms,
+        uint16_t total = ipv6_read_u16(data + 41), offset = ipv6_read_u16(data + 43);
+        if(!challenge || !total || total > N2N_PKT_BUF_SIZE || offset >= total ||
+           size - IPV6_FRAGMENT_HEADER > (size_t)(total - offset)) return 0;
+        if(!peer->mikun2n_ipv6_reassembly) {
+            peer->mikun2n_ipv6_reassembly = calloc(1, sizeof(*peer->mikun2n_ipv6_reassembly));
+            if(!peer->mikun2n_ipv6_reassembly) return 0;
+        }
+        size_t assembled = mikun2n_ipv6_reassemble(peer->mikun2n_ipv6_reassembly, now_ms,
                 challenge, ipv6_read_u16(data + 41), ipv6_read_u16(data + 43),
                 data + IPV6_FRAGMENT_HEADER, size - IPV6_FRAGMENT_HEADER, data);
         if(assembled) { diag_reassembled++; diag_rx_data++; diag_rx_bytes += assembled; }
