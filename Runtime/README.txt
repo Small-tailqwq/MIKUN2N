@@ -266,6 +266,21 @@
      build, including after a manual Runtime replacement. Native release identity
      is generated from the client BaseVersion/BuildNumber before compilation.
 
+ 47. 0.5.8-2: Separate directional IPv6 packet-size discovery from liveness and
+     add bounded tunnel fragmentation (IPv6 wire generation 3). In 0.5.8-1,
+     incoming 1232-byte peer probes repeatedly erased a confirmed 1418-byte path,
+     sending 1383-byte wrapped DATA through IPv4/pSp. Base keepalives now remain
+     independent of larger searches; short acknowledgements bind the exact probe
+     size to its challenge, session and endpoint. Three larger-probe losses lower
+     packetization to 1232 and back off larger searches without invalidating the
+     base path. Oversized n3n datagrams use up to four bounded assembly slots per
+     peer, fixed two-second expiry, range/overlap checks and duplicate suppression.
+     Transient send queue pressure preserves the path; partial sends never replay
+     over IPv4. Candidate refreshes preserve same-session checked mappings.
+     Generation 1/2 peers use IPv4 compatibility. Native diagnostics and management
+     expose directional limits and fragment counters. Offline tests cover sizes,
+     reordering, duplicates, expiry, wrong sessions/endpoints and socket errors.
+
 构建要求：Windows 目标需要在 CFLAGS 中带上 `-std=gnu17`（随包的旧 src/win32/getopt.c 在本
 工具链的 C23 默认标准下编译不过），并带上 `-ffile-prefix-map=<构建路径>=<占位路径>`，把调试
 信息里的绝对路径映射掉。曾经发布的二进制内嵌了构建机的用户名与目录结构（`Users/<name>/.../

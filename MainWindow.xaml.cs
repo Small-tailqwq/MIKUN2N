@@ -75,10 +75,17 @@ public partial class MainWindow : Window
         NicknameBox.Text = _settings.Nickname;
         RememberKeyBox.IsChecked = _settings.RememberKey;
         KeyBox.Password = _settingsStore.LoadKey(_settings);
+        if (TestBuildProfile.Current is { } currentProfile &&
+            _settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow &&
+            !DiagnosticUploadConsent.IsAllowed(_settings, currentProfile))
+        {
+            DiagnosticUploadConsent.Invalidate(_settings);
+            _settingsStore.Save(_settings, KeyBox.Password);
+        }
         if (TestBuildProfile.Current is not null)
         {
             DiagnosticsPanel.Visibility = Visibility.Visible;
-            DiagnosticsStatusText.Text = "连接前会询问日志上传授权";
+            RefreshDiagnosticPreferenceStatus();
         }
         RefreshNodeBox();
 
@@ -147,7 +154,10 @@ public partial class MainWindow : Window
     {
         if (NodeBox.SelectedItem is SupernodeNode node)
         {
+            if (_settings.ActiveNodeId != node.Id)
+                DiagnosticUploadConsent.Invalidate(_settings);
             _settings.ActiveNodeId = node.Id;
+            RefreshDiagnosticPreferenceStatus();
         }
         RefreshNodeSummary();
     }
@@ -277,13 +287,14 @@ public partial class MainWindow : Window
             await FinishDiagnosticsAsync();
             if (TestBuildProfile.Current is { } profile)
             {
-                var consent = new LogUploadConsentDialog(profile) { Owner = this }.ShowDialog() == true;
+                var consent = ResolveDiagnosticConsent(profile);
                 if (_closeInProgress) return;
                 try
                 {
                     _diagnostics = new TestDiagnosticsSession(profile, consent, KeyBox.Password,
-                        status => Dispatcher.InvokeAsync(() => DiagnosticsStatusText.Text = status));
+                        status => Dispatcher.InvokeAsync(() => UpdateDiagnosticStatus(status)));
                     StopUploadButton.IsEnabled = consent;
+                    ResumeDiagnosticsButton.IsEnabled = true;
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
@@ -324,11 +335,52 @@ public partial class MainWindow : Window
             await diagnostics.StopUploadAsync();
     }
 
+    private bool ResolveDiagnosticConsent(TestBuildProfile profile)
+    {
+        if (_settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny) return false;
+        if (DiagnosticUploadConsent.IsAllowed(_settings, profile)) return true;
+        if (_settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow)
+        {
+            DiagnosticUploadConsent.Invalidate(_settings);
+            SaveSettings();
+        }
+        return new LogUploadConsentDialog(profile, node: _settings.ActiveNode) { Owner = this }.ShowDialog() == true;
+    }
+
+    private void RefreshDiagnosticPreferenceStatus()
+    {
+        if (_diagnostics is not null || TestBuildProfile.Current is not { } profile) return;
+        DiagnosticsStatusText.Text = _settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny
+            ? "已设为始终拒绝上传，日志仅保存在本机"
+            : DiagnosticUploadConsent.IsAllowed(_settings, profile)
+                ? "当前节点已授权自动上传，可随时停止"
+                : "连接前会询问日志上传授权；更改节点后须重新授权";
+    }
+
+    private void UpdateDiagnosticStatus(string status)
+    {
+        DiagnosticsStatusText.Text = status;
+        StopUploadButton.IsEnabled = _diagnostics?.UploadAllowed == true;
+        ResumeDiagnosticsButton.IsEnabled = _diagnostics is not null && !_closeInProgress;
+    }
+
+    private async void ResumeDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        if (_diagnostics is not { } diagnostics || TestBuildProfile.Current is not { } profile) return;
+        ResumeDiagnosticsButton.IsEnabled = false;
+        var consent = ResolveDiagnosticConsent(profile);
+        if (_closeInProgress) return;
+        await diagnostics.ResumeAsync(consent);
+        ResumeDiagnosticsButton.IsEnabled = ReferenceEquals(_diagnostics, diagnostics);
+        StopUploadButton.IsEnabled = diagnostics.UploadAllowed;
+    }
+
     private async Task FinishDiagnosticsAsync()
     {
         var diagnostics = _diagnostics;
         _diagnostics = null;
         StopUploadButton.IsEnabled = false;
+        ResumeDiagnosticsButton.IsEnabled = false;
         if (diagnostics is not null)
             await diagnostics.DisposeAsync();
     }
@@ -450,7 +502,9 @@ public partial class MainWindow : Window
             Theme = _settings.Theme,
             CloseBehavior = _settings.CloseBehavior,
             LogRetentionDays = _settings.LogRetentionDays,
-            ExperimentalIpv6P2p = _settings.ExperimentalIpv6P2p
+            ExperimentalIpv6P2p = _settings.ExperimentalIpv6P2p,
+            DiagnosticUpload = _settings.DiagnosticUpload,
+            DiagnosticUploadTarget = _settings.DiagnosticUploadTarget
         };
         _settingsStore.Save(_settings, KeyBox.Password);
     }
@@ -777,7 +831,7 @@ public partial class MainWindow : Window
     /// <summary>Node list tab inside the settings dialog; index follows the XAML tab order.</summary>
     private const int NodesTabIndex = 0;
 
-    private void OpenSettings(int initialTabIndex = 1)
+    private async void OpenSettings(int initialTabIndex = 1)
     {
         ShowFromTray();
         var window = new SettingsWindow(_settings, initialTabIndex, _edgeController.IsRunning) { Owner = this };
@@ -790,6 +844,10 @@ public partial class MainWindow : Window
         _settings.CloseBehavior = window.SelectedCloseBehavior;
         _settings.LogRetentionDays = window.SelectedLogRetentionDays;
         _settings.ExperimentalIpv6P2p = window.SelectedExperimentalIpv6P2p;
+        var previousUpload = _settings.DiagnosticUpload;
+        var previousTarget = _settings.DiagnosticUploadTarget;
+        _settings.DiagnosticUpload = window.SelectedDiagnosticUpload;
+        _settings.DiagnosticUploadTarget = window.SelectedDiagnosticUploadTarget;
         _settings.Nodes = window.EditedNodes;
         _settings.ActiveNodeId = window.SelectedNodeId;
         _settings.LegacyServer = null;
@@ -798,6 +856,16 @@ public partial class MainWindow : Window
         ((App)Application.Current).LogCleanup.Configure(_settings.LogRetentionDays);
         RefreshNodeBox();
         SaveSettings();
+        if (_diagnostics is { } diagnostics)
+        {
+            if (_settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny ||
+                (_settings.DiagnosticUpload == DiagnosticUploadPreference.Ask && previousUpload != _settings.DiagnosticUpload))
+                await diagnostics.StopUploadAsync();
+            else if (TestBuildProfile.Current is { } profile && DiagnosticUploadConsent.IsAllowed(_settings, profile) &&
+                     (previousUpload != _settings.DiagnosticUpload || previousTarget != _settings.DiagnosticUploadTarget))
+                await diagnostics.ResumeAsync(true);
+        }
+        RefreshDiagnosticPreferenceStatus();
     }
 
     private void ShowFromTray()

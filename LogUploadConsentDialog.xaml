@@ -5,19 +5,19 @@
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
         Background="{DynamicResource WindowBackground}">
   <StackPanel Margin="28">
-    <TextBlock Text="允许上传本次联机的诊断日志吗？" FontSize="21" FontWeight="Bold" TextWrapping="Wrap" />
+    <TextBlock x:Name="ConsentTitleText" Text="允许上传本次联机的诊断日志吗？" FontSize="21" FontWeight="Bold" TextWrapping="Wrap" />
     <TextBlock x:Name="DestinationText" Margin="0,16,0,12" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
     <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="10" Padding="16">
       <TextBlock TextWrapping="Wrap" LineHeight="24"
                  Text="日志包含昵称、设备会话编号、IP / MAC 地址、网卡与 NAT 状态、IPv6 探针往返、直连 / 中继变化和错误信息，用于对照双方的连接过程。不会采集游戏数据内容、联机密钥、密码或其他文件。" />
     </Border>
-    <TextBlock Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" LineHeight="23"
-               Text="同意后仅上传本次连接期间的新日志（含自动重连），由该服务器的管理员查看，服务器保留 24 小时。每次手动连接都会重新询问。你可以在主窗口随时停止上传；已经接收的日志仍按保留期清理。" />
+    <TextBlock x:Name="ConsentPolicyText" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" LineHeight="23"
+               Text="同意后仅上传本次连接授权后产生的新日志（含自动重连和日志轮转），由该服务器的管理员查看，最多保留 24 小时。本次选择不会保存为始终允许。你可以随时停止上传；已经接收的日志仍按保留期清理。" />
     <TextBlock Margin="0,10,0,20" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
                Text="拒绝或关闭此窗口仍可正常联机，日志只保存在本机。" />
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
       <Button Content="仅保存在本机" IsCancel="True" IsDefault="True" MinWidth="140" Margin="0,0,12,0" Click="Decline_Click" />
-      <Button Content="同意并上传本次日志" MinWidth="180" Click="Allow_Click" />
+      <Button x:Name="AllowButton" Content="同意并上传本次日志" MinWidth="180" Click="Allow_Click" />
     </StackPanel>
   </StackPanel>
 </Window>

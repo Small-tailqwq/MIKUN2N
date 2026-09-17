@@ -69,7 +69,21 @@ class Storage:
             if int(chunk) > 99999 or (int(chunk) > 0 and not (directory / f"{int(chunk)-1:08d}.jsonl").exists()):
                 return 409
             current = self.sizes.get(str(directory), 0)
-            if current + len(data) > MAX_SESSION or self.total + len(data) > MAX_TOTAL:
+            if current + len(data) > MAX_SESSION:
+                return 507
+            # New rolling segments replace the oldest retained segments when the
+            # global quota fills. Never evict the segment being appended here.
+            if self.total + len(data) > MAX_TOTAL:
+                candidates = [Path(p) for p in self.sizes if Path(p) != directory
+                              and Path(p).is_dir() and not Path(p).is_symlink()
+                              and (Path(p) / 'received.json').is_file()]
+                candidates.sort(key=lambda p: (p / 'received.json').stat().st_mtime)
+                for old in candidates:
+                    if self.total + len(data) <= MAX_TOTAL: break
+                    self.expired.add((old.parent.name, old.name))
+                    shutil.rmtree(old)
+                    self.total -= self.sizes.pop(str(old), 0)
+            if self.total + len(data) > MAX_TOTAL:
                 return 507
             if shutil.disk_usage(self.root).free < len(data) + 256 * 1024 * 1024:
                 return 507
@@ -201,7 +215,7 @@ def main():
             except OSError:
                 print("Diagnostics retention cleanup failed", flush=True)
     threading.Thread(target=cleanup, daemon=True).start()
-    print("Diagnostics receiver ready; TLS; retention=24h; cleanup=5m; limit=64MiB/session,2GiB/total", flush=True)
+    print("Diagnostics receiver ready; TLS; retention<=24h; cleanup=5m; rolling limit=64MiB/segment,2GiB/total", flush=True)
     server.serve_forever()
 
 

@@ -39,6 +39,10 @@ public partial class SettingsWindow : Window
     public ClosePreference SelectedCloseBehavior { get; private set; }
     public int SelectedLogRetentionDays { get; private set; }
     public bool SelectedExperimentalIpv6P2p { get; private set; }
+    public DiagnosticUploadPreference SelectedDiagnosticUpload { get; private set; }
+    public string SelectedDiagnosticUploadTarget { get; private set; } = string.Empty;
+    private DiagnosticUploadPreference _originalDiagnosticUpload;
+    private string _originalDiagnosticTarget = string.Empty;
     public List<SupernodeNode> EditedNodes { get; private set; } = [];
     public string SelectedNodeId { get; private set; } = string.Empty;
 
@@ -54,6 +58,15 @@ public partial class SettingsWindow : Window
         SelectedCloseBehavior = settings.CloseBehavior;
         SelectedLogRetentionDays = settings.LogRetentionDays;
         SelectedExperimentalIpv6P2p = settings.ExperimentalIpv6P2p;
+        _originalDiagnosticUpload = settings.DiagnosticUpload;
+        _originalDiagnosticTarget = settings.DiagnosticUploadTarget;
+        DiagnosticUploadBox.SelectedValue = settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow &&
+            TestBuildProfile.Current is { } consentProfile && !DiagnosticUploadConsent.IsAllowed(settings, consentProfile)
+                ? "Ask" : Enum.IsDefined(settings.DiagnosticUpload) ? settings.DiagnosticUpload.ToString() : "Ask";
+        DiagnosticUploadBox.IsEnabled = TestBuildProfile.Current is not null;
+        DiagnosticDestinationText.Text = TestBuildProfile.Current is { } diagnosticProfile
+            ? $"接收服务器：{new Uri(diagnosticProfile.UploadUrl).Authority}。授权绑定当前节点、接收地址及证书；编辑或切换节点后须重新授权。"
+            : "此版本未配置诊断接收端，日志仅保存在本机。";
         ExperimentalIpv6Box.IsChecked = settings.ExperimentalIpv6P2p;
         _connected = connected;
         _nodes = settings.Nodes
@@ -177,6 +190,7 @@ public partial class SettingsWindow : Window
         node.Name = dialog.Result.Name;
         node.Server = dialog.Result.Server;
         node.Community = dialog.Result.Community;
+        if (node.Id == _activeNodeId) InvalidateDiagnosticConsent();
         RefreshNodes(node.Id);
     }
 
@@ -209,6 +223,7 @@ public partial class SettingsWindow : Window
         _nodes.Remove(node);
         if (node.Id == _activeNodeId)
         {
+            InvalidateDiagnosticConsent();
             _activeNodeId = _nodes.Count > 0 ? _nodes[0].Id : string.Empty;
         }
         RefreshNodes();
@@ -221,8 +236,16 @@ public partial class SettingsWindow : Window
         {
             return;
         }
+        if (_activeNodeId != node.Id) InvalidateDiagnosticConsent();
         _activeNodeId = node.Id;
         RefreshNodes(node.Id);
+    }
+
+    private void InvalidateDiagnosticConsent()
+    {
+        _originalDiagnosticTarget = string.Empty;
+        if (DiagnosticUploadBox.SelectedValue?.ToString() == "AlwaysAllow")
+            DiagnosticUploadBox.SelectedValue = "Ask";
     }
 
     /// <summary>
@@ -305,6 +328,18 @@ public partial class SettingsWindow : Window
         }
 
         SelectedTheme = CurrentTheme();
+        SelectedDiagnosticUpload = Enum.TryParse<DiagnosticUploadPreference>(DiagnosticUploadBox.SelectedValue?.ToString(), out var upload)
+            ? upload : DiagnosticUploadPreference.Ask;
+        SelectedDiagnosticUploadTarget = string.Empty;
+        if (SelectedDiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow && TestBuildProfile.Current is { } profile)
+        {
+            var node = _nodes.FirstOrDefault(node => node.Id == _activeNodeId);
+            if (node is null) { SelectedDiagnosticUpload = DiagnosticUploadPreference.Ask; }
+            var target = DiagnosticUploadConsent.Target(profile, node);
+            if ((_originalDiagnosticUpload != DiagnosticUploadPreference.AlwaysAllow || _originalDiagnosticTarget != target) &&
+                node is not null && new LogUploadConsentDialog(profile, persistent: true, node: node) { Owner = this }.ShowDialog() != true) return;
+            SelectedDiagnosticUploadTarget = target;
+        }
         SelectedExperimentalIpv6P2p = ExperimentalIpv6Box.IsChecked == true;
         SelectedCloseBehavior = CloseTrayButton.IsChecked == true
             ? ClosePreference.MinimizeToTray

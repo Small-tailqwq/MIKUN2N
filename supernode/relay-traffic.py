@@ -87,11 +87,46 @@ def open_db(path):
         CREATE TABLE IF NOT EXISTS peers (
             community TEXT, mac TEXT, name TEXT, ip TEXT, seen INTEGER,
             PRIMARY KEY(community, mac));
+        CREATE TABLE IF NOT EXISTS host_previous (
+            interface TEXT PRIMARY KEY, generation TEXT, rx INTEGER, tx INTEGER);
+        CREATE TABLE IF NOT EXISTS host_hourly (
+            hour INTEGER, interface TEXT, rx INTEGER, tx INTEGER,
+            PRIMARY KEY(hour,interface));
     """)
     return db
 
 
-def collect(db, path):
+def collect_host(db, interface=None):
+    names = {interface} if interface else {
+        row.split()[0] for row in Path('/proc/net/route').read_text().splitlines()[1:]
+        if len(row.split()) >= 4 and row.split()[1] == '00000000'}
+    boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    sampled = int(time.time())
+    values = []
+    for name in sorted(names):
+        if not name or '/' in name or name in ('.', '..', 'lo'):
+            raise ValueError('invalid external interface')
+        root = Path('/sys/class/net') / name
+        generation = boot + ':' + (root / 'ifindex').read_text().strip()
+        values.append((name, generation, int((root / 'statistics/rx_bytes').read_text()),
+                       int((root / 'statistics/tx_bytes').read_text())))
+    with db:
+        for name, generation, rx, tx in values:
+            old = db.execute('SELECT generation,rx,tx FROM host_previous WHERE interface=?', (name,)).fetchone()
+            if old and old[0] == generation and rx >= old[1] and tx >= old[2]:
+                db.execute('''INSERT INTO host_hourly VALUES (?,?,?,?)
+                    ON CONFLICT(hour,interface) DO UPDATE SET rx=rx+excluded.rx,tx=tx+excluded.tx''',
+                           (sampled // 3600 * 3600, name, rx-old[1], tx-old[2]))
+            db.execute('INSERT OR REPLACE INTO host_previous VALUES (?,?,?,?)', (name,generation,rx,tx))
+        if values:
+            db.execute("INSERT OR IGNORE INTO state VALUES ('host_first_sample',?)", (str(sampled),))
+            db.execute("INSERT OR REPLACE INTO state VALUES ('host_last_sample',?)", (str(sampled),))
+        db.execute('DELETE FROM host_hourly WHERE hour < ?', (sampled // 3600 * 3600 - 30*86400,))
+
+
+def collect(db, path, interface=None):
+    # Host totals continue advancing even while n3n's management socket is down.
+    collect_host(db, interface)
     generation, meta, flows, peers = snapshot(path)
     sampled = meta["sampled_at"]
     hour = sampled // 3600 * 3600
@@ -155,24 +190,28 @@ def report(args):
     db = sqlite3.connect(Path(args.db).resolve().as_uri() + "?mode=ro", uri=True)
     with db:
         state = dict(db.execute("SELECT key,value FROM state"))
-        since = int(time.time() - args.hours * 3600) // 3600 * 3600
+        until = args.until or int(time.time()) + 1
+        since = args.since or (until - args.hours * 3600) // 3600 * 3600
+        if since >= until: raise ValueError('since must precede until')
         rows = [dict(zip(("community", "src", "dst", "kind", "bytes", "packets"), row)) for row in
                 db.execute("""SELECT community,src,dst,kind,SUM(bytes),SUM(packets)
-                    FROM hourly WHERE hour>=? GROUP BY community,src,dst,kind ORDER BY SUM(bytes) DESC""", (since,))]
+                    FROM hourly WHERE hour>=? AND hour<? GROUP BY community,src,dst,kind ORDER BY SUM(bytes) DESC""", (since,until))]
         labels = {(c, m): (n, ip) for c, m, n, ip in db.execute("SELECT community,mac,name,ip FROM peers")}
         hours = [dict(hour=utc(h), bytes=b, sends=p) for h, b, p in db.execute(
-            "SELECT hour,SUM(bytes),SUM(packets) FROM hourly WHERE hour>=? AND kind=0 GROUP BY hour", (since,))]
+            "SELECT hour,SUM(bytes),SUM(packets) FROM hourly WHERE hour>=? AND hour<? AND kind=0 GROUP BY hour", (since,until))]
+        host = [dict(interface=n, rx_bytes=rx, tx_bytes=tx) for n, rx, tx in db.execute(
+            'SELECT interface,SUM(rx),SUM(tx) FROM host_hourly WHERE hour>=? AND hour<? GROUP BY interface', (since,until))]
     db.close()
     for row in rows:
         row["category"] = KINDS[row["kind"]]
         for end in ("src", "dst"):
             row[end + "_name"], row[end + "_ip"] = labels.get((row["community"], row[end]), ("", ""))
     data = dict(since_utc=utc(since), last_sample_utc=utc(state.get("last_sample", 0)),
-                state=state, flows=rows, hourly=hours)
+                until_utc=utc(until), state=state, flows=rows, hourly=hours, host=host)
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return
-    print(f"Period: {data['since_utc']} .. {data['last_sample_utc']} (hour buckets, UTC)")
+    print(f"Period: {data['since_utc']} .. {data['until_utc']} (hour buckets, UTC)")
     print(f"Collection began: {utc(state.get('first_sample', 0))}; retained: 30 days")
     print(f"Last sample age: {max(0, int(time.time()) - int(state.get('last_sample', 0)))}s; "
           f"observed restarts: {state.get('restarts', 0)}; sampling gaps >180s: {state.get('sampling_gaps', 0)}")
@@ -182,6 +221,11 @@ def report(args):
     print(f"Control / framing / partial sends (approx): {size(max(0, totals[0] - sum(totals[k] for k in range(1, 6))))}")
     print(f"Failed sends: {sum(r['packets'] for r in rows if r['kind'] == -1)}; "
           f"tracked flows: {state.get('flow_count', 0)}/{state.get('flow_limit', 0)}")
+    print("\nHost interface totals (all processes; not a substitute for the cloud bill):")
+    if 'host_first_sample' in state:
+        print(f"Host coverage: {utc(state['host_first_sample'])} .. {utc(state['host_last_sample'])}; earlier traffic unavailable")
+    for item in host:
+        print(f"{item['interface']}: OUT {size(item['tx_bytes'])} ({item['tx_bytes']/1e9:.6f} GB), IN {size(item['rx_bytes'])}")
 
     def identity(row, end):
         text = " ".join(filter(None, (row[end + "_name"], row[end + "_ip"], row[end])))
@@ -207,11 +251,21 @@ def report(args):
             print(f"{hour['hour']} {size(hour['bytes']):>14} {hour['sends']} sends")
 
 
+def hour_timestamp(value):
+    parsed = dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    if parsed.tzinfo is None or parsed.minute or parsed.second or parsed.microsecond:
+        raise argparse.ArgumentTypeError('use an ISO timestamp at a whole hour with timezone, e.g. 2026-09-17T14:00:00+08:00')
+    return int(parsed.timestamp())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("collect", "report"))
     parser.add_argument("--db", default=DEFAULT_DB)
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
+    parser.add_argument("--interface", help="External interface; default: interfaces with an IPv4 default route")
+    parser.add_argument("--since", type=hour_timestamp, help="Inclusive hour boundary with timezone")
+    parser.add_argument("--until", type=hour_timestamp, help="Exclusive hour boundary with timezone")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--hours", type=int, default=24, choices=range(1, 721), metavar="1..720")
     parser.add_argument("--top", type=int, default=20)
@@ -234,7 +288,7 @@ def main():
         while not stop:
             start = time.monotonic()
             try:
-                collect(db, args.socket)
+                collect(db, args.socket, args.interface)
                 if args.once:
                     break
             except (OSError, ValueError, KeyError, RuntimeError, sqlite3.Error, http.client.HTTPException) as exc:

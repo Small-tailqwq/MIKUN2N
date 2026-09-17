@@ -7,6 +7,7 @@
 
 #ifndef _PEER_INFO_H_
 #define _PEER_INFO_H_
+#include "mikun2n_ipv6_frag.h"
 
 #include <n2n_typedefs.h>   // for n2n_mac_t, n2n_ip_subnet_t, n2n_desc_t, n2n_sock_t
 
@@ -161,6 +162,11 @@ struct peer_info {
     uint16_t mikun2n_ipv6_probe_bytes;
     uint16_t mikun2n_ipv6_path_bytes;
     uint64_t mikun2n_ipv6_oversize_log_ms;
+    uint64_t mikun2n_ipv6_search_ms;
+    uint8_t mikun2n_ipv6_large_failures;
+    uint16_t mikun2n_ipv6_peer_rx_limit;
+    uint64_t mikun2n_ipv6_datagram_id;
+    mikun2n_ipv6_reassembly_t mikun2n_ipv6_reassembly;
 
     UT_hash_handle hh;     /* makes this structure hashable */
 };

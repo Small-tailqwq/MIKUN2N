@@ -1184,9 +1184,14 @@ public sealed partial class EdgeController : IAsyncDisposable
                     run.ManagementUnavailable &&
                     DateTimeOffset.Now < run.NextManagementRetryAt)
                 {
-                    if (run.LogConfirmedConnected)
+                    if (run.LogConfirmedConnected && KeepRegistrationRenewal(run, SupernodeState.Waiting))
                     {
                         PublishLogConfirmedConnection(run);
+                    }
+                    else if (run.LogConfirmedConnected)
+                    {
+                        lock (_stateGate) run.RegistrationBlocked = true;
+                        PublishWaitingState(run, SupernodeState.Unknown, ++failedPolls);
                     }
                     continue;
                 }
@@ -1198,15 +1203,30 @@ public sealed partial class EdgeController : IAsyncDisposable
                 if (supernodeState != SupernodeState.Registered)
                 {
                     failedPolls++;
-                    PublishWaitingState(run, supernodeState, failedPolls);
-                    continue;
+                    if (!KeepRegistrationRenewal(run, supernodeState))
+                    {
+                        lock (_stateGate) run.RegistrationBlocked = true;
+                        PublishWaitingState(run, supernodeState, failedPolls);
+                        continue;
+                    }
+                }
+                else
+                {
+                    if (run.RegistrationFailureStartedMs != 0)
+                        run.Diagnostics?.Write("registration_recovered", new { run = run.SessionId,
+                            elapsedMs = Environment.TickCount64 - run.RegistrationFailureStartedMs });
+                    lock (_stateGate)
+                    {
+                        run.RegistrationFailureStartedMs = 0;
+                        run.RegistrationBlocked = false;
+                    }
                 }
 
                 run.AddressConflict = false;
                 // Registration went through, so the stale registration that forced a
                 // rotating MAC is gone; the next connect returns to the stable one.
                 _useRotatingMac = false;
-                failedPolls = 0;
+                if (supernodeState == SupernodeState.Registered) failedPolls = 0;
                 lock (_stateGate)
                 {
                     if (ReferenceEquals(_currentRun, run))
@@ -1331,9 +1351,14 @@ public sealed partial class EdgeController : IAsyncDisposable
                             run,
                             $"n3n Windows 管理接口暂时不可用，使用运行日志并继续重试：{exception.Message}");
                     }
-                    if (run.LogConfirmedConnected)
+                    if (run.LogConfirmedConnected && KeepRegistrationRenewal(run, SupernodeState.Waiting))
                     {
                         PublishLogConfirmedConnection(run);
+                    }
+                    else
+                    {
+                        lock (_stateGate) run.RegistrationBlocked = true;
+                        PublishWaitingState(run, SupernodeState.Unknown, ++failedPolls);
                     }
                     continue;
                 }
@@ -1369,6 +1394,19 @@ public sealed partial class EdgeController : IAsyncDisposable
         }
     }
 
+    private static bool KeepRegistrationRenewal(EdgeRun run, SupernodeState state)
+    {
+        if (run.RegistrationFailureStartedMs == 0)
+        {
+            run.RegistrationFailureStartedMs = Environment.TickCount64;
+            run.Diagnostics?.Write("registration_wait_started", new { run = run.SessionId,
+                established = run.LogConfirmedConnected, state = state.ToString(), graceMs = 10000 });
+        }
+        return run.LogConfirmedConnected && !run.AddressConflict &&
+               state == SupernodeState.Waiting &&
+               Environment.TickCount64 - run.RegistrationFailureStartedMs < 10000;
+    }
+
     private void PublishWaitingState(EdgeRun run, SupernodeState state, int failedPolls)
     {
         if (run.AddressConflict)
@@ -1381,7 +1419,7 @@ public sealed partial class EdgeController : IAsyncDisposable
             return;
         }
 
-        if (state == SupernodeState.Waiting)
+        if (run.LogConfirmedConnected)
         {
             PublishIfCurrent(run, new ConnectionSnapshot(
                 ConnectionState.Reconnecting,
@@ -1723,6 +1761,8 @@ public sealed partial class EdgeController : IAsyncDisposable
 
     private void PublishConnected(EdgeRun run, string? virtualIp = null)
     {
+        // Discovery and UPnP callbacks must not hide a sustained registration failure.
+        if (run.RegistrationBlocked || run.AddressConflict || run.Process.HasExited) return;
         var now = DateTimeOffset.Now;
         var typed = run.Peers
             .Select(peer => (peer, mode: GetPeerConnectionMode(run, peer)))
@@ -2028,8 +2068,11 @@ public sealed partial class EdgeController : IAsyncDisposable
 
     private void PublishIfCurrent(EdgeRun run, ConnectionSnapshot snapshot)
     {
-        if (IsCurrentRun(run))
+        lock (_stateGate)
         {
+            if (!_wantConnected || !ReferenceEquals(_currentRun, run)) return;
+            if (snapshot.State == ConnectionState.Connected &&
+                (run.RegistrationBlocked || run.AddressConflict || run.Process.HasExited)) return;
             Publish(snapshot);
         }
     }
@@ -2694,6 +2737,8 @@ public sealed partial class EdgeController : IAsyncDisposable
         public volatile bool AddressConflict;
         public volatile bool LogConfirmedConnected;
         public volatile bool ManagementUnavailable;
+        public volatile bool RegistrationBlocked;
+        public long RegistrationFailureStartedMs;
         public DateTimeOffset NextManagementRetryAt { get; set; }
         public DateTimeOffset NextNatPollAt { get; set; }
         public bool NatPollWarningLogged { get; set; }

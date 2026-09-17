@@ -28,7 +28,10 @@
 
 #define IPV6_SAFE_UDP_SIZE 1232 /* IPv6 minimum MTU minus IPv6/UDP headers. */
 #define IPV6_FRAME_SIZE 41
-#define IPV6_CONTROL_SIZE 43 /* PONG carries remaining receive-readiness milliseconds. */
+#define IPV6_CONTROL_SIZE 47 /* readiness, receive capacity, acknowledged probe size */
+#define IPV6_RX_LIMIT 1452 /* no IP fragmentation on a 1500-byte link */
+#define IPV6_FRAGMENT 4
+#define IPV6_FRAGMENT_HEADER 45
 #define IPV6_PING 1
 #define IPV6_PONG 2
 #define IPV6_DATA 3
@@ -49,6 +52,7 @@ static int ipv6_diagnostics (void) {
     traceEvent(TRACE_NORMAL, "MikuN2N v6diag " format, ##__VA_ARGS__); } while(0)
 static uint64_t diag_rx_data, diag_tx_data, diag_rx_bytes, diag_tx_bytes;
 static uint64_t diag_oversize_packets, diag_oversize_bytes;
+static uint64_t diag_tx_fragments, diag_rx_fragments, diag_reassembled, diag_transient_drops;
 static uint64_t diag_reject_header, diag_reject_peer, diag_reject_pong, diag_reject_inactive;
 
 static int ipv6_socket_error (void) {
@@ -399,6 +403,10 @@ static void ipv6_refresh (struct n3n_runtime_data *eee) {
         peer->mikun2n_ipv6_valid_until_ms = 0;
         peer->mikun2n_ipv6_next_probe_ms = 0;
         peer->mikun2n_ipv6_next_learn_ms = 0;
+        peer->mikun2n_ipv6_search_ms = 0;
+        peer->mikun2n_ipv6_peer_rx_limit = 0;
+        peer->mikun2n_ipv6_large_failures = 0;
+        memset(&peer->mikun2n_ipv6_reassembly, 0, sizeof(peer->mikun2n_ipv6_reassembly));
         peer->mikun2n_ipv6_probe_bytes = 0;
         peer->mikun2n_ipv6_path_bytes = 0;
         peer->mikun2n_ipv6_peer_ready_until_ms = 0;
@@ -410,6 +418,10 @@ static void ipv6_refresh (struct n3n_runtime_data *eee) {
         peer->mikun2n_ipv6_valid_until_ms = 0;
         peer->mikun2n_ipv6_next_probe_ms = 0;
         peer->mikun2n_ipv6_next_learn_ms = 0;
+        peer->mikun2n_ipv6_search_ms = 0;
+        peer->mikun2n_ipv6_peer_rx_limit = 0;
+        peer->mikun2n_ipv6_large_failures = 0;
+        memset(&peer->mikun2n_ipv6_reassembly, 0, sizeof(peer->mikun2n_ipv6_reassembly));
         peer->mikun2n_ipv6_probe_bytes = 0;
         peer->mikun2n_ipv6_path_bytes = 0;
         peer->mikun2n_ipv6_peer_ready_until_ms = 0;
@@ -426,7 +438,15 @@ static void ipv6_refresh (struct n3n_runtime_data *eee) {
             fill_sockaddr((struct sockaddr *)&local, sizeof(local), &address);
             setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&one, sizeof(one));
 #ifdef IPV6_DONTFRAG
-            setsockopt(fd, IPPROTO_IPV6, IPV6_DONTFRAG, (const char *)&one, sizeof(one));
+            if(setsockopt(fd, IPPROTO_IPV6, IPV6_DONTFRAG, (const char *)&one, sizeof(one)) != 0) {
+                V6_DIAG("dontfrag_failed error=%d; size discovery unavailable, using IPv4", ipv6_socket_error());
+                closesocket(fd);
+                return;
+            }
+#else
+            V6_DIAG("dontfrag_unavailable; size discovery unavailable, using IPv4");
+            closesocket(fd);
+            return;
 #endif
 #ifdef _WIN32
             u_long nonblocking = 1;
@@ -467,13 +487,19 @@ void mikun2n_ipv6_update_peer (struct peer_info *peer, const n2n_PEER_INFO_t *in
             mikun2n_ipv6_public(&info->mikun2n_ipv6_address),
             peer->mikun2n_ipv6_token != info->mikun2n_ipv6_token, sock_to_cstr(ipv4, &peer->sock),
             mikun2n_ipv6_candidate(&info->mikun2n_ipv6_address), info->mikun2n_ipv6_token != 0);
-    if(peer->mikun2n_ipv6_token != info->mikun2n_ipv6_token ||
-       !sock_equal(&peer->mikun2n_ipv6_address, &info->mikun2n_ipv6_address)) {
+    uint64_t token = mikun2n_ipv6_candidate(&info->mikun2n_ipv6_address) ? info->mikun2n_ipv6_token : 0;
+    // A refreshed rendezvous candidate cannot revoke an independently checked
+    // mapping in the same session. A new session must discard all path proof.
+    if(peer->mikun2n_ipv6_token != token) {
         peer->mikun2n_ipv6_wire_version = 0;
         peer->mikun2n_ipv6_valid_until_ms = 0;
         memset(peer->mikun2n_ipv6_probes, 0, sizeof(peer->mikun2n_ipv6_probes));
         peer->mikun2n_ipv6_next_probe_ms = 0;
         peer->mikun2n_ipv6_next_learn_ms = 0;
+        peer->mikun2n_ipv6_search_ms = 0;
+        peer->mikun2n_ipv6_peer_rx_limit = 0;
+        peer->mikun2n_ipv6_large_failures = 0;
+        memset(&peer->mikun2n_ipv6_reassembly, 0, sizeof(peer->mikun2n_ipv6_reassembly));
         peer->mikun2n_ipv6_probe_bytes = 0;
         peer->mikun2n_ipv6_path_bytes = 0;
         peer->mikun2n_ipv6_peer_ready_until_ms = 0;
@@ -482,8 +508,7 @@ void mikun2n_ipv6_update_peer (struct peer_info *peer, const n2n_PEER_INFO_t *in
         peer->mikun2n_ipv6_attempts = 0;
     }
     peer->mikun2n_ipv6_address = info->mikun2n_ipv6_address;
-    peer->mikun2n_ipv6_token = mikun2n_ipv6_candidate(&info->mikun2n_ipv6_address)
-                                 ? info->mikun2n_ipv6_token : 0;
+    peer->mikun2n_ipv6_token = token;
     peer->mikun2n_ipv6_seen_ms = now_ms;
 }
 
@@ -508,29 +533,31 @@ static int ipv6_message_too_large (int error) {
 #endif
 }
 
+static int ipv6_transient_error(int error) {
+#ifdef _WIN32
+    return error == WSAEWOULDBLOCK || error == WSAENOBUFS || error == WSAEINTR;
+#else
+    return error == EAGAIN || error == EWOULDBLOCK || error == ENOBUFS || error == EINTR;
+#endif
+}
+
 static void ipv6_lower_probe (struct peer_info *peer, uint64_t now_ms, const char *reason) {
     macstr_t mac;
-    V6_DIAG("probe_budget_lowered peer=%s old_bytes=%u bytes=%u reason=%s",
-            macaddr_str(mac, peer->mac_addr), peer->mikun2n_ipv6_probe_bytes,
-            IPV6_SAFE_UDP_SIZE, reason);
-    peer->mikun2n_ipv6_probe_bytes = IPV6_SAFE_UDP_SIZE;
-    peer->mikun2n_ipv6_valid_until_ms = 0;
-    peer->mikun2n_ipv6_path_bytes = 0;
-    peer->mikun2n_ipv6_peer_ready_until_ms = 0;
-    peer->mikun2n_ipv6_ready_report_ms = 0;
-    memset(peer->mikun2n_ipv6_probes, 0, sizeof(peer->mikun2n_ipv6_probes));
-    peer->mikun2n_ipv6_attempts = 0;
-    peer->mikun2n_ipv6_next_probe_ms = now_ms;
+    V6_DIAG("tx_size_reduced peer=%s old_bytes=%u bytes=%u reason=%s path_preserved=1",
+            macaddr_str(mac, peer->mac_addr), peer->mikun2n_ipv6_path_bytes, IPV6_SAFE_UDP_SIZE, reason);
+    peer->mikun2n_ipv6_path_bytes = IPV6_SAFE_UDP_SIZE;
+    peer->mikun2n_ipv6_large_failures = 0;
+    peer->mikun2n_ipv6_search_ms = now_ms + 60000;
+    for(int i = 0; i < MIKUN2N_IPV6_PROBES; ++i)
+        if(peer->mikun2n_ipv6_probes[i].bytes > IPV6_SAFE_UDP_SIZE)
+            peer->mikun2n_ipv6_probes[i].challenge = 0;
 }
 
 static int ipv6_probe_send (struct n3n_runtime_data *eee, struct peer_info *peer,
-                            const n2n_sock_t *destination, uint64_t now_ms, const char *reason) {
+                            const n2n_sock_t *destination, uint64_t now_ms, size_t size, const char *reason) {
     if(!mikun2n_ipv6_public(destination))
         return 0;
     uint8_t packet[N2N_PKT_BUF_SIZE] = {0};
-    if(!peer->mikun2n_ipv6_probe_bytes)
-        peer->mikun2n_ipv6_probe_bytes = eee->conf.mtu + 128;
-    size_t size = peer->mikun2n_ipv6_probe_bytes;
     if(size < IPV6_CONTROL_SIZE || size > sizeof(packet))
         return 0;
     // Triggered checks share the window without replacing an outstanding challenge.
@@ -550,22 +577,21 @@ static int ipv6_probe_send (struct n3n_runtime_data *eee, struct peer_info *peer
     probe->destination = *destination;
     probe->bytes = (uint16_t)size;
     ipv6_header(eee, peer, packet, IPV6_PING, probe->challenge);
+    packet[43] = IPV6_RX_LIMIT >> 8;
+    packet[44] = IPV6_RX_LIMIT & 0xff;
     ssize_t sent = ipv6_send_raw(eee, destination, packet, size);
     macstr_t mac;
     n2n_sock_str_t text;
     if(sent != (ssize_t)size) {
         int error = sent < 0 ? ipv6_socket_error() : 0;
-        if(ipv6_message_too_large(error) && size > IPV6_SAFE_UDP_SIZE) {
+        probe->challenge = 0;
+        if(ipv6_message_too_large(error) && size > IPV6_SAFE_UDP_SIZE)
             ipv6_lower_probe(peer, now_ms, "send_message_too_large");
-            return ipv6_probe_send(eee, peer, destination, now_ms, "mtu_retry");
+        else if(!ipv6_transient_error(error) && size <= IPV6_SAFE_UDP_SIZE) {
+            peer->mikun2n_ipv6_valid_until_ms = 0;
+            peer->mikun2n_ipv6_next_probe_ms = now_ms + 10000;
+            peer->mikun2n_ipv6_next_learn_ms = now_ms + 10000;
         }
-        peer->mikun2n_ipv6_valid_until_ms = 0;
-        memset(peer->mikun2n_ipv6_probes, 0, sizeof(peer->mikun2n_ipv6_probes));
-        peer->mikun2n_ipv6_attempts = 6;
-        peer->mikun2n_ipv6_next_probe_ms = now_ms + 10000;
-        peer->mikun2n_ipv6_next_learn_ms = now_ms + 10000;
-        traceEvent(TRACE_WARNING, "MikuN2N IPv6 probe send failed error=%d peer=%s; using IPv4, retry in 10s",
-                   error, macaddr_str(mac, peer->mac_addr));
         V6_DIAG("probe_send_failed peer=%s address=%s reason=%s error=%d",
                 macaddr_str(mac, peer->mac_addr), sock_to_cstr(text, destination), reason, error);
         return 0;
@@ -609,28 +635,25 @@ static void ipv6_tick_peers (struct n3n_runtime_data *eee, struct peer_info *pee
         if(!peer->mikun2n_ipv6_token ||
            now_ms - peer->mikun2n_ipv6_seen_ms >= IPV6_REPORT_TTL_MS)
             continue;
-        int expired = 0, outstanding = 0;
         for(int i = 0; i < MIKUN2N_IPV6_PROBES; i++) {
             mikun2n_ipv6_probe_t *probe = &peer->mikun2n_ipv6_probes[i];
-            if(!probe->challenge)
-                continue;
-            if(now_ms - probe->sent_ms > IPV6_PATH_TTL_MS) {
+            if(probe->challenge && now_ms - probe->sent_ms > IPV6_PATH_TTL_MS) {
                 probe->challenge = 0;
-                expired = 1;
-            } else {
-                outstanding++;
+                if(probe->bytes > IPV6_SAFE_UDP_SIZE && ++peer->mikun2n_ipv6_large_failures >= 3)
+                    ipv6_lower_probe(peer, now_ms, "three_large_probe_losses");
             }
         }
-        if(expired && !outstanding && !ipv6_receive_ready(eee, peer, now_ms)) {
-            macstr_t mac;
-            traceEvent(TRACE_WARNING, "MikuN2N IPv6 probes timed out after %ums peer=%s; using IPv4",
-                       IPV6_PATH_TTL_MS, macaddr_str(mac, peer->mac_addr));
-            if(peer->mikun2n_ipv6_probe_bytes > IPV6_SAFE_UDP_SIZE)
-                ipv6_lower_probe(peer, now_ms, "probe_timeout");
+        if(ipv6_receive_ready(eee, peer, now_ms) && now_ms >= peer->mikun2n_ipv6_search_ms) {
+            unsigned goal = min(IPV6_RX_LIMIT, eee->conf.mtu + 128);
+            if(peer->mikun2n_ipv6_peer_rx_limit) goal = min(goal, peer->mikun2n_ipv6_peer_rx_limit);
+            peer->mikun2n_ipv6_search_ms = now_ms + 10000;
+            if(goal > IPV6_SAFE_UDP_SIZE)
+                ipv6_probe_send(eee, peer, &peer->mikun2n_ipv6_path_address, now_ms, goal, "size_search");
         }
         if(now_ms < peer->mikun2n_ipv6_next_probe_ms)
             continue;
-        const n2n_sock_t *destination = mikun2n_ipv6_public(&peer->mikun2n_ipv6_path_address)
+        const n2n_sock_t *destination = ipv6_receive_ready(eee, peer, now_ms) ||
+                                      !mikun2n_ipv6_public(&peer->mikun2n_ipv6_address)
                                         ? &peer->mikun2n_ipv6_path_address : &peer->mikun2n_ipv6_address;
         if(!mikun2n_ipv6_public(destination)) {
             V6_DIAG("waiting_public_probe peer=%s; ULA candidate has no checked public mapping",
@@ -639,7 +662,7 @@ static void ipv6_tick_peers (struct n3n_runtime_data *eee, struct peer_info *pee
             continue;
         }
         peer->mikun2n_ipv6_next_probe_ms = now_ms + 500;
-        if(!ipv6_probe_send(eee, peer, destination, now_ms, "scheduled"))
+        if(!ipv6_probe_send(eee, peer, destination, now_ms, IPV6_SAFE_UDP_SIZE, "base_keepalive"))
             continue;
         peer->mikun2n_ipv6_next_probe_ms = now_ms +
             (ipv6_receive_ready(eee, peer, now_ms) ? 2000 : peer->mikun2n_ipv6_attempts < 6 ? 500 : 10000);
@@ -652,12 +675,14 @@ void mikun2n_ipv6_tick (struct n3n_runtime_data *eee, uint64_t now_ms) {
     if(!eee->conf.mikun2n_ipv6 || !eee->conf.allow_p2p || eee->conf.connect_tcp || !eee->last_sup)
         return;
     if(now_ms >= eee->mikun2n_ipv6_refresh_ms) {
-        V6_DIAG("summary monotonic_ms=%llu tx_packets=%llu tx_bytes=%llu rx_packets=%llu rx_bytes=%llu reject_header=%llu reject_peer=%llu reject_pong=%llu reject_inactive=%llu oversize_fallback_packets=%llu oversize_fallback_bytes=%llu",
+        V6_DIAG("summary monotonic_ms=%llu tx_packets=%llu tx_bytes=%llu rx_packets=%llu rx_bytes=%llu reject_header=%llu reject_peer=%llu reject_pong=%llu reject_inactive=%llu oversize_fallback_packets=%llu oversize_fallback_bytes=%llu tx_fragments=%llu rx_fragments=%llu reassembled=%llu transient_drops=%llu",
                 (unsigned long long)now_ms, (unsigned long long)diag_tx_data, (unsigned long long)diag_tx_bytes,
                 (unsigned long long)diag_rx_data, (unsigned long long)diag_rx_bytes,
                 (unsigned long long)diag_reject_header, (unsigned long long)diag_reject_peer,
                 (unsigned long long)diag_reject_pong, (unsigned long long)diag_reject_inactive,
-                (unsigned long long)diag_oversize_packets, (unsigned long long)diag_oversize_bytes);
+                (unsigned long long)diag_oversize_packets, (unsigned long long)diag_oversize_bytes,
+                (unsigned long long)diag_tx_fragments, (unsigned long long)diag_rx_fragments,
+                (unsigned long long)diag_reassembled, (unsigned long long)diag_transient_drops);
         eee->mikun2n_ipv6_refresh_ms = now_ms + 10000;
         ipv6_refresh(eee);
     }
@@ -671,37 +696,52 @@ void mikun2n_ipv6_tick (struct n3n_runtime_data *eee, uint64_t now_ms) {
 int mikun2n_ipv6_send (struct n3n_runtime_data *eee, struct peer_info *peer,
                       const uint8_t *data, size_t size, uint64_t now_ms) {
     uint8_t packet[N2N_PKT_BUF_SIZE];
-    if(!mikun2n_ipv6_active(eee, peer, now_ms))
-        return 0;
-    if(size + IPV6_FRAME_SIZE > sizeof(packet) || size + IPV6_FRAME_SIZE > peer->mikun2n_ipv6_path_bytes) {
-        // This packet exceeds the checked size; it says nothing about reachability.
-        // Keep probes and reception active while the caller sends it over IPv4.
-        diag_oversize_packets++;
-        diag_oversize_bytes += size + IPV6_FRAME_SIZE;
-        if(now_ms >= peer->mikun2n_ipv6_oversize_log_ms) {
-            macstr_t mac;
-            V6_DIAG("data_oversize peer=%s n3n_bytes=%u bytes=%u limit=%u path_preserved=1; packet uses IPv4",
-                    macaddr_str(mac, peer->mac_addr), (unsigned)size,
-                    (unsigned)(size + IPV6_FRAME_SIZE), peer->mikun2n_ipv6_path_bytes);
-            peer->mikun2n_ipv6_oversize_log_ms = now_ms + 10000;
+    if(!mikun2n_ipv6_active(eee, peer, now_ms)) return 0;
+    if(!size || size > N2N_PKT_BUF_SIZE) return 0;
+    unsigned budget = min(peer->mikun2n_ipv6_path_bytes, IPV6_RX_LIMIT);
+    if(budget < IPV6_SAFE_UDP_SIZE) return 0;
+    uint64_t id = ++peer->mikun2n_ipv6_datagram_id;
+    if(!id) id = ++peer->mikun2n_ipv6_datagram_id;
+    size_t offset = 0;
+    int fragmented = size + IPV6_FRAME_SIZE > budget;
+    if(fragmented && now_ms >= peer->mikun2n_ipv6_oversize_log_ms) {
+        macstr_t mac;
+        V6_DIAG("data_fragmented peer=%s n3n_bytes=%u tx_limit=%u; IPv6 path preserved",
+                macaddr_str(mac, peer->mac_addr), (unsigned)size, budget);
+        peer->mikun2n_ipv6_oversize_log_ms = now_ms + 10000;
+    }
+    while(offset < size) {
+        unsigned header = fragmented ? IPV6_FRAGMENT_HEADER : IPV6_FRAME_SIZE;
+        size_t chunk = min(size - offset, budget - header);
+        ipv6_header(eee, peer, packet, fragmented ? IPV6_FRAGMENT : IPV6_DATA, fragmented ? id : 0);
+        if(fragmented) {
+            packet[41] = size >> 8; packet[42] = size & 0xff;
+            packet[43] = offset >> 8; packet[44] = offset & 0xff;
         }
-        return 0;
+        memcpy(packet + header, data + offset, chunk);
+        ssize_t sent = ipv6_send_raw(eee, &peer->mikun2n_ipv6_path_address, packet, chunk + header);
+        if(sent != (ssize_t)(chunk + header)) {
+            int error = ipv6_socket_error();
+            if(ipv6_message_too_large(error) && budget > IPV6_SAFE_UDP_SIZE) {
+                ipv6_lower_probe(peer, now_ms, "data_message_too_large");
+                if(!offset) { budget = IPV6_SAFE_UDP_SIZE; fragmented = 1; continue; }
+            }
+            macstr_t mac;
+            V6_DIAG("data_send_failed peer=%s bytes=%u error=%d partial=%d transient=%d",
+                    macaddr_str(mac, peer->mac_addr), (unsigned)size, error, offset != 0, ipv6_transient_error(error));
+            // A transient queue failure is UDP loss, not evidence of a dead path.
+            // Do not replay a partly emitted datagram through a different route.
+            if(ipv6_transient_error(error)) { diag_transient_drops++; return 1; }
+            if(!ipv6_message_too_large(error) || budget <= IPV6_SAFE_UDP_SIZE)
+                peer->mikun2n_ipv6_valid_until_ms = 0;
+            return offset ? 1 : 0;
+        }
+        if(fragmented) diag_tx_fragments++;
+        offset += chunk;
     }
-    ipv6_header(eee, peer, packet, IPV6_DATA, 0);
-    memcpy(packet + IPV6_FRAME_SIZE, data, size);
-    if(ipv6_send_raw(eee, &peer->mikun2n_ipv6_path_address, packet, size + IPV6_FRAME_SIZE) == (ssize_t)(size + IPV6_FRAME_SIZE)) {
-        diag_tx_data++;
-        diag_tx_bytes += size;
-        return 1;
-    }
-    int error = ipv6_socket_error();
-    macstr_t mac;
-    V6_DIAG("data_send_failed peer=%s bytes=%u error=%d; using IPv4",
-            macaddr_str(mac, peer->mac_addr), (unsigned)size, error);
-    peer->mikun2n_ipv6_valid_until_ms = 0;
-    if(ipv6_message_too_large(error) && peer->mikun2n_ipv6_probe_bytes > IPV6_SAFE_UDP_SIZE)
-        ipv6_lower_probe(peer, now_ms, "data_message_too_large");
-    return 0;
+    diag_tx_data++;
+    diag_tx_bytes += size;
+    return 1;
 }
 
 size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *sender,
@@ -711,7 +751,7 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
         return 0;
     if(!eee->conf.mikun2n_ipv6 || !eee->conf.allow_p2p || !eee->mikun2n_ipv6_token ||
        !mikun2n_ipv6_public(sender) || size < IPV6_FRAME_SIZE ||
-       size > N2N_PKT_BUF_SIZE || memcmp(data, ipv6_magic, 3) ||
+       size > IPV6_RX_LIMIT || memcmp(data, ipv6_magic, 3) ||
        memcmp(data + 11, eee->device.mac_addr, N2N_MAC_SIZE) ||
        ipv6_get_u64(data + 25) != eee->mikun2n_ipv6_token) {
         diag_reject_header++;
@@ -738,9 +778,7 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
     uint8_t kind = data[4];
     uint64_t challenge = ipv6_get_u64(data + 33);
     if(kind == IPV6_PING && challenge && size >= IPV6_CONTROL_SIZE) {
-        unsigned budget = peer->mikun2n_ipv6_probe_bytes ? peer->mikun2n_ipv6_probe_bytes : eee->conf.mtu + 128;
-        if(size == IPV6_SAFE_UDP_SIZE && budget > size)
-            ipv6_lower_probe(peer, now_ms, "peer_small_probe");
+        if(size > IPV6_RX_LIMIT || ipv6_read_u16(data + 43) < IPV6_SAFE_UDP_SIZE) return 0;
         uint16_t ready_ms = ipv6_receive_ready(eee, peer, now_ms) &&
                             sock_equal(sender, &peer->mikun2n_ipv6_path_address)
                               ? (uint16_t)(peer->mikun2n_ipv6_valid_until_ms - now_ms) : 0;
@@ -752,11 +790,15 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
         ipv6_header(eee, peer, data, IPV6_PONG, challenge);
         data[41] = ready_ms >> 8;
         data[42] = ready_ms & 0xff;
-        ssize_t sent = ipv6_send_raw(eee, sender, data, size);
+        data[43] = IPV6_RX_LIMIT >> 8;
+        data[44] = IPV6_RX_LIMIT & 0xff;
+        data[45] = size >> 8;
+        data[46] = size & 0xff;
+        ssize_t sent = ipv6_send_raw(eee, sender, data, IPV6_CONTROL_SIZE);
         int error = sent < 0 ? ipv6_socket_error() : 0;
         V6_DIAG("ping_received peer=%s from=%s bytes=%u pong_sent=%d error=%d receive_ready_ms=%u",
                 macaddr_str(mac, peer->mac_addr), sock_to_cstr(source, sender), (unsigned)size,
-                sent == (ssize_t)size, error, ready_ms);
+                sent == IPV6_CONTROL_SIZE, error, ready_ms);
         // A session-bound PING can propose a NAT mapping, but only our own
         // address-bound challenge response can make that mapping a data path.
         if(now_ms >= peer->mikun2n_ipv6_next_learn_ms &&
@@ -773,14 +815,14 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
                 V6_DIAG("source_check_started peer=%s from=%s differs_from_report=%d",
                         macaddr_str(mac, peer->mac_addr), sock_to_cstr(source, sender),
                         !sock_equal(sender, &peer->mikun2n_ipv6_address));
-                ipv6_probe_send(eee, peer, sender, now_ms, "peer_reflexive");
+                ipv6_probe_send(eee, peer, sender, now_ms, IPV6_SAFE_UDP_SIZE, "peer_reflexive");
             }
         }
-    } else if(kind == IPV6_PONG && challenge && size >= IPV6_CONTROL_SIZE) {
+    } else if(kind == IPV6_PONG && challenge && size == IPV6_CONTROL_SIZE) {
         mikun2n_ipv6_probe_t *probe = NULL;
         for(int i = 0; i < MIKUN2N_IPV6_PROBES; i++) {
             if(peer->mikun2n_ipv6_probes[i].challenge == challenge &&
-               size == peer->mikun2n_ipv6_probes[i].bytes &&
+               ipv6_read_u16(data + 45) == peer->mikun2n_ipv6_probes[i].bytes &&
                now_ms - peer->mikun2n_ipv6_probes[i].sent_ms <= IPV6_PATH_TTL_MS &&
                sock_equal(sender, &peer->mikun2n_ipv6_probes[i].destination)) {
                 probe = &peer->mikun2n_ipv6_probes[i];
@@ -795,7 +837,8 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
         }
         int was_active = mikun2n_ipv6_active(eee, peer, now_ms);
         uint16_t ready_ms = ipv6_read_u16(data + 41);
-        if(ready_ms > IPV6_PATH_TTL_MS) {
+        uint16_t rx_limit = ipv6_read_u16(data + 43);
+        if(ready_ms > IPV6_PATH_TTL_MS || rx_limit < IPV6_SAFE_UDP_SIZE || rx_limit > IPV6_RX_LIMIT) {
             diag_reject_pong++;
             return 0;
         }
@@ -803,7 +846,13 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
         peer->mikun2n_ipv6_path_address = *sender;
         peer->mikun2n_ipv6_valid_until_ms = now_ms + IPV6_PATH_TTL_MS;
         peer->mikun2n_ipv6_rtt_ms = (uint32_t)(now_ms - probe->sent_ms);
-        peer->mikun2n_ipv6_path_bytes = probe->bytes;
+        if(changed || !peer->mikun2n_ipv6_path_bytes)
+            peer->mikun2n_ipv6_path_bytes = probe->bytes;
+        else if(probe->bytes > peer->mikun2n_ipv6_path_bytes)
+            peer->mikun2n_ipv6_path_bytes = probe->bytes;
+        peer->mikun2n_ipv6_peer_rx_limit = rx_limit;
+        peer->mikun2n_ipv6_path_bytes = min(peer->mikun2n_ipv6_path_bytes, rx_limit);
+        if(probe->bytes > IPV6_SAFE_UDP_SIZE) peer->mikun2n_ipv6_large_failures = 0;
         if(changed || probe->sent_ms >= peer->mikun2n_ipv6_ready_report_ms) {
             peer->mikun2n_ipv6_ready_report_ms = probe->sent_ms;
             // Starting the lease at request-send time conservatively includes RTT.
@@ -818,6 +867,9 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
                 (unsigned)(probe - peer->mikun2n_ipv6_probes), IPV6_PATH_TTL_MS, peer->mikun2n_ipv6_path_bytes, ready_ms, active);
         probe->challenge = 0;
         if(changed) {
+            memset(&peer->mikun2n_ipv6_reassembly, 0, sizeof(peer->mikun2n_ipv6_reassembly));
+            peer->mikun2n_ipv6_search_ms = now_ms + 1000;
+            peer->mikun2n_ipv6_large_failures = 0;
             // Late replies to the old mapping must not switch the route back.
             memset(peer->mikun2n_ipv6_probes, 0, sizeof(peer->mikun2n_ipv6_probes));
             V6_DIAG("path_selected peer=%s address=%s kind=%s ttl_ms=%u",
@@ -829,6 +881,14 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
         if(peer->mikun2n_ipv6_next_probe_ms > next_check)
             peer->mikun2n_ipv6_next_probe_ms = next_check;
         peer->last_seen = time(NULL);
+    } else if(kind == IPV6_FRAGMENT && size > IPV6_FRAGMENT_HEADER &&
+              ipv6_receive_ready(eee, peer, now_ms) && sock_equal(sender, &peer->mikun2n_ipv6_path_address)) {
+        diag_rx_fragments++;
+        size_t assembled = mikun2n_ipv6_reassemble(&peer->mikun2n_ipv6_reassembly, now_ms,
+                challenge, ipv6_read_u16(data + 41), ipv6_read_u16(data + 43),
+                data + IPV6_FRAGMENT_HEADER, size - IPV6_FRAGMENT_HEADER, data);
+        if(assembled) { diag_reassembled++; diag_rx_data++; diag_rx_bytes += assembled; }
+        return assembled;
     } else if(kind == IPV6_DATA && ipv6_receive_ready(eee, peer, now_ms) &&
               sock_equal(sender, &peer->mikun2n_ipv6_path_address)) {
         size -= IPV6_FRAME_SIZE;

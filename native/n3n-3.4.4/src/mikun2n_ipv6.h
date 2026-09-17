@@ -2,7 +2,7 @@
 #ifndef MIKUN2N_IPV6_H
 #define MIKUN2N_IPV6_H
 
-#define MIKUN2N_IPV6_WIRE_VERSION 2
+#define MIKUN2N_IPV6_WIRE_VERSION 3
 
 #include <n2n_typedefs.h>
 struct peer_info;

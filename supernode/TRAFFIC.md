@@ -85,3 +85,26 @@ No additional firewall port or supernode filesystem permission is required.
 SQLite reuses freed pages after retention cleanup; file size follows its previous
 high-water mark. Stop the collector and restore the saved server binary to roll
 back; preserve the database for later analysis.
+
+## Compare a cloud-billing window
+
+The collector also persists RX/TX deltas from the default-route interface in
+`host_hourly`. These counters include all processes, kernel headers and retries
+as exposed by the interface. Use `--interface NAME` for a different physical
+interface. The first sample establishes a baseline; previous boot-lifetime bytes
+are not incorrectly charged to the installation hour. Boot ID and interface index
+changes establish a fresh baseline. Host sampling continues if n3n is unavailable.
+
+```sh
+sudo python3 /opt/mikun2n/traffic/relay-traffic.py report --since 2026-09-17T00:00:00+08:00 --until 2026-09-18T00:00:00+08:00 --hourly
+```
+
+The start is inclusive and the end exclusive. Explicit boundaries require an ISO
+timestamp with timezone and a whole hour. Both relay and host tables use the same
+window; reports show host coverage separately from relay installation time and
+print host OUT in decimal GB as well as binary units. Sampling deltas are assigned
+to the collection hour (up to one normal 60-second interval of boundary error).
+After downtime, recovered cumulative bytes belong to the recovery hour. Interface
+counters include traffic the provider may not bill, such as private-network traffic;
+they do not replace the provider's meter. Earlier missing samples cannot reconstruct
+whole-day bills. Upgrading only this collector needs no supernode restart.

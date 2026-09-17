@@ -11,7 +11,7 @@
     <AssemblyName>MikuN2N</AssemblyName>
     <RootNamespace>MikuN2N</RootNamespace>
     <BaseVersion>0.5.8</BaseVersion>
-    <BuildNumber>1</BuildNumber>
+    <BuildNumber>2</BuildNumber>
     <Version>$(BaseVersion)-$(BuildNumber)</Version>
     <AssemblyVersion>$(BaseVersion).0</AssemblyVersion>
     <FileVersion>$(BaseVersion).$(BuildNumber)</FileVersion>
@@ -21,6 +21,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tools\offline-tests\**\*.cs" />
+    <EmbeddedResource Remove="tools\offline-tests\**\*" />
+    <None Remove="tools\offline-tests\bin\**\*;tools\offline-tests\obj\**\*" />
     <Content Include="Runtime\n3n-edge.exe;Runtime\n3n-3.4.4-source.zip;Runtime\LICENSE-n2n.txt;Runtime\THIRD-PARTY-NOTICES.txt;Runtime\README.txt;Runtime\tap-windows-installer.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
