@@ -11,6 +11,11 @@ logs/
 .claude/
 *.zip
 
+# Local tooling build outputs; rebuild the natpunch tools with the commands in the
+# mikun2n-edge-patch skill instead of committing the binaries.
+__pycache__/
+tools/**/*.exe
+
 # Runtime/ ships third-party binaries intentionally (see Runtime/README.txt) — do not ignore it.
 !Runtime/
 !Runtime/**
