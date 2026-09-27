@@ -94,9 +94,10 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 
 ## 文档索引
 
+- 对外文档为双语：英文是规范名（`README.md`），中文版本加 `.zh.md` 后缀（`README.zh.md`），两版顶部互留语言跳转链接。下列路径均为英文版，中文版把 `.md` 换成 `.zh.md`。
 - `supernode/README.md`：自建 supernode 的完整步骤（装 n3n、跑安装脚本、填进客户端、联邦、排查）。
 - `docs/FEDERATION.md`：多 supernode 联邦的设计、测试部署与已知边界（当前暂缓推进）。
-- `docs/故障排查.md`、`docs/P2P打洞融合方案.md`、`docs/NATPUNCH-V7阶段总结.md`：打洞与中继问题的历史排查结论与方案。
+- `docs/TROUBLESHOOTING.md`、`docs/P2P-PUNCH-INTEGRATION.md`、`docs/NATPUNCH-V7-SUMMARY.md`：打洞与中继问题的历史排查结论与方案。
 - `docs/IPV6-TRANSPORT.md`：IPv6 实验传输的分层契约（尺寸发现、分片、回退边界与已知限制）。
 - `supernode/DIAGNOSTICS.md`、`supernode/TRAFFIC.md`：诊断接收端与流量统计的部署、口径和限制。
 - `docs/V7*.md`、`docs/第*测试.md`、`docs/打洞测试*.md`：逐轮实测日志，只在需要查证某次现场数据时读。

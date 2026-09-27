@@ -1,5 +1,7 @@
 # P2P 打洞技术融合进 MikuN2N 方案
 
+> [English](P2P-PUNCH-INTEGRATION.md) | [简体中文](P2P-PUNCH-INTEGRATION.zh.md)
+
 更新时间：2026-07-24
 状态：Phase A 已落地；Phase B 双 NAT4 互补角色已进入 0.4.1 测试版
 
@@ -141,5 +143,5 @@
 
 ## 关联
 
-- 研究结论：`NATPUNCH-V7阶段总结.md`、记忆 `nat-p2p-breakthrough`、`natpunch-tool`。
+- 研究结论：`NATPUNCH-V7-SUMMARY.zh.md`、记忆 `nat-p2p-breakthrough`、`natpunch-tool`。
 - 补丁说明：`CLAUDE.md` 的 Runtime 段（打洞补丁、构建工具链）。

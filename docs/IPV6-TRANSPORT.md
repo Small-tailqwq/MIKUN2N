@@ -1,5 +1,7 @@
 # IPv6 transport, generation 3
 
+> [English](IPV6-TRANSPORT.md) | [简体中文](IPV6-TRANSPORT.zh.md)
+
 The 0.5.8-4 test build uses a bounded, two-level packetization-layer discovery
 profile using [RFC 8899](https://www.rfc-editor.org/rfc/rfc8899.html) principles. This is
 not a full general-purpose DPLPMTUD state machine. It separates each direction's

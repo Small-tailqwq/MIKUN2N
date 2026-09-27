@@ -1,5 +1,7 @@
 # Supernode outbound traffic accounting
 
+> [English](TRAFFIC.md) | [简体中文](TRAFFIC.zh.md)
+
 The patched supernode exposes `get_relay_stats` on its existing local management
 socket. `relay-traffic.py` samples it every 60 seconds and retains hourly SQLite
 totals for 30 days. No client update, public listener, packet capture, or client

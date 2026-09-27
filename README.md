@@ -1,5 +1,7 @@
 # MikuN2N
 
+> [English](README.md) | [简体中文](README.zh.md)
+
 A Windows client for playing LAN games with friends over a self-hosted virtual Ethernet network. MikuN2N manages a patched n3n edge, TAP-Windows, peer discovery, reconnects and a light/dark WPF interface.
 
 **The client ships with no server addresses.** Build your own server using [the server deployment guide](supernode/README.md), or add a server shared by a friend in the node manager. Participants need the same community and encryption key. A node may contain multiple federated endpoints.
@@ -67,7 +69,7 @@ IPv6 remains experimental. Compilation does not establish real-world connectivit
 
 ## Research
 
-[NATPUNCH v7 summary](docs/NATPUNCH-V7阶段总结.md) and [federation notes](docs/FEDERATION.md) document past experiments and their limits.
+[NATPUNCH v7 summary](docs/NATPUNCH-V7-SUMMARY.md) and [federation notes](docs/FEDERATION.md) document past experiments and their limits.
 
 ## License
 

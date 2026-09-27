@@ -1,3 +1,5 @@
+> [English](TROUBLESHOOTING.md) | [简体中文](TROUBLESHOOTING.zh.md)
+
 260725pm0939
 一次故障，与对端nat4无法成功打洞，需要排查。
 使用 natpunch-v7.3.1.exe 测试正常，但是N2N无法打洞成功：

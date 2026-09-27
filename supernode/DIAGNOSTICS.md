@@ -1,5 +1,7 @@
 # Optional test diagnostics
 
+> [English](DIAGNOSTICS.md) | [简体中文](DIAGNOSTICS.zh.md)
+
 The private test build defaults to **每次询问** on each manual connection. Declining, pressing Escape, or closing the dialog leaves logs local. One-time consent covers that connection and automatic edge restarts; it never becomes saved consent. Settings also offers **始终允许** (requires a separate informed confirmation) and **始终拒绝** (no prompt or upload). Persistent permission is bound to the selected node identity/configuration, exact HTTPS receiver and pinned certificate. Editing or switching the active node clears it, even when switching back; receiver/certificate changes require fresh permission. It is never seeded by a private profile. Applying Ask or Deny revokes an active persistent upload. Both IPv4 and IPv6 sessions, including failed connection attempts, follow this policy.
 
 The main window can stop uploading or resume diagnostic recording/uploading without restarting the client, edge, or connection. Resume follows the selected consent mode and starts a new segment; refused/revoked records are never replayed. Each connection retains at most four 64 MiB segments (256 MiB) locally, rotating its oldest segment when full. Storage errors pause recording with a visible recovery action. Receiver outages retry within those bounds; lost unacknowledged segments are reported as incomplete delivery. Disconnect/exit attempts a final flush for at most eight seconds. A later connection never uploads earlier files.

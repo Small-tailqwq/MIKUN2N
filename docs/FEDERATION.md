@@ -1,83 +1,67 @@
-# MikuN2N 联邦机制（Multi-Supernode Federation）
+# MikuN2N federation (multi-supernode)
 
-> 状态：**暂缓推进**（2026-08-01 决定）。本文固化已实现的设计、部署方式和已知边界，
-> 供后续决定是否继续时直接恢复，不需要重新考古。
+> [English](FEDERATION.md) | [简体中文](FEDERATION.zh.md)
 
-## 背景与目标
+> Status: **on hold** (decided 2026-08-01). This document pins down the implemented design, deployment and known limits so a later decision on whether to continue can resume directly without re-archaeology.
 
-n2n 家族的单 supernode 架构里，中继（pSp）流量总是经由**本端注册的同一个
-supernode**，而客户端默认锚定的节点与对端可能相隔很远。联邦机制让一个网络
-（同一 community）由**多个 supernode 组成骨干**，每个 edge 自动锚定到
-**延迟最低**的节点，中继路径变成：
+## Background and goals
+
+In n2n's single-supernode architecture, relay (pSp) traffic always flows through **the same supernode the local side registered with**, while the node a client anchors to by default may be far from the peer. Federation makes one network (a single community) form its backbone from **multiple supernodes**; each edge automatically anchors to the **lowest-latency** node, and the relay path becomes:
 
 ```
 用户 A --最近节点 SN1--(supernode 骨干网)--SN2-- 用户 B
 ```
 
-对跨地域好友（如广州 ↔ 上海）而言，A 到 B 的理论延迟低于 A 直连
-"距离对端更近但离自己远"的单一节点。
+For friends in different regions (e.g. Guangzhou ↔ Shanghai), the theoretical latency from A to B is lower than A connecting directly to a single node that is "closer to the peer but far from you".
 
-## 已实现内容（全部在工作区，尚未提交）
+## Implemented so far (all in the working tree, not yet committed)
 
-### edge 侧（n3n-edge.exe 补丁 #34）
+### edge side (n3n-edge.exe patch #34)
 
-- 打洞排除表从仅 `curr_sn` 扩展到 `conf.supernodes` **全部联邦节点**：强制中继
-  keepalive 与 Tier 1 扫描不再把第二个 supernode 误当 peer。
-- NAT 探测回包（21001/21002）来源校验放宽到任一已知联邦节点，避免 rtt 重锚定
-  竞态丢弃回包。
-- 客户端配置生成支持多条 `supernode=`，多节点时追加 `supernode_selection=rtt`
-  （n3n 3.4.x 原生选项：锚定最低 RTT 节点，逐节点维持 REGISTER）。
+- The punch exclusion table expands from just `curr_sn` to **all federation nodes** in `conf.supernodes`: forced-relay keepalives and Tier 1 scans no longer mistake a second supernode for a peer.
+- NAT probe replies (21001/21002) relax source validation to any known federation node, so an rtt re-anchor race no longer drops the reply.
+- Client configuration generation supports multiple `supernode=` lines, appending `supernode_selection=rtt` when there are multiple nodes (native n3n 3.4.x option: anchor to the lowest-RTT node, keeping REGISTER per node).
 
-### supernode 侧（C 补丁，位于 n3n-build patched 源码）
+### supernode side (C patch, in the n3n-build patched source)
 
-- QUERY_PEER 经联邦转发到达对端锚定的 supernode 时（`from_supernode` 且本地无
-  `source_edge`），信任查询内携带的 NAT 摘要与 bank 模型字段（来源 supernode 已
-  按本地注册表校验过），照常计算并下发同 generation 的互补角色打洞计划。
-- 双 NAT4 的 GO deadline 在跨 supernode 场景由**各自锚定的 supernode 独立下发**，
-  偏差不超过一个协调间隔（750ms 查询周期），由按 attempt 推进的 scanner 容忍。
+- When a QUERY_PEER forwarded through the federation arrives at the peer's anchored supernode (`from_supernode` and no local `source_edge`), it trusts the NAT summary and bank-model fields carried in the query (the source supernode already validated them against its local registry), computes as usual, and issues the complementary-role punch plan of the same generation.
+- In the cross-supernode case, the GO deadlines for dual NAT4 are issued **independently by each side's anchored supernode**; the skew stays within one coordination interval (750ms query period) and is tolerated by the attempt-driven scanner.
 
-### 客户端（C#）
+### client (C#)
 
-- 服务器设置接受多个端点（逗号/分号/顿号/空格分隔）。
-- 配置生成：每端点一条 `supernode=` + 多端点时 `supernode_selection=rtt`。
-- 主界面显示当前锚定节点（`get_supernodes` `current=1`）与 ICMP RTT。
-- `EdgeController.FormatSupernodeText` 对当前节点的地址显示用户自己起的节点名
-  （按主机名匹配 `AppSettings.Nodes`），联邦里的其他成员显示原始地址。
+- The server setting accepts multiple endpoints (comma/semicolon/ideographic comma/space separated).
+- Configuration generation: one `supernode=` per endpoint, plus `supernode_selection=rtt` when there are multiple endpoints.
+- The main window shows the currently anchored node (`get_supernodes` `current=1`) and ICMP RTT.
+- `EdgeController.FormatSupernodeText` shows the user-chosen node name for the current node's address (matched against `AppSettings.Nodes` by hostname); other federation members show the raw address.
 
-## 部署方式（测试联邦）
+## Deployment (test federation)
 
-每个联邦成员 supernode 主机必须运行 natpunch 应答器（UDP 21001/21002）：
+Every federation member supernode host must run the natpunch responder (UDP 21001/21002):
 
-- 参考实现：`tools/natpunch/natpunch-server.py`（v7 协议，`server --bind 0.0.0.0 --port-a 21001 --port-b 21002`）
-- 部署到 systemd 时自建一个最小单元指向该脚本即可，服务名与路径随部署环境而定
+- Reference implementation: `tools/natpunch/natpunch-server.py` (v7 protocol, `server --bind 0.0.0.0 --port-a 21001 --port-b 21002`)
+- For systemd deployment, create a minimal unit that points at this script; the service name and path depend on the deployment environment.
 
-测试联邦与生产节点分离部署：
+The test federation is deployed separately from production nodes:
 
-| 节点 | 端点 | 说明 |
+| Node | Endpoint | Notes |
 |---|---|---|
-| A | `vps.example.com:3077` | 独立 federation 名（`/etc/n3n/*-fed.env`） |
+| A | `vps.example.com:3077` | independent federation name (`/etc/n3n/*-fed.env`) |
 | B | `vps2.example.com:3076` | `/etc/n3n/mikun2n-supernode.env` |
 
-生产 `vps.example.com:3076` 不受影响（独立 federation 名、未加入联邦）。
+Production `vps.example.com:3076` is unaffected (separate federation name, not part of the federation).
 
-客户端测试用法：在一个节点的「服务器地址」里填
-`vps.example.com:3077, vps2.example.com:3076`，小组名称与联机密钥保持不变。
+Client test usage: enter `vps.example.com:3077, vps2.example.com:3076` in one node's `服务器地址` field, keeping the community name and encryption key unchanged.
 
-## 已知边界与风险
+## Known limits and risks
 
-- **GO 同步偏差**：跨 supernode 的双 NAT4 打洞 GO 由双方 SN 独立定时，
-  skew ≈ 时钟差 + 查询相位差（平均约 400ms），损失约 7s 窗口的 6%；
-  attempt 驱动扫描可容忍。修复需协议字段（破坏新旧兼容），暂不实施。
-- **模型新鲜度**：联邦转发路径上对端 bank 模型依赖 QUERY_PEER 携带，上报 TTL
-  已收紧至 6s，edge 侧 5s 年龄自动重校准（见 Runtime/README.txt #37）。
-- **信任模型**：跨节点打洞计划信任来源 supernode 已校验的 NAT 摘要——联邦内
-  supernode 之间互信是前提，不应跨不可信管理员部署。
-- **兼容性**：patch #34 的 edge/supernode 需配套部署；旧 edge 连接多端点时只取
-  第一个端点（`SplitServers().First()` 回退），等效于普通单节点行为。
+- **GO synchronization skew**: in cross-supernode dual NAT4 punching, each side's SN times its GO independently; skew ≈ clock difference + query phase difference (about 400ms on average), losing about 6% of the 7s window; the attempt-driven scan tolerates it. Fixing it needs a protocol field (breaking old/new compatibility), so it is not implemented for now.
+- **Model freshness**: on the federation forwarding path, the peer's bank model relies on being carried by QUERY_PEER; the reported TTL is tightened to 6s and the edge auto-recalibrates at 5s age (see Runtime/README.txt #37).
+- **Trust model**: cross-node punch plans trust the NAT summary the source supernode already validated — mutual trust between the federation's supernodes is a prerequisite, so it should not be deployed across untrusted administrators.
+- **Compatibility**: patch #34's edge/supernode must be deployed together; an old edge connecting to multiple endpoints takes only the first (`SplitServers().First()` fallback), equivalent to ordinary single-node behavior.
 
-## 决定与后续（恢复此功能时的清单）
+## Decision and follow-up (checklist for resuming this feature)
 
-1. 提交当前工作区改动（edge 二进制 + 源码 zip + 客户端 C# + 文档）。
-2. 服务器侧：部署 `natpunch.py` 应答器到新节点，准备独立 federation 配置文件。
-3. 端到端验证：跨地域双 NAT4 打洞成功率、rtt 锚定切换、断链重锚定。
-4. 若继续：优先做 GO 同步字段（联邦 skew 是最大已知短板）。
+1. Commit the current working-tree changes (edge binary + source zip + client C# + docs).
+2. Server side: deploy the `natpunch.py` responder to the new node and prepare an independent federation configuration file.
+3. End-to-end validation: cross-region dual NAT4 punch success rate, rtt anchor switching, and re-anchoring after link loss.
+4. If continuing: prioritize the GO synchronization field (federation skew is the largest known shortcoming).

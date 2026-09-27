@@ -1,5 +1,7 @@
 # Self-hosting a MikuN2N supernode
 
+> [English](README.md) | [简体中文](README.zh.md)
+
 MikuN2N supplies server code and deployment templates, not a hosted server. Use a Linux machine with a public IPv4 address and systemd. Participants add its address in the client and use the same community and encryption key.
 
 For private IPv6 test builds with explicit per-connection log-upload consent, see [test diagnostics](DIAGNOSTICS.md). The optional HTTPS receiver stores both clients' logs for inspection over SSH.

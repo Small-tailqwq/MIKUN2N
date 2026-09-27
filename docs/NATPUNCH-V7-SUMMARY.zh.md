@@ -1,5 +1,7 @@
 # NATPUNCH v7 阶段总结
 
+> [English](NATPUNCH-V7-SUMMARY.md) | [简体中文](NATPUNCH-V7-SUMMARY.zh.md)
+
 更新时间：2026-07-24
 
 ## 1. 阶段结论
