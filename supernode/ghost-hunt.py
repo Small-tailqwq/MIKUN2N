@@ -37,6 +37,17 @@ def external_interface():
     return "eth0"
 
 
+def interface_addresses(interface):
+    """Addresses the host itself uses on the capture interface."""
+    try:
+        output = subprocess.run(["ip", "-o", "addr", "show", "dev", interface],
+                                capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {field.split("/")[0] for line in output.splitlines()
+            for index, field in enumerate(line.split()) if index and line.split()[index - 1] in ("inet", "inet6")}
+
+
 def size(value):
     for unit in ("B", "KiB", "MiB", "GiB"):
         if abs(value) < 1024 or unit == "GiB":
@@ -219,6 +230,7 @@ def main():
     sock.close()
     ended = time.time()
     final_rx, final_tx = netdev(args.interface)
+    host_addresses = interface_addresses(args.interface)
 
     def owner(key):
         proto, dst, dport = key
@@ -229,7 +241,8 @@ def main():
                 if who:
                     break
         source = conntrack.get((proto, dst, str(dport)))
-        if source and not source.startswith(("172.31.", "10.251.")):
+        # Only translated sources (containers, other hosts behind this one) add information.
+        if source and source not in host_addresses:
             who = f"{who or 'conntrack-only'} via {source}"
         return who or "-"
 
@@ -242,7 +255,7 @@ def main():
              f"sampled {len(timeline)} ss/conntrack snapshots",
              f"egress public {size(egress_bytes)} in {sum(v[1] for v in flows.values()):,} pkts | "
              f"egress private/VPC {size(private_bytes)} | ingress public {size(ingress_bytes)}",
-             f"eth0 counters: tx {size(final_tx - first_tx)}, rx {size(final_rx - first_rx)} "
+             f"{args.interface} counters: tx {size(final_tx - first_tx)}, rx {size(final_rx - first_rx)} "
              f"(tx minus captured public egress = {size(max(0, final_tx - first_tx - egress_bytes))}, "
              f"includes VPC traffic and L2 framing)",
              "busiest sampling intervals (host tx): "

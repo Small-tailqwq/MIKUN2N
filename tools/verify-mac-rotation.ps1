@@ -1,9 +1,11 @@
 # 验证「固定 MAC 快速重连会被 supernode 拒绝，换随机 MAC 能立刻逃脱」这条恢复路径。
 # 这是 MikuN2N 里 _useRotatingMac 兜底所依赖的机制。需要管理员权限。
 param(
-    [string]$TapGuid = '{TAP-ADAPTER-GUID}',
+    [string]$TapGuid = '',
     [string]$EdgeExe = (Join-Path $(if ($env:N3N_PATCHED_SOURCE) { $env:N3N_PATCHED_SOURCE } else { '..\n3n-build\n3n-3.4.4-patched' }) 'apps\n3n-edge.exe')
 )
+. (Join-Path $PSScriptRoot 'TapAdapters.ps1')
+$TapGuid = Resolve-TapGuid $TapGuid
 $ErrorActionPreference = 'Continue'
 if (-not (Test-Path $EdgeExe)) {
     throw "找不到 n3n-edge.exe：$EdgeExe`n请用 -EdgeExe 指定，或设置 `$env:N3N_PATCHED_SOURCE 指向 patched 源码树。"

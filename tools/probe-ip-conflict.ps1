@@ -1,8 +1,9 @@
 # 决定性实验：同一个 IPv4 已经挂在另一块网卡上时，netsh 能否把它设到目标网卡？
 # 这直接判定 17:36 那次 "Unable to set IP address" 的真正成因。
 $ErrorActionPreference = 'Continue'
-$UuGuid  = '{OTHER-TAP-GUID}'   # UU TAP
-$TapGuid = '{TAP-ADAPTER-GUID}'   # TAP-Windows V9
+. (Join-Path $PSScriptRoot 'TapAdapters.ps1')
+$TapGuid = Resolve-TapGuid ''
+$UuGuid  = Resolve-OtherTapGuid '' $TapGuid
 $Ip = '192.0.2.77'; $Mask = '255.255.255.0'
 
 $uu  = Get-NetAdapter | Where-Object InterfaceGuid -eq $UuGuid

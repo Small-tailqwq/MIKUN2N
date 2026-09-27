@@ -45,22 +45,34 @@ if (Test-Path -LiteralPath (Join-Path $publish 'Runtime/edge.exe')) {
 $productVersion = (Get-Item -LiteralPath (Join-Path $publish 'MikuN2N.exe')).VersionInfo.ProductVersion
 if ($productVersion -ne $version) { throw "MikuN2N.exe reports $productVersion, expected $version" }
 
-# Debug paths embed the build machine's account name; a release must not carry it.
-$account = [Environment]::UserName
-if ($account.Length -ge 3) {
-    $patterns = foreach ($separator in '\', '/') {
-        $text = "Users$separator$account"
-        $text
-        -join ($text.ToCharArray() | ForEach-Object { "$_`0" })
+# Debug paths and build scripts can embed a user profile path. Use the same rule as
+# tools/package-native-source.py and look inside archives too (the native source zip).
+$personalPath = [regex]::new('(?:[a-z]:[\\/]+users[\\/]+(?!public[\\/]|default[\\/])[^\\/\s"<>|*?]+|/home/[^/\s]+/|/Users/[^/\s]+/)', 'IgnoreCase')
+function Find-PersonalPath([byte[]]$Bytes) {
+    # Latin-1 maps every byte to one char; dropping NULs also exposes UTF-16 text.
+    $text = [Text.Encoding]::Latin1.GetString($Bytes)
+    foreach ($candidate in @($text, $text.Replace("`0", ''))) {
+        $match = $personalPath.Match($candidate)
+        if ($match.Success) { return $match.Value }
     }
-    foreach ($file in Get-ChildItem -LiteralPath $publish -File -Recurse | Where-Object Extension -ne '.zip') {
-        # Latin-1 maps every byte to one char, so ordinal search finds ASCII and UTF-16 paths alike.
-        $content = [Text.Encoding]::Latin1.GetString([IO.File]::ReadAllBytes($file.FullName))
-        foreach ($pattern in $patterns) {
-            if ($content.IndexOf($pattern, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                throw "$($file.Name) contains the local account path Users\$account"
+    return $null
+}
+Add-Type -AssemblyName System.IO.Compression
+foreach ($file in Get-ChildItem -LiteralPath $publish -File -Recurse) {
+    $bytes = [IO.File]::ReadAllBytes($file.FullName)
+    if ($file.Extension -eq '.zip') {
+        $archive = [IO.Compression.ZipArchive]::new([IO.MemoryStream]::new($bytes))
+        try {
+            foreach ($entry in $archive.Entries) {
+                $stream = $entry.Open(); $buffer = [IO.MemoryStream]::new()
+                try { $stream.CopyTo($buffer) } finally { $stream.Dispose() }
+                if ($found = Find-PersonalPath $buffer.ToArray()) {
+                    throw "$($file.Name)!$($entry.FullName) contains a personal path: $found"
+                }
             }
-        }
+        } finally { $archive.Dispose() }
+    } elseif ($found = Find-PersonalPath $bytes) {
+        throw "$($file.Name) contains a personal path: $found"
     }
 }
 

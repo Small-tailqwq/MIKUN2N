@@ -10,10 +10,13 @@
 #                                        旧版必然 0，新版应匹配
 # 需要管理员权限。
 param(
-    [string]$TapGuid   = '{TAP-ADAPTER-GUID}',  # TAP-Windows Adapter V9
-    [string]$OtherGuid = '{OTHER-TAP-GUID}',  # Netease UU TAP
+    [string]$TapGuid   = '',
+    [string]$OtherGuid = '',
     [string]$EdgeExe   = (Join-Path $(if ($env:N3N_PATCHED_SOURCE) { $env:N3N_PATCHED_SOURCE } else { '..\n3n-build\n3n-3.4.4-patched' }) 'apps\n3n-edge.exe')
 )
+. (Join-Path $PSScriptRoot 'TapAdapters.ps1')
+$TapGuid = Resolve-TapGuid $TapGuid
+$OtherGuid = Resolve-OtherTapGuid $OtherGuid $TapGuid
 $ErrorActionPreference = 'Continue'
 if (-not (Test-Path $EdgeExe)) {
     throw "找不到 n3n-edge.exe：$EdgeExe`n请用 -EdgeExe 指定，或设置 `$env:N3N_PATCHED_SOURCE 指向 patched 源码树。"
