@@ -1,5 +1,7 @@
 # Adaptive diagnostics: capacity assessment and next-release plan
 
+> [English](DIAGNOSTICS-NEXT.md) | [简体中文](DIAGNOSTICS-NEXT.zh.md)
+
 Status: proposed on September 19, 2026. This document and the corresponding TODO
 describe future work. No logging policy, receiver limit, upload protocol, retention
 setting or running service was changed during this assessment.
