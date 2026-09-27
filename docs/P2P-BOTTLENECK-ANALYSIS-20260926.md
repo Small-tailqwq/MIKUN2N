@@ -1,5 +1,7 @@
 # P2P bottleneck analysis and 0.5.8-5 changes: September 26, 2026
 
+> [English](P2P-BOTTLENECK-ANALYSIS-20260926.md) | [简体中文](P2P-BOTTLENECK-ANALYSIS-20260926.zh.md)
+
 This note follows the [September 18 IPv4 analysis](IPV4-PUNCH-ANALYSIS-20260918.md)
 and the [September 19 relay-pair analysis](RELAY-PAIR-ANALYSIS-20260919.md). It is
 based on this machine's native logs from September 9-20, mainly one 15-hour 0.5.8-4

@@ -1,5 +1,7 @@
 # Relay-heavy pair analysis: September 19, 2026
 
+> [English](RELAY-PAIR-ANALYSIS-20260919.md) | [简体中文](RELAY-PAIR-ANALYSIS-20260919.zh.md)
+
 This extends the [IPv4 punch investigation](IPV4-PUNCH-ANALYSIS-20260918.md)
 with server byte accounting and the available counterpart logs. Analysis only:
 no runtime code, clients, or server configuration were changed.

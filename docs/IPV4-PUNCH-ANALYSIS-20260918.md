@@ -1,5 +1,7 @@
 # IPv4 punch analysis: September 18, 2026
 
+> [English](IPV4-PUNCH-ANALYSIS-20260918.md) | [简体中文](IPV4-PUNCH-ANALYSIS-20260918.zh.md)
+
 Analysis completed on September 19 from existing client logs, consented server
 uploads, and release-tagged source. No client was launched, no probe was initiated,
 and no algorithm, binary, configuration, or server service was changed.
