@@ -8,28 +8,43 @@ namespace MikuN2N;
 
 public partial class App : Application
 {
+    private const string ActivationEventName = @"Local\MikuN2N.Activate";
     private Mutex? _singleInstanceMutex;
+    private EventWaitHandle? _activationEvent;
+    private RegisteredWaitHandle? _activationWait;
     public ThemeManager ThemeManager { get; } = new();
     public EasterEggManager EasterEggs { get; } = new();
     public LogCleanupService LogCleanup { get; } = new();
+    public UpdateService Updates { get; } = new();
 
     protected override void OnStartup(StartupEventArgs e)
     {
         HookExceptionLogging();
         AppIconService.RegisterProcessIdentity();
+        UpdateService.WaitForPreviousProcess(e.Args);
         _singleInstanceMutex = new Mutex(true, @"Local\MikuN2N.SingleInstance", out var isFirstInstance);
         if (!isFirstInstance)
         {
             _singleInstanceMutex.Dispose();
             _singleInstanceMutex = null;
-            MessageBox.Show(
-                "MikuN2N 已经在运行。请使用现有窗口，避免两个连接同时占用虚拟网卡。",
-                "MikuN2N",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+            // The first instance is often hidden in the tray, where a notice alone left
+            // the player unable to find it. Ask it to come forward instead.
+            if (!SignalRunningInstance())
+            {
+                MessageBox.Show(
+                    "MikuN2N 已经在运行。请在任务栏右下角的托盘图标中打开它。",
+                    "MikuN2N",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
             Shutdown();
             return;
         }
+        UpdateService.CleanUpAfterStart();
+        _activationEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ActivationEventName);
+        _activationWait = ThreadPool.RegisterWaitForSingleObject(_activationEvent, (_, _) =>
+            Dispatcher.InvokeAsync(() => (MainWindow as MikuN2N.MainWindow)?.ShowFromTray()),
+            null, Timeout.Infinite, executeOnlyOnce: false);
         var settingsStore = new SettingsStore();
         var settings = settingsStore.Load(out var upgraded);
         // A settings file written before the node model still carried the old server and
@@ -86,8 +101,23 @@ public partial class App : Application
         };
     }
 
+    private static bool SignalRunningInstance()
+    {
+        try
+        {
+            using var activation = EventWaitHandle.OpenExisting(ActivationEventName);
+            return activation.Set();
+        }
+        catch (Exception exception) when (exception is WaitHandleCannotBeOpenedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
+        _activationWait?.Unregister(null);
+        _activationEvent?.Dispose();
         _singleInstanceMutex?.ReleaseMutex();
         _singleInstanceMutex?.Dispose();
         ThemeManager.Dispose();

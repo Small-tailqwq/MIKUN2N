@@ -1,5 +1,31 @@
 # TODO
 
+## Pending follow-up (2026-09-18)
+
+- [ ] Show the complete Chinese link-state text in the friends table's Link tooltip.
+  - Reported symptom: hover shows English text instead of the full displayed status. `MainWindow.xaml` already binds the inner text to `ConnectionModeText`, but its rich tooltip inherits the global string `ContentTemplate` in `App.xaml`. That template can stringify the containing `StackPanel`; the other rich tooltip explicitly clears `ContentTemplate`. Preserve the full Chinese description and inspect this template interaction, including truncated or collapsed cells.
+  - Acceptance: IPv4/IPv6 direct, LAN direct, punching, relay and forced-relay states have matching full Chinese hover text; check truncated cells in both themes.
+
+- [ ] Replace first-peer-only quota exceptions with adaptive, event-prioritized diagnostics and independent local detail control.
+  - Cover initial/new-peer connections, disconnects, reconnects, manual and automatic retries, direct-to-relay transitions, recovery, mapping/MTU changes, coordination failures, process exits and upload failures. A previously exhausted routine allowance must not suppress these events or the available pre-event context; reserve delivery capacity for their metadata and bounded detail windows.
+  - Stable operation uses meaningful state changes and periodic counter summaries. A consented rolling context buffer supplies the preceding two minutes when an incident occurs, followed by a proposed five-minute detail window; overlapping windows merge without repeatedly copying the same context. Preserve peer/session/attempt identity and explicit gaps, and keep unfamiliar native warnings observable for future investigations. Do not claim complete packet-level observability.
+  - Decouple capture, the upload outbox and user-retained local logs. Add a local-only detailed-log setting: switching to basic logs retains essential lifecycle/error/transport records and must not change upload detail, eligibility, endpoint consent or transport behavior. Bound any temporary upload spool independently and describe it separately from retained user logs.
+  - Next-release update notice: explain the changed local granularity, current retention period and measured size estimate; offer direct access to the detail and retention settings. Remember the user's choice and notice version. Preserve the current 30-day default unless the user changes it; the notice is not upload consent.
+  - Reduce upload volume with semantic snapshot deltas, periodic checkpoints, compressed batches and bounded HTTP connection reuse. Prioritize terminal/failure events over routine backlog, preserve idempotent retries and reconstruction order, and pace all bytes including retries. Proposed targets: 1 KiB/s average compressed routine payload per client and an 8 KiB/s incident/catch-up ceiling; validate before adopting these as defaults.
+  - Capacity assessment on September 19 supports a proposed increase from 2 GiB to 4 GiB of actual receiver storage, with compressed storage, existing 24-hour expiry and at least 5 GiB filesystem headroom. These are planned settings, not deployed changes. Do not increase retention or lift quotas without considering the measured growth and compression boundaries in [the design note](docs/DIAGNOSTICS-NEXT.md).
+  - Quota exceptions bypass only routine logging/upload allowances. They do not override refusal, revocation, endpoint/certificate changes, a rejected batch namespace, bandwidth ceilings or actual disk/network failures. Never upload pre-consent/refused records or earlier sessions automatically. Keep receiver support for older clients explicit; compressed requests currently require a server protocol change.
+  - Acceptance for the implementation: paired connect/disconnect/retry/fallback incidents still arrive after routine quota exhaustion; stable-state compaction and decompression retain known diagnostic evidence; incident metadata bypasses ordinary backlog; local detail toggles leave the upload event stream equivalent; pacing, resume/507 behavior, consent revocation, storage pressure and short exit flushing remain bounded and observable. Validate the update notice and settings in both themes when live UI verification is authorized.
+
+IPv4 investigation is recorded in [the September 18 analysis](docs/IPV4-PUNCH-ANALYSIS-20260918.md), including an observed zero-worker round, mismatched retry budgets, and the limits of the cone candidate model. Implementation is deferred until the next iteration, as requested; these notes do not mark either task above complete.
+
+The [September 19 relay-pair analysis](docs/RELAY-PAIR-ANALYSIS-20260919.md) adds counterpart traces and byte-ranked priorities: established IPv4 path recovery after a receive gap, exhausted retries, and the separate older-client rollback period. Keep these findings available for the next algorithm iteration.
+
+- [ ] Compare natpunch v7.3.1 with the integrated IPv4 path before the next algorithm iteration.
+  - The supplied successful log identifies v7.3.1: 25 retained workers, a local same-server CONE observation, a symmetric peer model with two banks, and success on the first GO after 375 ms. The 180-second overall allowance does not explain this first-round success. Source reference: `tools/natpunch/natpunch.c`; private evidence is under `artifacts/natpunch-v7.3.1-reference-20260919/`.
+  - Compare calibration provenance, control and bank candidate construction, per-worker send order/fan-out, GO coordination, and retaining the winning socket. The reported real endpoint falls inside a bank-relative candidate band rather than matching the control endpoint; exact winning lane/offset still requires the structured `peer_packet` record.
+  - Source comparison confirms material integration differences: native workers are assigned one bank by parity while the demo rotates each worker across bank candidates; native uses sequential low/mid scheduling, fixed calibration waits, a longer coordinated GO delay, serialized pending worker attempts and a three-round failure budget. Record candidate-order differences separately from measured connectivity: an earlier scheduled probe does not prove it caused the historical success.
+  - The supplied sample concerns a different pair from the current relay-heavy failure. Use paired logs from the same endpoints and comparable mapping conditions/budgets before attributing a success-rate advantage to the integration or generalizing the result. Keep short handshake success separate from sustained tunnel traffic.
+
 ## Implemented in 0.5.8-2; live acceptance pending
 
 - [x] Replace coupled IPv6 probe-size fallback with directional size discovery and bounded tunnel fragmentation.
@@ -47,7 +73,14 @@ asymmetric size limits, larger-probe loss, fragment reorder/duplicates/expiry,
 session/endpoint rejection, send errors, permission persistence/revocation,
 no historical upload, bounded rotation, accounting windows and receiver retention.
 
-Still pending: public IPv6 to NAT66 on two updated clients, sustained game traffic,
+September 18 consented logs provide an initial public-IPv6/NAT66 pair observation
+with both clients on 0.5.8-4: the initiating client reports a ready IPv6 path about
+one second after session start, and both sides exchange data. The observation ends
+with the peer's normal process exit about five and a half minutes later. One
+39 ms readiness-expiry/recovery interval remains visible. No fragmented DATA is
+recorded in this sample; it does not establish sustained game or MTU acceptance.
+
+Still pending: broader public IPv6/NAT66 pair coverage, sustained game traffic,
 registration renewal/real failure in the live UI, both WPF themes and billing-window
 comparison after sufficient host samples accumulate. Historical unrecorded traffic
 cannot be recovered. See docs/IPV6-TRANSPORT.md for the packetization contract.

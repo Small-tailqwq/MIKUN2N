@@ -406,6 +406,26 @@ static struct n3n_conf_option section_supernode[] = {
                 "a host:port string, which will be resolved if needed.",
     },
     {
+        .name = "mikun2n_relay_kbit",
+        .type = n3n_conf_uint32,
+        .offset = offsetof(n2n_edge_conf_t, mikun2n_relay_kbit),
+        .desc = "Ceiling for relayed DATA in kbit/s (0 = unlimited)",
+        .help = "Set slightly below the host's outbound bandwidth so that "
+                "registration and punch coordination are never dropped by "
+                "the provider's shaper. Control messages are not limited; "
+                "under contention each sending edge gets an equal share and "
+                "may use spare capacity. Broadcast copies count against it.",
+    },
+    {
+        .name = "mikun2n_broadcast_pps",
+        .type = n3n_conf_uint32,
+        .offset = offsetof(n2n_edge_conf_t, mikun2n_broadcast_pps),
+        .desc = "Relayed broadcasts per edge per second (0 = unlimited)",
+        .help = "Each broadcast is copied to every community member; this "
+                "bounds one edge's discovery storm. LAN game discovery "
+                "normally needs a few packets per second.",
+    },
+    {
         .name = "spoofing_protection",
         .type = n3n_conf_bool,
         .offset = offsetof(n2n_edge_conf_t, spoofing_protection),

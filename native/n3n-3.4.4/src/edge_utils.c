@@ -85,6 +85,9 @@ static void check_peer_registration_needed (struct n3n_runtime_data *eee,
                                             const n2n_sock_t *peer);
 
 static int edge_init_sockets (struct n3n_runtime_data *eee);
+static int mikun2n_path_recoverable (const struct n3n_runtime_data *eee,
+                                     const struct peer_info *pp,
+                                     time_t now);
 
 static void check_known_peer_sock_change (struct n3n_runtime_data *eee,
                                           uint8_t from_supernode,
@@ -136,6 +139,19 @@ static void check_known_peer_sock_change (struct n3n_runtime_data *eee,
  * predicted band; the supernode refuses reports older than its TTL. */
 #define MIKUN2N_BANK_MODEL_AGE_MS 5000
 #define MIKUN2N_BANK_RECALIB_MAX 2
+#define MIKUN2N_BANK_COORD_RETRIES 2
+#define MIKUN2N_BANK_COORD_RETRY_MS 10000
+
+/* Pending entries that have neither sent anything nor been answered for by the
+ * supernode for this long are treated as departed identities. Longer than one
+ * Tier 1 round, during which a plan-holding edge sends no coordination query. */
+#define MIKUN2N_PEER_SILENT_SECS 30
+/* Resume IPv4 scanning only after IPv6 has stayed unavailable this long; short
+ * readiness gaps otherwise restarted worker calibration dozens of times. */
+#define MIKUN2N_IPV6_RESUME_HOLD_MS 15000
+/* An established direct path that stops receiving is kept, and probed from the
+ * socket that owns its NAT mapping, before being torn down for a full re-punch. */
+#define MIKUN2N_RECOVER_SECS 20
 
 #define MIKUN2N_BANK_STATE_NONE 0
 #define MIKUN2N_BANK_STATE_WAIT_A 1
@@ -1112,13 +1128,14 @@ static void peer_set_p2p_confirmed (struct n3n_runtime_data * eee,
                                    abs(hit_offset) <= 64 ? "low" :
                                    abs(hit_offset) <= 256 ? "mid" : "far";
             traceEvent(TRACE_NORMAL,
-                       "MikuN2N Tier 1 punch succeeded after %us/%u attempts/%u packets role=%s lane=%s offset=%d",
+                       "MikuN2N Tier 1 punch succeeded after %us/%u attempts/%u packets role=%s lane=%s offset=%d peer=%s",
                        (unsigned int)(now - scan->punch_started),
                        scan->punch_attempt,
                        scan->punch_packets,
                        mikun2n_punch_role_name(scan->punch_role),
                        hit_lane,
-                       hit_offset);
+                       hit_offset,
+                       macaddr_str(mac_buf, scan->mac_addr));
         }
 
         traceEvent(TRACE_DEBUG, "p2p connection established: %s [%s]",
@@ -2649,10 +2666,32 @@ static int find_peer_destination (struct n3n_runtime_data * eee,
                        macaddr_str(mac_buf, mac_address));
             return 0;
         }
+        if((now - scan->last_p2p) >= (scan->timeout / 2) &&
+           mikun2n_path_recoverable(eee, scan, now)) {
+            /* Relay meanwhile, and do not open a pending entry for the same MAC
+             * while the known one is still being revalidated. */
+            if(!scan->punch_recover_since) {
+                n2n_sock_str_t sockbuf2;
+                scan->punch_recover_since = now;
+                traceEvent(TRACE_NORMAL,
+                           "MikuN2N IPv4 path idle %us peer=%s; relaying and probing %s for up to %us",
+                           (unsigned int)(now - scan->last_p2p),
+                           macaddr_str(mac_buf, mac_address),
+                           sock_to_cstr(sockbuf2, &scan->sock),
+                           MIKUN2N_RECOVER_SECS);
+            }
+            memcpy(destination, &(eee->curr_sn->sock), sizeof(struct sockaddr_in));
+            return 0;
+        }
         if((now - scan->last_p2p) >= (scan->timeout / 2)) {
             /* Too much time passed since we saw the peer, need to register again
              * since the peer address may have changed. */
             traceEvent(TRACE_DEBUG, "refreshing idle known peer");
+            if(scan->punch_recover_since)
+                traceEvent(TRACE_NORMAL,
+                           "MikuN2N IPv4 path not recovered peer=%s after %us; re-punching",
+                           macaddr_str(mac_buf, mac_address),
+                           (unsigned int)(now - scan->punch_recover_since));
             HASH_DEL(eee->known_peers, scan);
             mgmt_event_post(N3N_EVENT_PEER,N3N_EVENT_PEER_P2P_EXPIRED,scan);
             peer_info_free(scan);
@@ -2938,6 +2977,16 @@ void edge_read_from_tap (struct n3n_runtime_data * eee) {
        (is_ip6_discovery(eth_pkt, len) ||
         is_ethMulticast(eth_pkt, len))) {
         traceEvent(TRACE_INFO, "dropping Tx multicast");
+        eee->stats.tx_multicast_drop++;
+        return;
+    }
+
+    /* Group addresses outside IPv4/IPv6 multicast (LLDP, STP and the rest of the
+     * IEEE 802.1 reserved range) are never forwarded by a bridge, and the
+     * supernode drops them as unknown unicast. Left alone, each one became a
+     * pending "peer" that can never register and was queried every 3 s for the
+     * whole session. */
+    if((mac[0] & 0x01) && !is_multi_broadcast(mac)) {
         eee->stats.tx_multicast_drop++;
         return;
     }
@@ -3526,6 +3575,7 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
                     HASH_FIND_PEER(eee->known_peers, pi.mac, scan);
 
                 if(scan) {
+                    scan->mikun2n_peer_info_ms = mikun2n_now_ms();
                     if(eee->conf.mikun2n_ipv6)
                         mikun2n_ipv6_update_peer(scan, &pi, mikun2n_now_ms());
                     if(pi.aflags & N2N_AFLAGS_MIKUN2N_IDENTITY) {
@@ -3568,6 +3618,8 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
                             scan->punch_exhausted = 0;
                             scan->punch_rounds = 0;
                             scan->punch_abandoned = 0;
+                            scan->punch_coord_misses = 0;
+                            scan->punch_bank_retry_ms = 0;
                             mikun2n_apply_punch_history(eee, scan, now);
                             traceEvent(TRACE_NORMAL,
                                        "MikuN2N punch plan generation=%u peer_role=%s go_in=%ums "
@@ -3579,8 +3631,34 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
                                        pi.mikun2n_eim_matches,
                                        pi.mikun2n_eim_samples);
                         }
+                        /* A plan that arrives after our calibration expired
+                         * would arm a spray with no worker sockets: seven
+                         * silent seconds that still consumed a retry round.
+                         * Only a live local pool can act on it; otherwise the
+                         * next round recalibrates. */
+                        int bank_live =
+                            scan->punch_bank_state >= MIKUN2N_BANK_STATE_WAIT_A &&
+                            scan->punch_bank_state <= MIKUN2N_BANK_STATE_ARMED &&
+                            scan->punch_bank_worker_count > 0;
+                        static uint32_t ignored_bank_nonce;
                         if((pi.aflags & N2N_AFLAGS_MIKUN2N_BANK_MODEL) &&
-                           pi.mikun2n_bank_nonce != 0 &&
+                           pi.mikun2n_bank_nonce != 0 && !bank_live &&
+                           scan->punch_peer_bank_nonce !=
+                               pi.mikun2n_bank_nonce &&
+                           ignored_bank_nonce != pi.mikun2n_bank_nonce) {
+                            /* Keep the peer nonce unrecorded so the same plan
+                             * is still accepted once a new calibration is live. */
+                            ignored_bank_nonce = pi.mikun2n_bank_nonce;
+                            traceEvent(TRACE_NORMAL,
+                                       "MikuN2N bank plan generation=%u ignored "
+                                       "peer=%s: local calibration no longer live (state=%u workers=%u)",
+                                       pi.mikun2n_punch_generation,
+                                       macaddr_str(mac_buf1, pi.mac),
+                                       scan->punch_bank_state,
+                                       scan->punch_bank_worker_count);
+                        }
+                        if((pi.aflags & N2N_AFLAGS_MIKUN2N_BANK_MODEL) &&
+                           pi.mikun2n_bank_nonce != 0 && bank_live &&
                            scan->punch_peer_bank_nonce !=
                                pi.mikun2n_bank_nonce) {
                             scan->punch_peer_bank_ready = 1;
@@ -4230,19 +4308,65 @@ static void mikun2n_send_register_worker (struct n3n_runtime_data *eee,
  * hits the timeout/2 idle check, deletes the entry and needs a full re-punch
  * (observed: a 4 s toggle resumed direct instantly, a 24 s one degraded to
  * pSp). A periodic REGISTER over the socket that carries the direct session
- * keeps both the mapping and the entry fresh, so cancel restores P2P at once. */
-static void mikun2n_forced_relay_keepalive (struct n3n_runtime_data *eee,
-                                            struct peer_info *pp,
-                                            time_t now) {
+ * keeps both the mapping and the entry fresh, so cancel restores P2P at once.
+ *
+ * IPv6 DATA bypasses the IPv4 path the same way. Keeping a working IPv4 path
+ * warm makes it the fallback for a brief IPv6 readiness gap instead of the
+ * supernode; a path that stops answering is left to expire normally. */
+static void mikun2n_standby_keepalive (struct n3n_runtime_data *eee,
+                                       struct peer_info *pp,
+                                       time_t now) {
     if(pp->local || pp->sock.family != AF_INET)
         return;
     if(pp->last_p2p == 0)
         return;
     if(mikun2n_sock_is_supernode(eee, &pp->sock))
         return;
-    if(!mikun2n_peer_force_relay(eee, pp))
+    if(!mikun2n_peer_force_relay(eee, pp) &&
+       !(mikun2n_ipv6_active(eee, pp, mikun2n_now_ms()) &&
+         now - pp->last_p2p < pp->timeout))
         return;
     if(now - pp->punch_keepalive_at < MIKUN2N_RELAY_KEEPALIVE_SECS)
+        return;
+    pp->punch_keepalive_at = now;
+    mikun2n_send_register_worker(
+        eee, pp,
+        pp->punch_data_sock != MIKUN2N_INVALID_SOCKET
+            ? pp->punch_data_sock : eee->sock,
+        pp->sock.port);
+}
+
+/* A known path whose receive side went quiet (find_peer_destination) keeps its
+ * entry, endpoint and - crucially - the socket owning our NAT mapping for a
+ * bounded window while DATA uses the supernode. The peer's filter only admits
+ * that exact mapping, so tearing it down made even a brief interruption require
+ * a full re-punch: one such pair then relayed for hours after three failed
+ * rounds. Any direct REGISTER/ACK from the peer restores the path at once. */
+static int mikun2n_path_recoverable (const struct n3n_runtime_data *eee,
+                                     const struct peer_info *pp,
+                                     time_t now) {
+    return pp->sock.family == AF_INET && !pp->local && pp->last_p2p &&
+           !mikun2n_sock_is_supernode(eee, &pp->sock) &&
+           now - pp->last_p2p < pp->timeout / 2 + MIKUN2N_RECOVER_SECS;
+}
+
+static void mikun2n_recover_probe (struct n3n_runtime_data *eee,
+                                   struct peer_info *pp,
+                                   time_t now) {
+    macstr_t mac;
+
+    if(!pp->punch_recover_since)
+        return;
+    if(now - pp->last_p2p < pp->timeout / 2) {
+        traceEvent(TRACE_NORMAL,
+                   "MikuN2N IPv4 path recovered peer=%s after %us on the original mapping",
+                   macaddr_str(mac, pp->mac_addr),
+                   (unsigned int)(now - pp->punch_recover_since));
+        pp->punch_recover_since = 0;
+        return;
+    }
+    if(!mikun2n_path_recoverable(eee, pp, now) ||
+       now == pp->punch_keepalive_at)
         return;
     pp->punch_keepalive_at = now;
     mikun2n_send_register_worker(
@@ -4337,6 +4461,7 @@ static int mikun2n_bank_update (struct n3n_runtime_data *eee,
                                 time_t now,
                                 uint64_t now_ms) {
     int i;
+    macstr_t mac_buf;
 
     if(pp->punch_bank_state == MIKUN2N_BANK_STATE_FALLBACK)
         return 0;
@@ -4353,6 +4478,7 @@ static int mikun2n_bank_update (struct n3n_runtime_data *eee,
         pp->punch_peer_bank_nonce = 0;
         pp->punch_bank_nonce = 0;
         pp->punch_bank_recalib = 0;
+        pp->punch_coord_misses = 0;
         pp->punch_bank_state = MIKUN2N_BANK_STATE_NONE;
     }
     if(!pp->punch_generation) {
@@ -4361,6 +4487,8 @@ static int mikun2n_bank_update (struct n3n_runtime_data *eee,
     }
 
     if(pp->punch_bank_state == MIKUN2N_BANK_STATE_NONE) {
+        if(now_ms < pp->punch_bank_retry_ms)
+            return 1;
         if(mikun2n_bank_pool_busy(eee, pp))
             return 1;
         if(!mikun2n_create_bank_workers(pp)) {
@@ -4381,8 +4509,9 @@ static int mikun2n_bank_update (struct n3n_runtime_data *eee,
             now_ms + MIKUN2N_BANK_CALIBRATION_MS;
         pp->punch_bank_state = MIKUN2N_BANK_STATE_WAIT_A;
         traceEvent(TRACE_NORMAL,
-                   "MikuN2N NAT4 bank calibration started workers=%u",
-                   pp->punch_bank_worker_count);
+                   "MikuN2N NAT4 bank calibration started workers=%u peer=%s",
+                   pp->punch_bank_worker_count,
+                   macaddr_str(mac_buf, pp->mac_addr));
         return 1;
     }
     if(pp->punch_bank_state == MIKUN2N_BANK_STATE_WAIT_A &&
@@ -4440,10 +4569,35 @@ static int mikun2n_bank_update (struct n3n_runtime_data *eee,
             return 1;
         }
         if(now_ms - pp->punch_coord_started_ms >= 8000) {
+            macstr_t mac;
+            mikun2n_close_bank_workers(pp, -1);
+            /* Across ten days of logs the single-socket legacy scanner never
+             * connected two APDM endpoints (0 of 39 rounds in one session,
+             * about 11,600 packets each), while coordinated banks connected
+             * about half of their rounds. A missed coordination - usually the
+             * peer's only worker pool serving another peer, or a late
+             * calibration - costs no scan traffic, so recalibrate after a short
+             * pause before spending this round on legacy. */
+            if(pp->punch_coord_misses < MIKUN2N_BANK_COORD_RETRIES) {
+                pp->punch_coord_misses++;
+                pp->punch_bank_state = MIKUN2N_BANK_STATE_NONE;
+                pp->punch_bank_nonce = 0;
+                pp->punch_bank_recalib = 0;
+                pp->punch_peer_bank_ready = 0;
+                pp->punch_peer_bank_nonce = 0;
+                pp->punch_bank_retry_ms = now_ms + MIKUN2N_BANK_COORD_RETRY_MS;
+                traceEvent(TRACE_NORMAL,
+                           "MikuN2N bank coordination missed peer=%s (%u/%u); "
+                           "recalibrating in %ums, no round charged",
+                           macaddr_str(mac, pp->mac_addr),
+                           pp->punch_coord_misses, MIKUN2N_BANK_COORD_RETRIES,
+                           MIKUN2N_BANK_COORD_RETRY_MS);
+                return 1;
+            }
             traceEvent(TRACE_WARNING,
                        "MikuN2N bank coordination timed out; "
-                       "using legacy NAT4 strategy");
-            mikun2n_close_bank_workers(pp, -1);
+                       "using legacy NAT4 strategy peer=%s",
+                       macaddr_str(mac, pp->mac_addr));
             pp->punch_bank_state = MIKUN2N_BANK_STATE_FALLBACK;
             pp->punch_plan_ready = 1;
             pp->punch_go_at_ms = now_ms;
@@ -4455,6 +4609,17 @@ static int mikun2n_bank_update (struct n3n_runtime_data *eee,
         if(now_ms < pp->punch_go_at_ms ||
            now - pp->time_alloc < eee->conf.mikun2n_punch_grace)
             return 1;
+        if(!pp->punch_bank_worker_count) {
+            /* Nothing can be sent; never charge a round for it. */
+            traceEvent(TRACE_WARNING,
+                       "MikuN2N bank punch skipped: no worker sockets; recalibrating");
+            pp->punch_bank_state = MIKUN2N_BANK_STATE_NONE;
+            pp->punch_bank_nonce = 0;
+            pp->punch_peer_bank_ready = 0;
+            pp->punch_peer_bank_nonce = 0;
+            pp->punch_plan_ready = 0;
+            return 1;
+        }
         pp->punch_started = now;
         pp->punch_last_ms = now_ms - MIKUN2N_BANK_TICK_MS;
         pp->punch_attempt = 0;
@@ -4464,14 +4629,15 @@ static int mikun2n_bank_update (struct n3n_runtime_data *eee,
         traceEvent(TRACE_NORMAL,
                    "MikuN2N NAT4 bank punch started peer_control=%u "
                    "self_model=%u banks=%u/%u peer_model=%u banks=%u/%u "
-                   "workers=%u budget=%ums",
+                   "workers=%u budget=%ums peer=%s",
                    pp->sock.port,
                    pp->punch_bank_model_mode,
                    pp->punch_bank1, pp->punch_bank2,
                    pp->punch_peer_bank_mode,
                    pp->punch_peer_bank1, pp->punch_peer_bank2,
                    pp->punch_bank_worker_count,
-                   MIKUN2N_BANK_SPRAY_MS);
+                   MIKUN2N_BANK_SPRAY_MS,
+                   macaddr_str(mac_buf, pp->mac_addr));
     }
     if(pp->punch_bank_state == MIKUN2N_BANK_STATE_SPRAY) {
         if(now_ms >= pp->punch_bank_deadline_ms ||
@@ -4482,18 +4648,20 @@ static int mikun2n_bank_update (struct n3n_runtime_data *eee,
                 traceEvent(TRACE_NORMAL,
                            "MikuN2N NAT4 bank punch abandoned after "
                            "%us/%u ticks/%u packets (round %u/%u); "
-                           "stable pSp relay, manual retry required",
-                           (unsigned int)(now - pp->punch_started),
-                           pp->punch_attempt, pp->punch_packets,
-                           pp->punch_rounds, MIKUN2N_PUNCH_MAX_ROUNDS);
-            } else {
-                traceEvent(TRACE_NORMAL,
-                           "MikuN2N NAT4 bank punch exhausted after "
-                           "%us/%u ticks/%u packets (round %u/%u); retry in %us",
+                           "stable pSp relay, manual retry required peer=%s",
                            (unsigned int)(now - pp->punch_started),
                            pp->punch_attempt, pp->punch_packets,
                            pp->punch_rounds, MIKUN2N_PUNCH_MAX_ROUNDS,
-                           MIKUN2N_PUNCH_RETRY_SECS);
+                           macaddr_str(mac_buf, pp->mac_addr));
+            } else {
+                traceEvent(TRACE_NORMAL,
+                           "MikuN2N NAT4 bank punch exhausted after "
+                           "%us/%u ticks/%u packets (round %u/%u); retry in %us peer=%s",
+                           (unsigned int)(now - pp->punch_started),
+                           pp->punch_attempt, pp->punch_packets,
+                           pp->punch_rounds, MIKUN2N_PUNCH_MAX_ROUNDS,
+                           MIKUN2N_PUNCH_RETRY_SECS,
+                           macaddr_str(mac_buf, pp->mac_addr));
             }
             mikun2n_close_bank_workers(pp, -1);
             return 1;
@@ -4629,6 +4797,68 @@ static void mikun2n_punch_cone_sweep (struct n3n_runtime_data *eee,
         mikun2n_punch_offset(eee, pp, base, pp->punch_drift);
 }
 
+/* The supernode answers QUERY_PEER only for registered MACs, and a live peer's
+ * relayed traffic refreshes last_seen. Neither for a while: a departed identity. */
+static int mikun2n_peer_silent (const struct peer_info *pp, time_t now,
+                                uint64_t now_ms) {
+    time_t seen = pp->last_seen ? pp->last_seen : pp->time_alloc;
+
+    if(now - seen < MIKUN2N_PEER_SILENT_SECS)
+        return 0;
+    return !pp->mikun2n_peer_info_ms ||
+           now_ms - pp->mikun2n_peer_info_ms >=
+               (uint64_t)MIKUN2N_PEER_SILENT_SECS * 1000;
+}
+
+/* Drop the round in progress without recording a failure: nothing was learned
+ * about the path, and the retry budget belongs to a reachable peer. */
+static void mikun2n_suspend_round (struct peer_info *pp) {
+    int keep = -1;
+    int i;
+
+    if(pp->punch_data_sock != MIKUN2N_INVALID_SOCKET)
+        for(i = 0; i < MIKUN2N_BANK_WORKERS; i++)
+            if(pp->punch_workers[i].socket_fd == pp->punch_data_sock)
+                keep = i;
+    mikun2n_close_bank_workers(pp, keep);
+    pp->punch_bank_state = MIKUN2N_BANK_STATE_NONE;
+    pp->punch_bank_nonce = 0;
+    pp->punch_bank_recalib = 0;
+    pp->punch_peer_bank_ready = 0;
+    pp->punch_peer_bank_nonce = 0;
+    pp->punch_started = 0;
+    pp->punch_attempt = 0;
+    pp->punch_packets = 0;
+    pp->punch_plan_ready = 0;
+    pp->punch_role = MIKUN2N_PUNCH_ROLE_NONE;
+    pp->punch_coord_started_ms = 0;
+    pp->punch_coord_last_query_ms = 0;
+    pp->punch_generation = 0;
+}
+
+/* One heavy scan at a time per edge. Concurrent rounds toward several peers
+ * reached ~3,500 packets/s, overflowed the socket send buffer (WSAENOBUFS) and
+ * each APDM destination allocated its own CGNAT mapping. A queued round has not
+ * started, so it has consumed neither time nor packet budget. */
+static int mikun2n_scan_slot_busy (const struct n3n_runtime_data *eee,
+                                   const struct peer_info *self) {
+    const struct peer_info *pp, *tmp;
+
+    HASH_ITER(hh, eee->pending_peers, pp, tmp) {
+        if(pp == self)
+            continue;
+        if(pp->punch_exhausted)
+            continue;
+        if(pp->punch_bank_state == MIKUN2N_BANK_STATE_SPRAY)
+            return 1;
+        if(pp->punch_started &&
+           !pp->punch_ipv6_paused_ms &&
+           pp->punch_bank_state != MIKUN2N_BANK_STATE_ARMED)
+            return 1;
+    }
+    return 0;
+}
+
 /* MikuN2N Tier 1 fallback. n3n's ordinary REGISTER exchange remains Tier 0.
  * A peer that stays pSp is then scanned in 250 ms ticks. Both NAT4 roles run
  * the cone escape above; the anchor additionally refreshes a small fixed
@@ -4642,6 +4872,7 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
     int i, base, delta;
     int nat4_sender;
     uint32_t required_attempts;
+    macstr_t mac_buf;
     static const int anchor_offsets[] = {
         0, 1, -1, 2, -2, 4, -4, 8, -8, 16, -16,
         32, -32, 64, -64, 128, -128, 192, -192, 256, -256
@@ -4661,7 +4892,20 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
     if(!eee->conf.mikun2n_punch)
         return;
 
+    if(mikun2n_peer_silent(pp, now, now_ms)) {
+        if(!pp->punch_exhausted &&
+           (pp->punch_started || pp->punch_bank_state != MIKUN2N_BANK_STATE_NONE)) {
+            macstr_t mac;
+            traceEvent(TRACE_NORMAL,
+                       "MikuN2N punch suspended peer=%s: no packets or supernode answer for %us",
+                       macaddr_str(mac, pp->mac_addr), MIKUN2N_PEER_SILENT_SECS);
+            mikun2n_suspend_round(pp);
+        }
+        return;
+    }
+
     if(mikun2n_ipv6_active(eee, pp, now_ms)) {
+        pp->punch_ipv6_lost_ms = 0;
         if(!pp->punch_ipv6_stable_ms)
             pp->punch_ipv6_stable_ms = now_ms;
         if(now_ms - pp->punch_ipv6_stable_ms >= 5000) {
@@ -4689,6 +4933,14 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
         pp->punch_ipv6_stable_ms = 0;
         if(pp->punch_ipv6_paused_ms) {
             macstr_t mac;
+            /* Readiness gaps are usually well under a second, and the IPv4 path
+             * or relay carries DATA meanwhile. Restarting calibration for each
+             * one (65 times in one 15-hour log) only spent packets. */
+            if(!pp->punch_ipv6_lost_ms)
+                pp->punch_ipv6_lost_ms = now_ms;
+            if(now_ms - pp->punch_ipv6_lost_ms < MIKUN2N_IPV6_RESUME_HOLD_MS)
+                return;
+            pp->punch_ipv6_lost_ms = 0;
             /* Paused time is not a failed scan; retain consumed packet budgets. */
             if(pp->punch_started)
                 pp->punch_started += (time_t)((now_ms - pp->punch_ipv6_paused_ms) / 1000);
@@ -4758,17 +5010,21 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
                   pp->punch_role == MIKUN2N_PUNCH_ROLE_ANCHOR;
 
     if(!pp->punch_started) {
+        macstr_t mac;
         if(now - pp->time_alloc < eee->conf.mikun2n_punch_grace)
+            return;
+        if(mikun2n_scan_slot_busy(eee, pp))
             return;
         if(pp->punch_role == MIKUN2N_PUNCH_ROLE_NONE)
             pp->punch_role = MIKUN2N_PUNCH_ROLE_LAYERED;
         pp->punch_started = now;
         pp->punch_observed_port = pp->sock.port;
         traceEvent(TRACE_NORMAL,
-                   "MikuN2N Tier 1 punch started for peer port %u role=%s (budget %us/%u packets)",
+                   "MikuN2N Tier 1 punch started for peer port %u role=%s (budget %us/%u packets) peer=%s",
                    pp->sock.port, mikun2n_punch_role_name(pp->punch_role),
                    eee->conf.mikun2n_punch_budget,
-                   eee->conf.mikun2n_punch_max_packets);
+                   eee->conf.mikun2n_punch_max_packets,
+                   macaddr_str(mac, pp->mac_addr));
     }
 
     required_attempts = pp->punch_role == MIKUN2N_PUNCH_ROLE_LAYERED
@@ -4788,18 +5044,20 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
             if(abandoned) {
                 traceEvent(TRACE_NORMAL,
                            "MikuN2N Tier 1 punch abandoned after %us/%u packets "
-                           "(round %u/%u); stable pSp relay, manual retry required",
-                           (unsigned int)(now - pp->punch_started),
-                           pp->punch_packets, pp->punch_rounds,
-                           MIKUN2N_PUNCH_MAX_ROUNDS);
-            } else {
-                traceEvent(TRACE_NORMAL,
-                           "MikuN2N Tier 1 punch exhausted after %us/%u packets "
-                           "(round %u/%u); pSp relay, retry in %us",
+                           "(round %u/%u); stable pSp relay, manual retry required peer=%s",
                            (unsigned int)(now - pp->punch_started),
                            pp->punch_packets, pp->punch_rounds,
                            MIKUN2N_PUNCH_MAX_ROUNDS,
-                           (unsigned int)(pp->punch_retry_at - now));
+                           macaddr_str(mac_buf, pp->mac_addr));
+            } else {
+                traceEvent(TRACE_NORMAL,
+                           "MikuN2N Tier 1 punch exhausted after %us/%u packets "
+                           "(round %u/%u); pSp relay, retry in %us peer=%s",
+                           (unsigned int)(now - pp->punch_started),
+                           pp->punch_packets, pp->punch_rounds,
+                           MIKUN2N_PUNCH_MAX_ROUNDS,
+                           (unsigned int)(pp->punch_retry_at - now),
+                           macaddr_str(mac_buf, pp->mac_addr));
             }
         }
         if(!pp->punch_abandoned && now >= pp->punch_retry_at) {
@@ -4820,6 +5078,8 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
             pp->punch_bank_nonce = 0;
             pp->punch_peer_bank_ready = 0;
             pp->punch_peer_bank_nonce = 0;
+            pp->punch_coord_misses = 0;
+            pp->punch_bank_retry_ms = 0;
         }
         return;
     }
@@ -4905,6 +5165,32 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
 
 /* ************************************** */
 
+
+/* Upstream purge_peer_list skips tables with fewer than 16 entries - sensible
+ * for a supernode, but on an edge it kept every departed identity (a reconnect
+ * registers a fresh MAC) pending for the whole session, still queried and
+ * punched: one evening accumulated 15 identities of a single host. Expire on
+ * last_seen regardless of table size, except while an IPv6 path or a bank spray
+ * still depends on the entry. */
+static size_t mikun2n_purge_pending (struct n3n_runtime_data *eee, time_t now,
+                                     uint64_t now_ms) {
+    struct peer_info *scan, *tmp;
+    size_t purged = 0;
+
+    HASH_ITER(hh, eee->pending_peers, scan, tmp) {
+        if(!scan->purgeable ||
+           now - scan->last_seen < REGISTRATION_TIMEOUT)
+            continue;
+        if(mikun2n_ipv6_active(eee, scan, now_ms) ||
+           (scan->punch_started && !scan->punch_exhausted))
+            continue;
+        HASH_DEL(eee->pending_peers, scan);
+        mgmt_event_post(N3N_EVENT_PEER, N3N_EVENT_PEER_PURGE, scan);
+        peer_info_free(scan);
+        purged++;
+    }
+    return purged;
+}
 
 int run_edge_loop (struct n3n_runtime_data *eee) {
 
@@ -5128,10 +5414,10 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
                                             eee->sock, NULL,
                                             &last_purge_known,
                                             PURGE_REGISTRATION_FREQUENCY, REGISTRATION_TIMEOUT);
-        numPurged += purge_expired_nodes(&eee->pending_peers,
-                                         eee->sock, NULL,
-                                         &last_purge_pending,
-                                         PURGE_REGISTRATION_FREQUENCY, REGISTRATION_TIMEOUT);
+        if(now - last_purge_pending >= PURGE_REGISTRATION_FREQUENCY) {
+            numPurged += mikun2n_purge_pending(eee, now, mikun2n_now_ms());
+            last_purge_pending = now;
+        }
 
         if(numPurged > 0) {
             traceEvent(
@@ -5149,8 +5435,10 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
             uint64_t punch_now_ms = mikun2n_now_ms();
             HASH_ITER(hh, eee->pending_peers, pp, pp_tmp)
                 mikun2n_punch_peer(eee, pp, now, punch_now_ms);
-            HASH_ITER(hh, eee->known_peers, pp, pp_tmp)
-                mikun2n_forced_relay_keepalive(eee, pp, now);
+            HASH_ITER(hh, eee->known_peers, pp, pp_tmp) {
+                mikun2n_standby_keepalive(eee, pp, now);
+                mikun2n_recover_probe(eee, pp, now);
+            }
             /* Advance by whole ticks so per-tick latency does not accumulate
              * into the period; resync only when a real stall cost us more than
              * a full tick, so a stalled loop cannot burst to catch up. */

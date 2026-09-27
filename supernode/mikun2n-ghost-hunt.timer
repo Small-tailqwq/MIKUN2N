@@ -1,0 +1,10 @@
+[Unit]
+Description=Sample MikuN2N host egress where unexplained traffic appears (23:55-03:15)
+
+[Timer]
+OnCalendar=*-*-* 23,00,01,02,03:55:00
+AccuracySec=30s
+Unit=mikun2n-ghost-hunt.service
+
+[Install]
+WantedBy=timers.target

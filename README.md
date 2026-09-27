@@ -23,6 +23,7 @@ The numbered native patch list is maintained only in [Runtime/README.txt](Runtim
 - Peer discovery and latency measurement inside the virtual network. Missing or stale samples show “暂无法测量” after ten seconds; a route change clears the old RTT while probes continue. Native IPv6 probe RTT does not substitute for tunnel measurements.
 - Encryption keys passed through process environment variables, never command-line arguments or generated configuration files. Optional key storage uses Windows DPAPI for the current user.
 - Settings and logs stored under `%LocalAppData%/MikuN2N`; settings replacement preserves the previous file until the new file has been written.
+- In-app updates from GitHub Releases (see below), checked daily unless turned off in Settings → General.
 
 ## Build
 
@@ -54,6 +55,12 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 
 Both commands write `build-identity.txt` and include the explicitly listed runtime files: the patched edge, corresponding source, licenses, component notices and TAP installer. Use a fresh output directory for each release. Legacy edge binaries and backups are excluded.
 
+## Releases and in-app updates
+
+`tools/package-release.ps1` publishes the self-contained build, verifies that it carries the patched edge, its corresponding source and every bundled license (and none of the build machine's account paths), and writes `dist/MikuN2N-<version>-win-x64.zip` plus `dist/SHA256SUMS`. Pushing a tag such as `0.5.8-6` runs the same script in [the release workflow](.github/workflows/release.yml) and attaches both files to a **draft** GitHub release; clients only see it after it is published as a regular (non-prerelease) release.
+
+The client asks `api.github.com` for the latest release of the repository named by `UpdateRepository` in `MikuN2N.csproj`. Forks set their own repository with `-p:UpdateRepository=owner/name`; `-p:UpdateRepository=none` builds a client that never checks. A newer package is downloaded in the background, verified against the asset's SHA-256 (GitHub's asset digest or `SHA256SUMS`), unpacked, and its `MikuN2N.exe` version must match the tag. Only then is the player asked. Installing stops the connection, swaps the files in place with rollback on failure and restarts the new version. Development builds and folders without write access are pointed to the release page instead.
+
 The source archive supports both the Windows edge and the Linux supernode. Server build and install scripts are in [supernode/](supernode/README.md). Deployment is manual; no server or credentials are supplied by this project.
 
 IPv6 remains experimental. Compilation does not establish real-world connectivity, game compatibility or light/dark visual acceptance. Release validation needs two consenting clients, their own server and tests of connection, fallback, reconnect and MTU behavior.
@@ -64,6 +71,14 @@ IPv6 remains experimental. Compilation does not establish real-world connectivit
 
 ## License
 
-MikuN2N's own code is licensed under [GPL-3.0-only](LICENSE). Third-party files retain their individual licenses; see [Runtime/THIRD-PARTY-NOTICES.txt](Runtime/THIRD-PARTY-NOTICES.txt). Distribute the matching native source archive with the native binary.
+MikuN2N's own code, including the native patches and `tools/natpunch`, is licensed under [GPL-3.0-only](LICENSE) and ships as `LICENSE.txt` in every package. Bundled components keep their own licenses:
 
-Keep deployment addresses, communities, keys and local settings out of public source and history. For a new public repository, import the cleaned source export without the private repository's `.git` directory.
+| Component | License | Obligation met by |
+|---|---|---|
+| Patched n3n 3.4.4 edge | GPL-3.0-only (with LGPL-2.1-only `connslot`) | `Runtime/n3n-3.4.4-source.zip` with `MIKUN2N-MODIFICATIONS.md`, `Runtime/LICENSE-n2n.txt` |
+| TAP-Windows 9.24.7 installer (unmodified) | GPL-2.0 with WDK system-library exception | `Runtime/LICENSE-tap-windows.txt`, upstream source link and written source offer |
+| .NET 9 runtime, WPF, Windows Forms | MIT | `Runtime/LICENSE-dotnet.txt`, `Runtime/THIRD-PARTY-NOTICES-dotnet.txt` |
+
+Details are in [Runtime/THIRD-PARTY-NOTICES.txt](Runtime/THIRD-PARTY-NOTICES.txt). Distribute the matching native source archive with every native binary. The legacy n2n `edge.exe` has no reproducible source and is neither tracked nor packaged.
+
+Keep deployment addresses, communities, keys and local settings out of public source and history; put them only in git-ignored `*.local.md` files. The repository history was rewritten before publication to remove them, so it can be pushed as is.

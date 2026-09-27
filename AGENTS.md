@@ -53,11 +53,12 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 | `EasterEggManager.cs` + `EasterEggVisualController.cs` | 自包含的彩蛋（设置里的老虎机 → 飞虫/蜘蛛追逐动画 → 彩虹 jackpot），与连通性逻辑无关，推理核心行为时可直接跳过 |
 | `TestBuildProfile.cs` | 私有测试包内嵌的配置（批次、节点、上传地址、证书指纹、STUN 观察者）；读不到该资源时返回 null，普通构建因此不创建任何诊断会话 |
 | `TestDiagnosticsSession.cs` | 诊断会话：按 64 MiB 滚动分段记录与脱敏，按 128 KiB 分块上传；不重连即可继续记录或恢复上传，状态经 `IsRecording`/`UploadAllowed` 暴露给界面 |
+| `UpdateService.cs` | 在线更新：查 `UpdateRepository`（csproj 属性，写进程序集元数据）的 GitHub latest release，后台下载 `MikuN2N-<版本>-win-x64.zip`，按资产 digest 或 `SHA256SUMS` 校验、解包并核对 exe 版本后才询问；安装在 edge 停止后原地换文件（运行中的文件先改名 `.update-old`，失败整体回滚），以 `--after-update <pid>` 重启；新进程在单实例检查前等旧进程退出，拿到互斥体后才清理残留（只查根目录与 `Runtime/`，不递归） |
 | `DiagnosticUploadConsent.cs` | 把「始终允许」绑定成「当前节点 + 接收地址 + 证书指纹」的 SHA256；节点编辑、删除、切换都会使其失效 |
 
 ### EdgeController 不变量
 
-- 启动 `Runtime/n3n-edge.exe`；该文件不存在时回退到旧 `Runtime/edge.exe`（csproj 把它排除在发布之外），并据实际选中的二进制决定管理协议与配置格式。子进程配置每次会话生成，密钥只经 `N2N_KEY`/`N3N_KEY` 环境变量传入，绝不写进命令行或磁盘配置。
+- 启动 `Runtime/n3n-edge.exe`；该文件不存在时回退到用户自备的旧 `Runtime/edge.exe`（无可复现源码，已被 gitignore，绝不能提交或打包），并据实际选中的二进制决定管理协议与配置格式。子进程配置每次会话生成，密钥只经 `N2N_KEY`/`N3N_KEY` 环境变量传入，绝不写进命令行或磁盘配置。
 - 轮询管理接口得到 supernode 注册状态、在线 peer、每个 peer 的直连/中继（`pSp`）模式与 NAT 类型（`GetNatAsync` → `ConnectionSnapshot.NatType`/`NatDescription`）。
 - 节点由用户在界面维护（`AppSettings.Nodes` + `ActiveNodeId`），每个节点是一组「名称 + 服务器地址 + 小组名称」；`ActiveNode` 只在没有选中项时才退回第一个节点，指向已删除节点的 id 返回 null，让调用方去提示而不是偷偷换节点。服务器地址按逗号/分号/顿号/空格拆成多端点（`SplitServers`），每个端点生成一条 `supernode=`，多端点时启用 `supernode_selection=rtt`；旧 `edge.exe` 只取第一个端点。
 - 用虚拟 IP、昵称与 ARP 解析出的 MAC（`iphlpapi.dll` 的 `SendARP`）把管理接口的 peer 行与 `PeerDiscoveryService` 的结果对上，再判定 `PeerConnectionMode`：`Direct`、`LanDirect`、`Punching`、`Relayed`、`ForcedRelayed`。
@@ -78,7 +79,8 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 - WPF 与 WinForms 类型会重名（`Brush`、`Color`、`Point` 等），现有文件用显式 `using X = ...` 别名解决（如 `MediaColor`、`WpfBrush`、`Forms.NotifyIcon`），照这个写法做，不要在行内写全限定名。
 - 应用版本由 `MikuN2N.csproj` 的 `<BaseVersion>` 和 `<BuildNumber>` 组成，格式为 `0.5.8-1`、`0.5.8-2`，不再追加时间戳。每次交付新的测试包或发布包前将构建序号加一；同一交付的编译重试不加号。`BaseVersion` 变化时序号重置为 `1`。显示处一律经 `Services/BuildIdentity.cs` 读取。重建原生 edge 前运行 `tools/sync-native-version.ps1 -PatchedSource <源码目录>`，使原生构建标识与本次版本一致；单独替换 edge 时仍显示实际运行二进制报告的标识，不用客户端版本冒充。IPv6 兼容性按握手协议代次判断，不按构建号是否相同判断。
 - 本仓库按开源发布对待：节点地址、小组名称、联机密钥与个人机器路径只允许出现在 `*.local.md`（已被 gitignore）里，不要写进代码、默认值、测试脚本或受版本控制的文档。
-- `Runtime/` 分发第三方二进制（n3n edge、TAP-Windows 安装器）及其 GPLv3 许可证与源码归档 `n3n-3.4.4-source.zip`。改动打包内容时保持许可证与源码可得性义务完整，规则见 `Runtime/README.txt`。
+- `Runtime/` 分发第三方二进制（n3n edge、TAP-Windows 安装器）及其许可证（`LICENSE-n2n.txt`、`LICENSE-tap-windows.txt`、`LICENSE-dotnet.txt`）与源码归档 `n3n-3.4.4-source.zip`；本体 `LICENSE` 以 `LICENSE.txt` 随包。改动打包内容时保持许可证与源码可得性义务完整，汇总见 `Runtime/THIRD-PARTY-NOTICES.txt`，规则见 `Runtime/README.txt`。换 edge 或源码包后同步更新声明里的 SHA-256；patched 树根目录的 `MIKUN2N-MODIFICATIONS.md` 是 GPLv3 §5(a) 的修改声明，每次原生改动更新其中的版本与日期。
+- 公开发布包一律用 `tools/package-release.ps1` 生成（它检查许可证、源码与本机账户路径），产物与 `SHA256SUMS` 挂到同名 tag 的 GitHub Release 上，客户端的在线更新只认这两个文件；推 tag 会由 `.github/workflows/release.yml` 建草稿 Release，核对说明后再发布。私有测试包（`TestProfilePath`）不走这个流程。
 - 每交付一版就打一个提交，标题为 `0.5.8-2: <本版做了什么>`，正文写改动与理由，并用同名 tag 标记该提交（`0.5.8-1`、`0.5.8-2`）。审阅某一版改了什么，直接 `git diff <上一版>..<这一版>`，不要靠解压发布包逐文件比对。原生侧改动在 `n3n-build` 仓库用同样的粒度提交与打 tag。
 - 每轮的发布包、离线测试日志、验证 JSON 与改动前快照留在 `artifacts/<版本>/`（不进版本控制）。审阅、发布核对或追查历史版本时先看那里的 `*-validation.json` 与 `*-tests*.log`；要对照上一版源码就看 `before/`。
 

@@ -20,7 +20,8 @@ public sealed record ConnectionSnapshot(
     IReadOnlyList<PeerSnapshot>? Peers = null,
     string NatType = "—",
     string NatDescription = "NAT 行为尚未检测。",
-    string SupernodeText = "—");
+    string SupernodeText = "—",
+    string? NetworkHint = null);
 
 public enum PeerConnectionMode
 {
@@ -60,18 +61,31 @@ public sealed record PeerSnapshot(
         <= 1 => "≤1 ms",
         var latency => $"{latency} ms"
     };
-    public string StatusText => DateTimeOffset.Now - LastSeen < TimeSpan.FromSeconds(6)
+    // Evaluated when the poll creates the row, so a peer going quiet changes the record
+    // (and the displayed row) instead of staying "在线" until another field differs.
+    public string StatusText { get; init; } = DateTimeOffset.Now - LastSeen < TimeSpan.FromSeconds(6)
         ? "在线"
         : "连接波动";
     public string ConnectionModeText => ConnectionMode switch
     {
-        PeerConnectionMode.Direct => "IPv4 P2P 直连",
-        PeerConnectionMode.Ipv6Direct => "IPv6 P2P 直连",
-        PeerConnectionMode.LanDirect => "本地直连",
-        PeerConnectionMode.Punching => "打洞中…",
-        PeerConnectionMode.PunchFailed => "pSp 中继（打洞失败）",
-        PeerConnectionMode.Relayed => "pSp 中继",
-        PeerConnectionMode.ForcedRelayed => "pSp 中继（手动）",
+        PeerConnectionMode.Direct => "直连 · IPv4",
+        PeerConnectionMode.Ipv6Direct => "直连 · IPv6",
+        PeerConnectionMode.LanDirect => "局域网直连",
+        PeerConnectionMode.Punching => "正在尝试直连…",
+        PeerConnectionMode.PunchFailed => "服务器中转（直连未成功）",
+        PeerConnectionMode.Relayed => "服务器中转",
+        PeerConnectionMode.ForcedRelayed => "服务器中转（手动）",
         _ => "检测中"
+    };
+    public string ConnectionModeDescription => ConnectionMode switch
+    {
+        PeerConnectionMode.Direct => "你们之间直接传输数据，延迟最低。",
+        PeerConnectionMode.Ipv6Direct => "通过 IPv6 直接传输数据，延迟最低。",
+        PeerConnectionMode.LanDirect => "你们在同一个局域网内，直接相连。",
+        PeerConnectionMode.Punching => "正在尝试建立直连，期间数据经节点服务器中转。",
+        PeerConnectionMode.PunchFailed => "自动直连尝试已用完，当前经节点服务器中转，延迟可能略高。可右键重新尝试。",
+        PeerConnectionMode.Relayed => "暂时无法直连，数据经节点服务器中转，延迟可能略高。程序会继续自动尝试。",
+        PeerConnectionMode.ForcedRelayed => "已手动设为经服务器中转，可右键恢复自动直连。",
+        _ => "正在确认连接方式…"
     };
 }

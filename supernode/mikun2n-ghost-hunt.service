@@ -1,0 +1,12 @@
+[Unit]
+Description=MikuN2N outbound traffic attribution sample
+Documentation=file:///opt/mikun2n/traffic/ghost-hunt.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/mikun2n/traffic/ghost-hunt.py --seconds 1200
+Nice=10
+IOSchedulingClass=idle
+RuntimeMaxSec=1500

@@ -22,6 +22,9 @@ public sealed partial class EdgeController : IAsyncDisposable
     // what belongs to us instead of every n2n-family process on the machine.
     private static readonly ConcurrentDictionary<int, byte> LaunchedEdgeProcessIds = new();
     private static readonly TimeSpan PunchDisplayWindow = TimeSpan.FromSeconds(25);
+    // IPv6 readiness gaps are usually well under a second (65 in one 15-hour session);
+    // showing each one as "trying to connect" made a working friend flicker.
+    private static readonly TimeSpan DirectDisplayHold = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RelayReconcileInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan RelayPolicyQuietWindow = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan[] RestartDelays =
@@ -54,6 +57,9 @@ public sealed partial class EdgeController : IAsyncDisposable
     private int _sessionId;
     private int _restartAttempt;
     private volatile bool _useRotatingMac;
+    // Only chooses wording: a session that never reached the server is most likely
+    // misconfigured, and telling that user to wait would leave them waiting forever.
+    private volatile bool _sessionEverConnected;
     private volatile string? _tapAdapterId;
     private volatile bool _tapAdapterPinFailed;
 
@@ -527,13 +533,13 @@ public sealed partial class EdgeController : IAsyncDisposable
             if (conflictingProcesses.Count > 0)
             {
                 throw new InvalidOperationException(
-                    "检测到另一个 n2n/n3n 客户端仍在运行。请返回主界面确认是否结束旧进程。");
+                    "检测到另一个联机组件仍在运行。请返回主界面确认是否结束旧进程。");
             }
 
             var edgePath = ResolveEdgePath();
             if (!File.Exists(edgePath))
             {
-                throw new FileNotFoundException("缺少 Runtime\\edge.exe，程序包不完整。", edgePath);
+                throw new FileNotFoundException("程序文件不完整（缺少联机组件），请重新下载完整安装包。", edgePath);
             }
 
             Directory.CreateDirectory(_runtimeDirectory);
@@ -555,6 +561,7 @@ public sealed partial class EdgeController : IAsyncDisposable
                 _wantConnected = true;
                 _parameters = parameters;
                 _restartAttempt = 0;
+                _sessionEverConnected = false;
                 sessionId = ++_sessionId;
                 connectionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 _connectionCancellation = connectionCancellation;
@@ -1119,7 +1126,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         {
             if (!process.Start())
             {
-                throw new InvalidOperationException("无法启动 n2n edge。");
+                throw new InvalidOperationException("无法启动联机组件，请以管理员身份重新打开程序，或重新下载安装包。");
             }
             run.StartedAt = DateTimeOffset.Now;
             LaunchedEdgeProcessIds[process.Id] = 0;
@@ -1429,7 +1436,7 @@ public sealed partial class EdgeController : IAsyncDisposable
             PublishIfCurrent(run, new ConnectionSnapshot(
                 ConnectionState.Reconnecting,
                 "正在恢复连接…",
-                "n2n 正在重新联系服务器，无需反复点击连接。",
+                "正在重新联系节点服务器，无需操作。",
                 TapAddress() ?? "正在获取"));
             return;
         }
@@ -1444,12 +1451,22 @@ public sealed partial class EdgeController : IAsyncDisposable
             return;
         }
 
-        PublishIfCurrent(run, new ConnectionSnapshot(
-            ConnectionState.Reconnecting,
-            "连接不稳定，正在重试…",
-            "暂时无法确认服务器状态，程序仍在后台自动恢复。请先不要反复点击连接。",
-            TapAddress() ?? "正在获取"));
+        PublishIfCurrent(run, _sessionEverConnected
+            ? new ConnectionSnapshot(
+                ConnectionState.Reconnecting,
+                "连接不稳定，正在重试…",
+                "暂时无法确认服务器状态，程序仍在后台自动恢复。请先不要反复点击连接。",
+                TapAddress() ?? "正在获取")
+            : NeverConnectedSnapshot());
     }
+
+    private ConnectionSnapshot NeverConnectedSnapshot() => new(
+        ConnectionState.Reconnecting,
+        "暂时连不上节点服务器",
+        "请确认节点地址和端口正确、服务器已开启，并且小组名称被该服务器允许。程序会继续自动尝试。",
+        TapAddress() ?? "正在获取",
+        -1,
+        -1);
 
     private async Task HandleProcessExitedAsync(EdgeRun run, CancellationToken connectionCancellation)
     {
@@ -1467,7 +1484,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         var exitCodeText = exitCode is int code
             ? $"{code} / 0x{unchecked((uint)code):X8}"
             : "未知";
-        var reason = FindExitReason(run);
+        var reason = FindExitReason(run, exitCode);
         AppendLog(
             run,
             $"MikuN2N：n3n 进程已退出（代码 {exitCodeText}）。{reason}");
@@ -1500,10 +1517,13 @@ public sealed partial class EdgeController : IAsyncDisposable
         while (!connectionCancellation.IsCancellationRequested)
         {
             var delay = RestartDelays[Math.Min(restartAttempt - 1, RestartDelays.Length - 1)];
+            // The raw reason and log path are already in the log; the status card
+            // only needs to say what happens next.
             Publish(new ConnectionSnapshot(
                 ConnectionState.Reconnecting,
                 "连接意外中断，正在自动恢复…",
-                $"n2n 已退出（代码 {exitCode}）。{reason} {delay.TotalSeconds:0} 秒后自动重启。"));
+                $"联机组件意外退出，{delay.TotalSeconds:0} 秒后自动重新连接（第 {restartAttempt} 次）。详细原因已记录在运行日志中。" +
+                (restartAttempt >= 3 ? "如果反复出现，请关闭其他 VPN 或加速器后重试。" : string.Empty)));
 
             try
             {
@@ -1647,13 +1667,15 @@ public sealed partial class EdgeController : IAsyncDisposable
         if (line.Contains("supernode not responding", StringComparison.OrdinalIgnoreCase))
         {
             run.LogConfirmedConnected = false;
-            PublishIfCurrent(run, new ConnectionSnapshot(
-                ConnectionState.Reconnecting,
-                "连接不稳定，正在恢复…",
-                "暂时收不到服务器回应，程序仍在自动重试，无需反复点击连接。",
-                TapAddress() ?? "正在获取",
-                -1,
-                -1));
+            PublishIfCurrent(run, _sessionEverConnected
+                ? new ConnectionSnapshot(
+                    ConnectionState.Reconnecting,
+                    "连接不稳定，正在恢复…",
+                    "暂时收不到服务器回应，程序仍在自动重试，无需反复点击连接。",
+                    TapAddress() ?? "正在获取",
+                    -1,
+                    -1)
+                : NeverConnectedSnapshot());
         }
 
         LogReceived?.Invoke(this, line);
@@ -1768,6 +1790,7 @@ public sealed partial class EdgeController : IAsyncDisposable
     {
         // Discovery and UPnP callbacks must not hide a sustained registration failure.
         if (run.RegistrationBlocked || run.AddressConflict || run.Process.HasExited) return;
+        _sessionEverConnected = true;
         var now = DateTimeOffset.Now;
         var typed = run.Peers
             .Select(peer => (peer, mode: GetPeerConnectionMode(run, peer)))
@@ -1784,6 +1807,16 @@ public sealed partial class EdgeController : IAsyncDisposable
             {
                 var (peer, mode) = typed[index];
                 present.Add(peer.VirtualIp);
+                if (mode is PeerConnectionMode.Direct or PeerConnectionMode.Ipv6Direct)
+                {
+                    run.DirectSeen[peer.VirtualIp] = (mode, now);
+                }
+                else if (mode is PeerConnectionMode.Punching or PeerConnectionMode.Relayed &&
+                         run.DirectSeen.TryGetValue(peer.VirtualIp, out var direct) &&
+                         now - direct.At < DirectDisplayHold)
+                {
+                    mode = direct.Mode;
+                }
                 if (mode == PeerConnectionMode.Relayed && !run.NativePunchTelemetry)
                 {
                     if (!run.RelayedSince.TryGetValue(peer.VirtualIp, out var since))
@@ -1808,6 +1841,10 @@ public sealed partial class EdgeController : IAsyncDisposable
             {
                 run.RelayedSince.Remove(key);
             }
+            foreach (var key in run.DirectSeen.Keys.Where(key => !present.Contains(key)).ToArray())
+            {
+                run.DirectSeen.Remove(key);
+            }
         }
         LogPeerConnectionTransitions(run, peers);
 
@@ -1822,16 +1859,14 @@ public sealed partial class EdgeController : IAsyncDisposable
         var failedCount = peers.Count(peer =>
             peer.ConnectionMode == PeerConnectionMode.PunchFailed);
         var detail = peers.Length == 0
-            ? "隧道已连接；暂时没有发现其他已启动 MikuN2N 的朋友。"
+            ? "已连接，正在等待朋友上线。"
             : punchingCount > 0
-                ? $"隧道已连接；{directCount} 位 P2P 直连，{punchingCount} 位打洞中，{relayedCount} 位经 Supernode 中继。"
+                ? $"已连接；{directCount} 位朋友直连，{punchingCount} 位正在尝试直连，{relayedCount} 位经服务器中转。"
                 : failedCount > 0
-                    ? $"隧道已连接；{directCount} 位 P2P 直连，{relayedCount} 位经 Supernode 中继；其中 {failedCount} 位已停止自动打洞，可右键重试。"
-                : $"隧道已连接；{directCount} 位 P2P 直连，{relayedCount} 位经 Supernode 中继。";
-        if (!string.IsNullOrWhiteSpace(run.NetworkHint))
-        {
-            detail = $"{detail} {run.NetworkHint}";
-        }
+                    ? $"已连接；{directCount} 位朋友直连，{relayedCount} 位经服务器中转，其中 {failedCount} 位已停止自动尝试，可右键重试。"
+                : $"已连接；{directCount} 位朋友直连，{relayedCount} 位经服务器中转。";
+        // Network hints (UPnP/CGNAT) now live beside the NAT type; the detail line keeps
+        // only what the player has to act on, such as a key mismatch.
         if (!string.IsNullOrWhiteSpace(run.CompatibilityHint))
         {
             detail = $"{detail} {run.CompatibilityHint}";
@@ -1852,7 +1887,8 @@ public sealed partial class EdgeController : IAsyncDisposable
             peers,
             run.NatType,
             run.NatDescription,
-            FormatSupernodeText(run, run.ActiveNodeName)));
+            FormatSupernodeText(run, run.ActiveNodeName),
+            run.NetworkHint));
     }
 
     private static HashSet<string> ResolveSupernodeHosts(string server) =>
@@ -2025,10 +2061,22 @@ public sealed partial class EdgeController : IAsyncDisposable
         run.NatPollWarningLogged = false;
     }
 
-    private static string FindExitReason(EdgeRun run)
+    private static string FindExitReason(EdgeRun run, int? exitCode)
     {
         lock (run.LogGate)
         {
+            if (run.StopRequested)
+            {
+                return "已按请求正常结束。";
+            }
+            // n3n prints its packet statistics only on an orderly shutdown; exit code 0
+            // with them is a clean stop (system shutdown, logoff or an outside request),
+            // not the missing-output crash the fallback text below describes.
+            if (exitCode == 0 &&
+                run.LogLines.Any(line => line.Contains("Packet stats", StringComparison.OrdinalIgnoreCase)))
+            {
+                return $"n3n 已自行正常结束（通常由系统关机、注销或外部结束引起）；完整日志：{run.LogPath}";
+            }
             var reason = run.LogLines.LastOrDefault(line =>
                 line.Contains("recvfrom() failed", StringComparison.OrdinalIgnoreCase) ||
                 line.Contains("WSAGetLastError", StringComparison.OrdinalIgnoreCase) ||
@@ -2725,6 +2773,8 @@ public sealed partial class EdgeController : IAsyncDisposable
         public Dictionary<string, string> PeerMacAddresses { get; } =
             new(StringComparer.Ordinal);
         public Dictionary<string, DateTimeOffset> RelayedSince { get; } =
+            new(StringComparer.Ordinal);
+        public Dictionary<string, (PeerConnectionMode Mode, DateTimeOffset At)> DirectSeen { get; } =
             new(StringComparer.Ordinal);
         public Dictionary<string, PeerConnectionMode> LoggedPeerModes { get; } =
             new(StringComparer.Ordinal);

@@ -22,6 +22,16 @@ bind=0.0.0.0:__BIND_PORT__
 # 防止伪造源地址的报文被当作有效注册。自建节点建议保持开启。
 spoofing_protection=true
 
+# 中转限速（可选，默认不限）。小带宽云主机上，中转的游戏数据一旦占满出口带宽，
+# 云厂商会连同注册、查询、打洞协调报文一起丢弃，朋友之间反而更难建立直连。
+# mikun2n_relay_kbit 只限制中转的游戏数据（含广播副本），控制报文不受影响；
+# 多人同时中转时平分带宽，链路空闲时允许借用。建议设为出口带宽的约 85%，
+# 例如 4 Mbps 的主机填 3400。mikun2n_broadcast_pps 限制每个客户端每秒可被中转的
+# 广播数（每个广播会复制给小组里的所有人），局域网游戏的房间发现一般每秒几个即可。
+# 实际丢弃数量可用 get_relay_stats 查看（policy_dropped_*）。
+#mikun2n_relay_kbit=3400
+#mikun2n_broadcast_pps=20
+
 # 多台 supernode 组成联邦（互相中继、就近选路）时，所有成员填写同一个联邦名，
 # 并用 peer 指向其他成员。单节点部署不需要这两项。
 #federation=myfederation

@@ -37,6 +37,14 @@
 #define IPV6_DATA 3
 #define IPV6_REPORT_TTL_MS 30000
 #define IPV6_PATH_TTL_MS 6500
+#define IPV6_KEEPALIVE_MS 2000
+#define IPV6_FAST_PROBE_MS 500
+#define IPV6_LEASE_MARGIN_MS 3500
+#define IPV6_READY_RECENT_MS 15000
+#define IPV6_QUERY_MS 3000
+#define IPV6_QUERY_ACTIVE_MS 10000
+#define IPV6_QUERY_SILENT_MS 15000
+#define IPV6_PEER_SILENT_MS 20000
 static const uint8_t ipv6_magic[4] = {'M', 'K', '6', MIKUN2N_IPV6_WIRE_VERSION};
 
 static int ipv6_diagnostics (void) {
@@ -530,6 +538,38 @@ int mikun2n_ipv6_active (const struct n3n_runtime_data *eee, const struct peer_i
     return ipv6_receive_ready(eee, peer, now_ms) && peer->mikun2n_ipv6_peer_ready_until_ms > now_ms;
 }
 
+/* Scheduled at send time for the case where this probe is lost; a matching PONG
+ * reschedules from its own arrival. A fixed 2 s keepalive against a 6.5 s lease
+ * that is also chained through the peer's probes tolerated about two consecutive
+ * losses: a 15-hour log with ~5% probe loss expired readiness 65 times while the
+ * path itself stayed usable. Near the end of either lease probe every 500 ms, so
+ * an expiry needs several consecutive losses. Steady-state cadence and the wire
+ * format are unchanged, so older generation-3 peers interoperate. */
+static uint64_t ipv6_next_keepalive (const struct n3n_runtime_data *eee, const struct peer_info *peer,
+                                     uint64_t now_ms) {
+    if(!ipv6_receive_ready(eee, peer, now_ms))
+        return now_ms + (peer->mikun2n_ipv6_attempts < 6 ? IPV6_FAST_PROBE_MS : 10000);
+    uint64_t lease = peer->mikun2n_ipv6_valid_until_ms;
+    // A peer that never granted readiness must not keep us probing at the fast rate.
+    if(peer->mikun2n_ipv6_ready_seen_ms && now_ms - peer->mikun2n_ipv6_ready_seen_ms < IPV6_READY_RECENT_MS &&
+       peer->mikun2n_ipv6_peer_ready_until_ms < lease)
+        lease = peer->mikun2n_ipv6_peer_ready_until_ms;
+    uint64_t next = now_ms + IPV6_KEEPALIVE_MS;
+    if(lease < next + IPV6_LEASE_MARGIN_MS)
+        next = max(now_ms + IPV6_FAST_PROBE_MS, lease > IPV6_LEASE_MARGIN_MS ? lease - IPV6_LEASE_MARGIN_MS : 0);
+    return next;
+}
+
+/* Without an answer from the supernode or any packet from the peer, the entry is
+ * most likely an identity that already left (every reconnect registers a new MAC). */
+static int ipv6_peer_silent (const struct peer_info *peer, uint64_t now_ms) {
+    uint64_t heard = peer->mikun2n_peer_info_ms;
+    uint64_t seen_ms = (uint64_t)(time(NULL) - (peer->last_seen ? peer->last_seen : peer->time_alloc)) * 1000;
+    if(!heard)
+        return seen_ms >= IPV6_PEER_SILENT_MS;
+    return now_ms - heard >= IPV6_PEER_SILENT_MS && seen_ms >= IPV6_PEER_SILENT_MS;
+}
+
 static int ipv6_message_too_large (int error) {
 #ifdef _WIN32
     return error == WSAEMSGSIZE;
@@ -611,7 +651,8 @@ static void ipv6_tick_peers (struct n3n_runtime_data *eee, struct peer_info *pee
     struct peer_info *peer, *tmp;
     HASH_ITER(hh, peers, peer, tmp) {
         macstr_t mac;
-        if(is_null_mac(peer->mac_addr) || !memcmp(peer->mac_addr, eee->device.mac_addr, N2N_MAC_SIZE))
+        if(is_null_mac(peer->mac_addr) || (peer->mac_addr[0] & 0x01) ||
+           !memcmp(peer->mac_addr, eee->device.mac_addr, N2N_MAC_SIZE))
             continue;
         if(peer->force_relay || peer->local) {
             if(peer->mikun2n_ipv6_valid_until_ms)
@@ -631,10 +672,14 @@ static void ipv6_tick_peers (struct n3n_runtime_data *eee, struct peer_info *pee
             V6_DIAG("peer_readiness_expired peer=%s; DATA uses IPv4", macaddr_str(mac, peer->mac_addr));
         }
         if(now_ms >= peer->mikun2n_ipv6_query_ms) {
-            V6_DIAG("query peer=%s active=%d candidate_age_ms=%llu", macaddr_str(mac, peer->mac_addr),
-                    mikun2n_ipv6_active(eee, peer, now_ms),
+            int active = mikun2n_ipv6_active(eee, peer, now_ms);
+            int silent = !active && ipv6_peer_silent(peer, now_ms);
+            V6_DIAG("query peer=%s active=%d silent=%d candidate_age_ms=%llu", macaddr_str(mac, peer->mac_addr),
+                    active, silent,
                     (unsigned long long)(peer->mikun2n_ipv6_seen_ms ? now_ms - peer->mikun2n_ipv6_seen_ms : 0));
-            peer->mikun2n_ipv6_query_ms = now_ms + 3000;
+            // An active path still refreshes its 30 s candidate three times per TTL.
+            peer->mikun2n_ipv6_query_ms = now_ms +
+                (active ? IPV6_QUERY_ACTIVE_MS : silent ? IPV6_QUERY_SILENT_MS : IPV6_QUERY_MS);
             send_query_peer(eee, peer->mac_addr);
         }
         if(!peer->mikun2n_ipv6_token ||
@@ -666,11 +711,10 @@ static void ipv6_tick_peers (struct n3n_runtime_data *eee, struct peer_info *pee
             peer->mikun2n_ipv6_next_probe_ms = now_ms + 10000;
             continue;
         }
-        peer->mikun2n_ipv6_next_probe_ms = now_ms + 500;
+        peer->mikun2n_ipv6_next_probe_ms = now_ms + IPV6_FAST_PROBE_MS;
         if(!ipv6_probe_send(eee, peer, destination, now_ms, IPV6_SAFE_UDP_SIZE, "base_keepalive"))
             continue;
-        peer->mikun2n_ipv6_next_probe_ms = now_ms +
-            (ipv6_receive_ready(eee, peer, now_ms) ? 2000 : peer->mikun2n_ipv6_attempts < 6 ? 500 : 10000);
+        peer->mikun2n_ipv6_next_probe_ms = ipv6_next_keepalive(eee, peer, now_ms);
         if(peer->mikun2n_ipv6_attempts < 6)
             peer->mikun2n_ipv6_attempts++;
     }
@@ -865,6 +909,8 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
             peer->mikun2n_ipv6_ready_report_ms = probe->sent_ms;
             // Starting the lease at request-send time conservatively includes RTT.
             peer->mikun2n_ipv6_peer_ready_until_ms = ready_ms ? probe->sent_ms + ready_ms : 0;
+            if(ready_ms)
+                peer->mikun2n_ipv6_ready_seen_ms = now_ms;
         }
         int active = mikun2n_ipv6_active(eee, peer, now_ms);
         if(active && !was_active)
@@ -886,8 +932,9 @@ size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *send
                     sock_equal(sender, &peer->mikun2n_ipv6_address) ? "advertised" : "peer_reflexive",
                     IPV6_PATH_TTL_MS);
         }
-        uint64_t next_check = now_ms + (active ? 2000 : 500);
-        if(peer->mikun2n_ipv6_next_probe_ms > next_check)
+        // A fresh lease replaces the pessimistic send-time schedule.
+        uint64_t next_check = active ? ipv6_next_keepalive(eee, peer, now_ms) : now_ms + IPV6_FAST_PROBE_MS;
+        if(active || peer->mikun2n_ipv6_next_probe_ms > next_check)
             peer->mikun2n_ipv6_next_probe_ms = next_check;
         peer->last_seen = time(NULL);
     } else if(kind == IPV6_FRAGMENT && size > IPV6_FRAGMENT_HEADER &&

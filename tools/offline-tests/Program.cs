@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Reflection;
 using System.Text;
+using System.IO.Compression;
 using System.Text.Json;
 using System.Threading.Channels;
 using MikuN2N.Models;
@@ -38,6 +39,120 @@ Check(settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny, "deny 
 Console.WriteLine("PASS: persisted consent, node/receiver/certificate edits, switch-back revocation, deny");
 
 var root = Path.Combine(Path.GetFullPath(args.Single()),Guid.NewGuid().ToString("N"));
+
+var updateRoot = Path.Combine(root,"update");
+var tagged = ParseVersion("v0.5.8-5");
+var older = ParseVersion("0.5.8-4");
+Check(tagged.CompareTo(older) > 0, "build number orders releases");
+Check(ParseVersion("0.5.10-1").CompareTo(ParseVersion("0.5.9-12")) > 0, "base version compares numerically");
+Check(ParseVersion("0.5.8").CompareTo(older) < 0 && tagged.ToString() == "0.5.8-5", "untagged base sorts first and formats back");
+Check(!AppVersion.TryParse("latest",out _) && !AppVersion.TryParse("0.5.8-x",out _), "unparseable tags are ignored");
+// The apphost carries the informational version resource the updater reads from MikuN2N.exe.
+var hostVersion = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductVersion!;
+AppVersion ParseVersion(string text)
+{
+    Check(AppVersion.TryParse(text,out var parsed), "parses " + text);
+    return parsed;
+}
+string Package(string name, params (string Entry, string Text)[] entries)
+{
+    Directory.CreateDirectory(updateRoot);
+    var path = Path.Combine(updateRoot,name);
+    using var zip = ZipFile.Open(path,ZipArchiveMode.Create);
+    foreach (var (entry,text) in entries)
+    {
+        if (text == "<exe>") zip.CreateEntryFromFile(Environment.ProcessPath!,entry);
+        else using (var writer = new StreamWriter(zip.CreateEntry(entry).Open())) writer.Write(text);
+    }
+    return path;
+}
+bool Rejects(string archive, string version)
+{
+    try { UpdateService.ExtractPackage(archive,Path.Combine(updateRoot,Guid.NewGuid().ToString("N")),version); return false; }
+    catch (UpdateService.UpdateException) { return true; }
+}
+if (AppVersion.TryParse(hostVersion,out var packaged))
+{
+    var flat = UpdateService.ExtractPackage(Package("flat.zip",("MikuN2N.exe","<exe>"),("Runtime/n3n-edge.exe","new-edge")),
+        Path.Combine(updateRoot,"flat"),packaged.ToString());
+    Check(File.ReadAllText(Path.Combine(flat,"Runtime","n3n-edge.exe")) == "new-edge", "flat package stages in place");
+    var nested = UpdateService.ExtractPackage(Package("nested.zip",("MikuN2N-x/MikuN2N.exe","<exe>"),("MikuN2N-x/Runtime/n3n-edge.exe","e")),
+        Path.Combine(updateRoot,"nested"),packaged.ToString());
+    Check(Path.GetFileName(nested) == "MikuN2N-x", "single top-level folder is accepted");
+    Check(Rejects(Package("mismatch.zip",("MikuN2N.exe","<exe>"),("Runtime/n3n-edge.exe","e")),"99.0.0-1"), "version mismatch is refused");
+    Check(Rejects(Package("noedge.zip",("MikuN2N.exe","<exe>")),packaged.ToString()), "package without edge is refused");
+}
+else
+{
+    Console.WriteLine($"SKIP: host product version '{hostVersion}' is not a release version; package staging not exercised");
+}
+Check(Rejects(Package("slip.zip",("../escaped.txt","x"),("MikuN2N.exe","x")),"0.0.1-1") &&
+      !File.Exists(Path.Combine(updateRoot,"escaped.txt")), "zip entries cannot escape the staging folder");
+
+var install = Path.Combine(updateRoot,"install");
+var staged = Path.Combine(updateRoot,"staged");
+Directory.CreateDirectory(Path.Combine(install,"Runtime"));
+Directory.CreateDirectory(Path.Combine(staged,"Runtime"));
+File.WriteAllText(Path.Combine(install,"MikuN2N.exe"),"old-exe");
+File.WriteAllText(Path.Combine(install,"Runtime","n3n-edge.exe"),"old-edge");
+File.WriteAllText(Path.Combine(install,"Runtime","edge.exe"),"local-legacy");
+File.WriteAllText(Path.Combine(staged,"MikuN2N.exe"),"new-exe");
+File.WriteAllText(Path.Combine(staged,"Runtime","n3n-edge.exe"),"new-edge");
+File.WriteAllText(Path.Combine(staged,"Runtime","LICENSE-new.txt"),"added");
+UpdateService.ReplaceFiles(staged,install);
+Check(File.ReadAllText(Path.Combine(install,"MikuN2N.exe")) == "new-exe" &&
+      File.ReadAllText(Path.Combine(install,"Runtime","n3n-edge.exe")) == "new-edge" &&
+      File.ReadAllText(Path.Combine(install,"Runtime","LICENSE-new.txt")) == "added", "staged files replace and extend the install");
+Check(File.ReadAllText(Path.Combine(install,"Runtime","edge.exe")) == "local-legacy", "files outside the package are left alone");
+Check(File.ReadAllText(Path.Combine(install,"MikuN2N.exe.update-old")) == "old-exe", "replaced files are kept aside until restart");
+Directory.CreateDirectory(Path.Combine(install,"unrelated"));
+File.WriteAllText(Path.Combine(install,"unrelated","notes.update-old"),"user file");
+UpdateService.RemoveLeftovers(install);
+Check(Directory.GetFiles(install,"*.update-old*").Length == 0 &&
+      Directory.GetFiles(Path.Combine(install,"Runtime"),"*.update-old*").Length == 0, "leftovers are removed after restart");
+Check(File.Exists(Path.Combine(install,"unrelated","notes.update-old")), "cleanup never recurses into unrelated folders");
+
+// The real swap happens while MikuN2N.exe is still running: Windows refuses to
+// overwrite it but allows renaming it. Use a harmless system tool as the running image.
+var live = Path.Combine(updateRoot,"live");
+var liveStaged = Path.Combine(updateRoot,"live-staged");
+Directory.CreateDirectory(live);
+Directory.CreateDirectory(liveStaged);
+File.Copy(Path.Combine(Environment.SystemDirectory,"PING.EXE"),Path.Combine(live,"MikuN2N.exe"));
+File.WriteAllText(Path.Combine(liveStaged,"MikuN2N.exe"),"new-exe");
+using (var running = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Path.Combine(live,"MikuN2N.exe"),"-n 30 127.0.0.1")
+       { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!)
+{
+    var overwriteBlocked = false;
+    try { File.Copy(Path.Combine(liveStaged,"MikuN2N.exe"),Path.Combine(live,"MikuN2N.exe"),overwrite: true); }
+    catch (IOException) { overwriteBlocked = true; }
+    catch (UnauthorizedAccessException) { overwriteBlocked = true; }
+    Check(overwriteBlocked, "a running executable cannot be overwritten directly");
+    UpdateService.ReplaceFiles(liveStaged,live);
+    Check(File.ReadAllText(Path.Combine(live,"MikuN2N.exe")) == "new-exe" && !running.HasExited, "running executable is replaced by renaming it aside");
+    UpdateService.RemoveLeftovers(live);
+    Check(File.Exists(Path.Combine(live,"MikuN2N.exe.update-old")), "a leftover still in use is kept for the next start");
+    running.Kill();
+    running.WaitForExit();
+}
+UpdateService.RemoveLeftovers(live);
+Check(!File.Exists(Path.Combine(live,"MikuN2N.exe.update-old")), "the old executable goes once its process has exited");
+
+var failing = Path.Combine(updateRoot,"failing");
+Directory.CreateDirectory(Path.Combine(failing,"a"));
+File.WriteAllText(Path.Combine(failing,"a","first.txt"),"new-first");
+File.WriteAllText(Path.Combine(failing,"second.txt"),"new-second");
+File.WriteAllText(Path.Combine(install,"MikuN2N.exe"),"current");
+Directory.CreateDirectory(Path.Combine(install,"a"));
+File.WriteAllText(Path.Combine(install,"a","first.txt"),"old-first");
+Directory.CreateDirectory(Path.Combine(install,"second.txt")); // a directory where a file must go makes the copy fail
+var failed = false;
+try { UpdateService.ReplaceFiles(failing,install); } catch (IOException) { failed = true; } catch (UnauthorizedAccessException) { failed = true; }
+Check(failed, "a blocked target aborts the swap");
+Check(File.ReadAllText(Path.Combine(install,"a","first.txt")) == "old-first" &&
+      Directory.GetFiles(install,"*.update-old*").Length == 0 &&
+      Directory.GetFiles(Path.Combine(install,"a"),"*.update-old*").Length == 0, "failed swap rolls every file back");
+Console.WriteLine("PASS: release ordering, package staging and validation, zip-slip refusal, in-place swap, rollback, leftover cleanup");
 Directory.CreateDirectory(root);
 var delivered = new ConcurrentQueue<string>();
 int workers = 0;

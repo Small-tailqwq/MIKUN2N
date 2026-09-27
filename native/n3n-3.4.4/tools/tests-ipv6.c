@@ -224,5 +224,48 @@ int main(void) {
     assert(!ab->mikun2n_ipv6_path_bytes && !ab->mikun2n_ipv6_peer_ready_until_ms && !ab->mikun2n_ipv6_reassembly);
     puts("PASS: a new peer session revokes previous path proof");
     HASH_DEL(a->known_peers,ab);HASH_DEL(b->known_peers,ba);peer_info_free(ab);peer_info_free(ba);free(a);free(b);
+
+    setup(); sent_count=0;
+    ab->mikun2n_ipv6_query_ms=ab->mikun2n_ipv6_search_ms=UINT64_MAX;
+    ab->mikun2n_ipv6_ready_seen_ms=1000;
+    ipv6_tick_peers(a,a->known_peers,4000);
+    assert(sent_count==1 && sent_packets[0].size==IPV6_SAFE_UDP_SIZE);
+    assert(ab->mikun2n_ipv6_next_probe_ms==4500);
+    assert(deliver(0,b,&addr_a,4020,out)==0 && deliver(1,a,&addr_b,4040,out)==0);
+    assert(ab->mikun2n_ipv6_peer_ready_until_ms==4000+(7000-4020) && ab->mikun2n_ipv6_next_probe_ms==4540);
+    ba->mikun2n_ipv6_valid_until_ms=4040+IPV6_PATH_TTL_MS; sent_count=0;
+    ipv6_tick_peers(a,a->known_peers,4540);
+    assert(sent_count==1 && deliver(0,b,&addr_a,4560,out)==0 && deliver(1,a,&addr_b,4580,out)==0);
+    assert(ab->mikun2n_ipv6_next_probe_ms==4580+IPV6_KEEPALIVE_MS);
+    puts("PASS: a PONG reschedules from arrival; a low peer lease is re-checked early");
+
+    sent_count=0;
+    ipv6_tick_peers(a,a->known_peers,6580);
+    assert(sent_count==1 && ab->mikun2n_ipv6_next_probe_ms==7080);
+    ipv6_tick_peers(a,a->known_peers,7080);
+    assert(sent_count==2 && ab->mikun2n_ipv6_next_probe_ms==7580);
+    assert(mikun2n_ipv6_active(a,ab,7580));
+    puts("PASS: after a lost keepalive, probes every 500 ms until the lease ends");
+
+    ab->mikun2n_ipv6_valid_until_ms=20000+IPV6_PATH_TTL_MS; ab->mikun2n_ipv6_peer_ready_until_ms=0;
+    ab->mikun2n_ipv6_ready_seen_ms=0;
+    assert(ipv6_next_keepalive(a,ab,20000)==22000);
+    ab->mikun2n_ipv6_ready_seen_ms=19000;
+    assert(ipv6_next_keepalive(a,ab,20000)==20500);
+    ab->mikun2n_ipv6_ready_seen_ms=4000;
+    assert(ipv6_next_keepalive(a,ab,20000)==22000);
+    puts("PASS: fast probing only for a peer that recently granted readiness");
+
+    uint64_t clock_ms=mikun2n_ipv6_now_ms();
+    ab->last_seen=time(NULL); ab->mikun2n_peer_info_ms=0;
+    assert(!ipv6_peer_silent(ab,clock_ms));
+    ab->last_seen=time(NULL)-30;
+    assert(ipv6_peer_silent(ab,clock_ms));
+    ab->mikun2n_peer_info_ms=clock_ms-5000;
+    assert(!ipv6_peer_silent(ab,clock_ms));
+    ab->mikun2n_peer_info_ms=clock_ms-25000;
+    assert(ipv6_peer_silent(ab,clock_ms));
+    puts("PASS: departed identities are recognised from supernode silence and no traffic");
+    HASH_DEL(a->known_peers,ab);HASH_DEL(b->known_peers,ba);peer_info_free(ab);peer_info_free(ba);free(a);free(b);
     return 0;
 }

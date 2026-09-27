@@ -1,0 +1,46 @@
+name: Release package
+
+# Pushing a version tag such as 0.5.8-6 builds the package the in-app updater installs
+# and attaches it to a draft release. Clients only see the release once it is published,
+# so review the draft notes before publishing. Private test builds are never built here.
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build package
+        shell: pwsh
+        run: ./tools/package-release.ps1 -Output dist
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MikuN2N-win-x64
+          path: dist/*
+
+      - name: Create draft release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $package = "dist/MikuN2N-$env:TAG-win-x64.zip"
+          if (-not (Test-Path $package)) { throw "Tag $env:TAG does not match BaseVersion-BuildNumber in MikuN2N.csproj" }
+          gh release create $env:TAG $package dist/SHA256SUMS --draft --verify-tag `
+            --title "MikuN2N $env:TAG" `
+            --notes "Windows x64 package. Corresponding source for the bundled n3n edge is included as Runtime/n3n-3.4.4-source.zip; MikuN2N's own source is the tagged tree."

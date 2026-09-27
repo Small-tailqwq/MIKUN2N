@@ -30,6 +30,7 @@ public sealed class EasterEggVisualController : IDisposable
     private WpfPoint _pointer;
     private bool _pointerValid;
     private bool _disposed;
+    private bool _rendering;
 
     public EasterEggVisualController(Window window, Canvas overlay, EasterEggManager manager)
     {
@@ -43,7 +44,6 @@ public sealed class EasterEggVisualController : IDisposable
         _window.Closed += Window_Closed;
         _window.PreviewMouseMove += Window_PreviewMouseMove;
         _window.MouseLeave += Window_MouseLeave;
-        CompositionTarget.Rendering += CompositionTarget_Rendering;
     }
 
     public void Dispose()
@@ -60,7 +60,28 @@ public sealed class EasterEggVisualController : IDisposable
         _window.Closed -= Window_Closed;
         _window.PreviewMouseMove -= Window_PreviewMouseMove;
         _window.MouseLeave -= Window_MouseLeave;
-        CompositionTarget.Rendering -= CompositionTarget_Rendering;
+        UpdateRenderingSubscription();
+    }
+
+    // A Rendering handler keeps WPF drawing at the display refresh rate for as long as
+    // it is attached - the whole session, even hidden in the tray while a game runs.
+    private void UpdateRenderingSubscription()
+    {
+        var needed = !_disposed && (_flies.Count > 0 || _spiders.Count > 0 || _particles.Count > 0);
+        if (needed == _rendering)
+        {
+            return;
+        }
+        _rendering = needed;
+        if (needed)
+        {
+            _lastFrameAt = DateTime.UtcNow;
+            CompositionTarget.Rendering += CompositionTarget_Rendering;
+        }
+        else
+        {
+            CompositionTarget.Rendering -= CompositionTarget_Rendering;
+        }
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -99,6 +120,7 @@ public sealed class EasterEggVisualController : IDisposable
         {
             RemoveFly(_flies[^1]);
         }
+        UpdateRenderingSubscription();
     }
 
     private void SyncSpiders()
@@ -119,6 +141,7 @@ public sealed class EasterEggVisualController : IDisposable
         {
             RemoveSpider(_spiders[^1]);
         }
+        UpdateRenderingSubscription();
     }
 
     private void RemoveFly(FlySprite fly)
@@ -249,7 +272,7 @@ public sealed class EasterEggVisualController : IDisposable
         }
         if (_flies.Count == 0 && _spiders.Count == 0 && _particles.Count == 0)
         {
-            _lastFrameAt = DateTime.UtcNow;
+            UpdateRenderingSubscription();
             return;
         }
 
@@ -509,6 +532,7 @@ public sealed class EasterEggVisualController : IDisposable
                 Life = 0.5 + Random.Shared.NextDouble() * 0.3
             };
             _particles.Add(particle);
+            UpdateRenderingSubscription();
             _overlay.Children.Add(visual);
             Canvas.SetLeft(visual, x);
             Canvas.SetTop(visual, y);

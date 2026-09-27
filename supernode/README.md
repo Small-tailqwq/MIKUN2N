@@ -87,13 +87,32 @@ sudo ss -lunp
 
 If registration works but NAT discovery fails, check UDP 21001/21002, both firewalls and the probe unit. If registration fails, check the main UDP port and community configuration. NAT4-to-NAT4 success depends on the observed mapping behavior; relay is an expected outcome for unpredictable networks.
 
-To try IPv6, install a server built from this release and enable the experimental setting on both clients before connecting. The peer label changes to `IPv6 P2P 直连` only while the local IPv6 path is validated. Broadcast discovery and relay still use the existing IPv4 virtual network. IPv6-only server addresses are not supported by this experiment.
+To try IPv6, install a server built from this release and enable the experimental setting on both clients before connecting. The peer label changes to `直连 · IPv6` only while the local IPv6 path is validated. Broadcast discovery and relay still use the existing IPv4 virtual network. IPv6-only server addresses are not supported by this experiment.
 
 ## Relay traffic statistics
 
 For server-only outbound accounting by sender and receiver, including broadcast
 fan-out and legacy n2n clients, see [traffic accounting](TRAFFIC.md). The optional
 local collector keeps hourly totals for 30 days and exposes no additional port.
+
+## Relay bandwidth limit
+
+A small cloud host is shaped by its provider: once relayed game traffic fills the
+outbound link, registration renewals and punch coordination are dropped with it,
+which makes direct connections harder to establish. Builds from 0.5.8-5 accept two
+optional `[supernode]` settings, both off by default:
+
+- `mikun2n_relay_kbit`: ceiling for relayed DATA, including broadcast copies. Set it
+  to about 85% of the host's outbound bandwidth (for example `3400` on a 4 Mbit/s
+  host). Control messages are never limited. Under contention every sending edge
+  gets an equal share; a source may exceed it only while the link has spare capacity.
+- `mikun2n_broadcast_pps`: relayed broadcasts per edge per second. Each broadcast is
+  copied to every community member; LAN discovery normally needs a few per second.
+
+Excess DATA is dropped rather than queued, which a game tolerates better than delay.
+`get_relay_stats` reports the configured limits and `policy_*` drop and borrow
+counters; the server log summarizes drops at most once a minute. Validate the values
+against your own traffic before relying on them.
 
 ## Federation
 

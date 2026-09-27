@@ -41,6 +41,8 @@ public sealed class AppSettings
     public bool ExperimentalIpv6P2p { get; set; }
     public DiagnosticUploadPreference DiagnosticUpload { get; set; } = DiagnosticUploadPreference.Ask;
     public string DiagnosticUploadTarget { get; set; } = string.Empty;
+    public bool AutoCheckUpdates { get; set; } = true;
+    public string SkippedUpdateVersion { get; set; } = string.Empty;
 
     /// <summary>Pre-0.6 single supernode. Written only when it still holds a value, and cleared once read.</summary>
     [System.Text.Json.Serialization.JsonPropertyName("Server")]

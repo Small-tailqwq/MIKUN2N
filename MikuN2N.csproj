@@ -11,20 +11,32 @@
     <AssemblyName>MikuN2N</AssemblyName>
     <RootNamespace>MikuN2N</RootNamespace>
     <BaseVersion>0.5.8</BaseVersion>
-    <BuildNumber>4</BuildNumber>
+    <BuildNumber>5</BuildNumber>
     <Version>$(BaseVersion)-$(BuildNumber)</Version>
     <AssemblyVersion>$(BaseVersion).0</AssemblyVersion>
     <FileVersion>$(BaseVersion).$(BuildNumber)</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <PathMap>$(MSBuildProjectDirectory)=/_/MikuN2N</PathMap>
+    <!-- GitHub "owner/name" whose releases the in-app updater follows. Forks point this at
+         their own repository; "none" builds a client that never checks for updates. -->
+    <UpdateRepository Condition="'$(UpdateRepository)' == ''">Small-tailqwq/MikuN2N</UpdateRepository>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="UpdateRepository" Value="$(UpdateRepository)" />
+  </ItemGroup>
 
   <ItemGroup>
     <Compile Remove="tools\offline-tests\**\*.cs" />
     <EmbeddedResource Remove="tools\offline-tests\**\*" />
     <None Remove="tools\offline-tests\bin\**\*;tools\offline-tests\obj\**\*" />
-    <Content Include="Runtime\n3n-edge.exe;Runtime\n3n-3.4.4-source.zip;Runtime\LICENSE-n2n.txt;Runtime\THIRD-PARTY-NOTICES.txt;Runtime\README.txt;Runtime\tap-windows-installer.exe">
+    <Content Include="Runtime\n3n-edge.exe;Runtime\n3n-3.4.4-source.zip;Runtime\LICENSE-n2n.txt;Runtime\LICENSE-tap-windows.txt;Runtime\LICENSE-dotnet.txt;Runtime\THIRD-PARTY-NOTICES.txt;Runtime\THIRD-PARTY-NOTICES-dotnet.txt;Runtime\README.txt;Runtime\tap-windows-installer.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
+    <Content Include="LICENSE" Link="LICENSE.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>

@@ -1,11 +1,17 @@
 MikuN2N third-party components
 =========================================
 
+MikuN2N itself (MikuN2N.exe) is free software licensed under GPL-3.0-only; the full
+text is LICENSE.txt next to the program. Its source code is published in the project
+repository, and every release is built from the tagged source tree. MikuN2N runs the
+components below as separate programs or links them as runtime libraries; each keeps
+its own license.
+
 1. n3n edge (preferred)
 
 - File: n3n-edge.exe
 - Version: patched n3n 3.4.4 (MikuN2N; see README.txt)
-- SHA-256: D870283A2B469191D51C31576C9043D3918F89EB7DDC3BD5C6201EACBA4A5961
+- SHA-256: 9E76CACB6C55DADB43C3284A8AC2F9ECCB60F9959B4D1551ED1CEF124CB1A584
 - License: GPL-3.0-only
 - Upstream: https://github.com/n42n/n3n
 - Release: https://github.com/n42n/n3n/releases/tag/3.4.4
@@ -13,7 +19,7 @@ MikuN2N third-party components
 - Windows Authenticode: not signed
 - Bundled license: LICENSE-n2n.txt
 - Bundled corresponding source: n3n-3.4.4-source.zip
-- Source archive SHA-256: 5FF1234F442CB728BC07163D61945DA20F4670BFBBEADC55A6B0961EC5E8DF5B
+- Source archive SHA-256: 974C3E04EDFDECA201994A568D149EC0BC0E31BB4987A85B6A43013E83109E63
 
 2. TAP-Windows
 
@@ -21,18 +27,43 @@ MikuN2N third-party components
 - Version: 9.24.7-I601-Win10
 - SHA-256: 1C44E77AB148DDFB174DE8041100EFC38C4F23500183FAFF88F9BADAC5782E3C
 - Publisher signature: OpenVPN Inc. (verified at integration time)
-- License: GPL-2.0 with the Windows Driver Kit system-library exception described in upstream COPYING
+- License: GPL-2.0 with the Windows Driver Kit system-library exception; tap-windows.h
+  is additionally MIT licensed
+- Bundled license: LICENSE-tap-windows.txt (the license.txt shipped inside the installer)
+- Modifications: none; the upstream signed installer is redistributed byte for byte
 - Upstream: https://github.com/OpenVPN/tap-windows6
 - Download: https://build.openvpn.net/downloads/releases/tap-windows-9.24.7-I601-Win10.exe
+- Corresponding source: the tap-windows6 repository above, release 9.24.7. As required by
+  GPL-2.0 section 3(b), the MikuN2N maintainers will also provide a complete copy of
+  that source to anyone who asks through the project's issue tracker, for at least
+  three years after the last MikuN2N release that includes this installer.
 
 3. .NET, WPF and Windows Forms
 
-- Runtime: .NET 9 self-contained Windows runtime
-- Runtime binary license: Microsoft .NET Library License
-- .NET source license: MIT
-- WPF source license: MIT
-- Upstream: https://github.com/dotnet/core
-- WPF upstream: https://github.com/dotnet/wpf
+- Runtime: .NET 9 self-contained Windows runtime, embedded in MikuN2N.exe
+- Packages: Microsoft.NETCore.App.Runtime.win-x64 and
+  Microsoft.WindowsDesktop.App.Runtime.win-x64 (both MIT licensed)
+- License: MIT
+- Bundled license: LICENSE-dotnet.txt
+- Bundled notices: THIRD-PARTY-NOTICES-dotnet.txt (components the runtime incorporates)
+- Upstream: https://github.com/dotnet/runtime, https://github.com/dotnet/wpf,
+  https://github.com/dotnet/winforms
 
 MikuN2N does not add a third-party tray package. Its tray integration uses the
 Windows Forms APIs included with the .NET Windows desktop runtime.
+
+4. MinGW-w64 toolchain runtime (inside n3n-edge.exe)
+
+- n3n-edge.exe is built with MinGW-w64 GCC and statically includes parts of libgcc and
+  the MinGW-w64 C runtime startup code.
+- libgcc: GPL-3.0 with the GCC Runtime Library Exception, which places no conditions
+  on the compiled program.
+- MinGW-w64 runtime: public domain and permissive licenses (see the mingw-w64
+  COPYING files).
+- It links dynamically against the Windows Universal C Runtime, a system component.
+
+Not distributed
+
+- A legacy n2n v3 edge.exe once used during development is not part of any package or
+  of the source repository, because its corresponding source cannot be reproduced.
+  MikuN2N still starts a user-supplied Runtime/edge.exe when n3n-edge.exe is absent.

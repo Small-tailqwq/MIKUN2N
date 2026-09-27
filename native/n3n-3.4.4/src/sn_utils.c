@@ -40,6 +40,7 @@
 #include "management.h"         // for process_mgmt
 #include "mikun2n_ipv6.h"
 #include "mikun2n_relay.h"
+#include "mikun2n_relay_policy.h"
 #include "n2n.h"                // for sn_community, n3n_runtime_data
 #include "n2n_regex.h"          // for re_matchp, re_compile
 #include "n2n_wire.h"           // for encode_buf, encode_PEER_INFO, encode_...
@@ -716,6 +717,55 @@ static void relay_account (struct n3n_runtime_data *sss,
     flow->last_seen = now;
 }
 
+/* Relayed DATA only; see mikun2n_relay_policy.h. Returns 1 to forward. */
+static int relay_admit (struct n3n_runtime_data *sss,
+                        const struct sn_community *comm,
+                        const n2n_common_t *cmn,
+                        const n2n_mac_t src,
+                        size_t pktsize,
+                        int broadcast,
+                        time_t now) {
+    uint8_t key[MIKUN2N_POLICY_KEY_SIZE] = {0};
+    size_t copies = 1;
+    uint64_t now_ms;
+    mikun2n_relay_policy_t *policy = sss->relay_policy;
+    static time_t reported;
+    static uint64_t reported_drops;
+
+    if(!sss->conf.mikun2n_relay_kbit && !sss->conf.mikun2n_broadcast_pps)
+        return 1;
+    if(!policy) {
+        policy = calloc(1, sizeof(*policy));
+        if(!policy)
+            return 1;
+        sss->relay_policy = policy;
+    }
+    policy->rate = sss->conf.mikun2n_relay_kbit * 125;
+    policy->broadcast_pps = sss->conf.mikun2n_broadcast_pps;
+    memcpy(key, cmn->community, strnlen((const char *)cmn->community, N2N_COMMUNITY_SIZE));
+    memcpy(key + N2N_COMMUNITY_SIZE, src, N2N_MAC_SIZE);
+    if(broadcast && comm && HASH_COUNT(comm->edges) > 1)
+        copies = HASH_COUNT(comm->edges) - 1;
+    now_ms = mikun2n_sn_now_ms();
+    if(mikun2n_policy_admit(policy, key, (uint32_t)MIN(pktsize * copies, UINT32_MAX),
+                            broadcast, now_ms))
+        return 1;
+    if(now - reported >= 60 && policy->dropped_packets != reported_drops) {
+        traceEvent(TRACE_NORMAL,
+                   "MikuN2N relay policy dropped %llu packets/%llu bytes so far "
+                   "(broadcast %llu, borrowed %llu, active sources %u, limit %u kbit/s, %u bcast/s)",
+                   (unsigned long long)policy->dropped_packets,
+                   (unsigned long long)policy->dropped_bytes,
+                   (unsigned long long)policy->broadcast_dropped,
+                   (unsigned long long)policy->borrowed_packets,
+                   policy->active, sss->conf.mikun2n_relay_kbit,
+                   sss->conf.mikun2n_broadcast_pps);
+        reported = now;
+        reported_drops = policy->dropped_packets;
+    }
+    return 0;
+}
+
 static void try_broadcast (struct n3n_runtime_data * sss,
                            const struct sn_community *comm,
                            const n2n_common_t * cmn,
@@ -1017,6 +1067,11 @@ void sn_term (struct n3n_runtime_data *sss) {
     HASH_ITER(hh, sss->relay_flows, flow, next_flow) {
         HASH_DEL(sss->relay_flows, flow);
         free(flow);
+    }
+    if(sss->relay_policy) {
+        mikun2n_policy_free(sss->relay_policy);
+        free(sss->relay_policy);
+        sss->relay_policy = NULL;
     }
 
     struct sn_community *community, *tmp;
@@ -1995,6 +2050,8 @@ static int process_udp (struct n3n_runtime_data * sss,
             }
 
             /* Common section to forward the final product. */
+            if(!relay_admit(sss, comm, &cmn, pkt.srcMac, encx, !unicast, now))
+                return 0;
             if(unicast) {
                 try_forward(sss, comm, &cmn, pkt.srcMac, pkt.dstMac, from_supernode, rec_buf, encx, now);
             } else {

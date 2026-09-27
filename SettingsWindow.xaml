@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="设置与关于" Width="700" Height="620" MinWidth="620" MinHeight="540"
-        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
         ShowInTaskbar="False" Background="{DynamicResource WindowBackground}">
   <Grid Margin="24" Background="{DynamicResource WindowBackground}">
     <Grid.RowDefinitions>
@@ -13,7 +13,7 @@
 
     <StackPanel Margin="2,0,0,18">
       <TextBlock Text="设置" FontSize="25" FontWeight="Bold" />
-      <TextBlock Text="调整 MikuN2N 的外观和后台行为。" Margin="0,4,0,0"
+      <TextBlock Text="管理节点，调整外观和后台行为。" Margin="0,4,0,0"
                  Foreground="{DynamicResource TextSecondary}" />
     </StackPanel>
 
@@ -27,7 +27,7 @@
                 <TextBlock Text="联机节点" FontSize="16" FontWeight="SemiBold" />
                 <TextBlock Margin="0,5,0,0" TextWrapping="Wrap"
                            Foreground="{DynamicResource TextSecondary}" FontSize="12"
-                           Text="MikuN2N 不自带服务器，请添加你自己搭建的 supernode，或朋友分享给你的地址。可以添加多个节点并在主界面切换，参与联机的双方必须填写同一个小组名称。" />
+                           Text="MikuN2N 不自带服务器，请添加你自己搭建或朋友分享的节点服务器（supernode）。可以添加多个节点并在主界面切换，一起联机的朋友必须填写同一个小组名称。" />
               </StackPanel>
             </Border>
 
@@ -37,21 +37,32 @@
                 <ColumnDefinition Width="12" />
                 <ColumnDefinition Width="Auto" />
               </Grid.ColumnDefinitions>
-              <DataGrid x:Name="NodesGrid" MinHeight="180" MaxHeight="320"
+              <DataGrid x:Name="NodesGrid" MinHeight="180" MaxHeight="320" RowHeight="34"
                         AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
                         CanUserResizeRows="False" IsReadOnly="True" HeadersVisibility="Column"
                         SelectionMode="Single" SelectionUnit="FullRow"
+                        CanUserReorderColumns="False"
                         SelectionChanged="NodesGrid_SelectionChanged"
                         MouseDoubleClick="NodesGrid_MouseDoubleClick">
+                <DataGrid.Resources>
+                  <Style x:Key="NodeCell" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                    <Setter Property="VerticalAlignment" Value="Center" />
+                    <Setter Property="ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                  </Style>
+                </DataGrid.Resources>
                 <DataGrid.Columns>
-                  <DataGridTextColumn Header="节点名称" Binding="{Binding Name}" Width="*" />
-                  <DataGridTextColumn Header="地址" Binding="{Binding Server}" Width="1.6*" />
-                  <DataGridTextColumn Header="小组名称" Binding="{Binding Community}" Width="*" />
+                  <DataGridTextColumn Header="节点名称" Binding="{Binding Name}" Width="*"
+                                      ElementStyle="{StaticResource NodeCell}" />
+                  <DataGridTextColumn Header="地址" Binding="{Binding Server}" Width="1.6*"
+                                      ElementStyle="{StaticResource NodeCell}" />
+                  <DataGridTextColumn Header="小组名称" Binding="{Binding Community}" Width="*"
+                                      ElementStyle="{StaticResource NodeCell}" />
                   <DataGridTemplateColumn Header="当前" Width="56">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate>
                         <TextBlock Text="{Binding ActiveMark}" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource Accent}"
+                                   Foreground="{DynamicResource AccentText}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
@@ -60,9 +71,12 @@
               </DataGrid>
               <StackPanel Grid.Column="2" MinWidth="112">
                 <Button Content="添加…" Click="AddNode_Click" />
-                <Button x:Name="EditNodeButton" Content="编辑…" Margin="0,8,0,0" Click="EditNode_Click" />
-                <Button x:Name="RemoveNodeButton" Content="删除" Margin="0,8,0,0" Click="RemoveNode_Click" />
-                <Button x:Name="UseNodeButton" Content="设为当前" Margin="0,8,0,0" Click="UseNode_Click" />
+                <Button x:Name="EditNodeButton" Content="编辑…" Margin="0,8,0,0" Click="EditNode_Click"
+                        ToolTipService.ShowOnDisabled="True" />
+                <Button x:Name="RemoveNodeButton" Content="删除" Margin="0,8,0,0" Click="RemoveNode_Click"
+                        ToolTipService.ShowOnDisabled="True" />
+                <Button x:Name="UseNodeButton" Content="设为当前" Margin="0,8,0,0" Click="UseNode_Click"
+                        ToolTipService.ShowOnDisabled="True" />
               </StackPanel>
             </Grid>
 
@@ -142,6 +156,27 @@
               </StackPanel>
             </Border>
 
+            <Border x:Name="UpdateCard" Style="{StaticResource CardStyle}" Margin="0,0,0,14">
+              <StackPanel>
+                <TextBlock Text="软件更新" FontSize="16" FontWeight="SemiBold" />
+                <CheckBox x:Name="AutoCheckUpdatesBox" Content="自动检查更新" Margin="0,12,0,0">
+                  <CheckBox.Style>
+                    <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                      <Style.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                          <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+                          <Setter Property="FontWeight" Value="SemiBold" />
+                        </Trigger>
+                      </Style.Triggers>
+                    </Style>
+                  </CheckBox.Style>
+                </CheckBox>
+                <TextBlock Text="每天从 GitHub 检查一次新版本，下载并校验完成后再询问你是否更新，不会自行重启。"
+                           TextWrapping="Wrap" Margin="0,7,0,0"
+                           Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+              </StackPanel>
+            </Border>
+
             <Border Style="{StaticResource CardStyle}">
               <Grid>
                 <Grid.ColumnDefinitions>
@@ -151,7 +186,7 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Margin="0,0,22,0">
                   <TextBlock Text="运行日志" FontSize="16" FontWeight="SemiBold" />
-                  <TextBlock Text="连接日志保存在本机，可用于排查掉线和网络问题。"
+                  <TextBlock Text="连接日志保存在本机，可用于排查掉线和网络问题。" TextWrapping="Wrap"
                              Margin="0,5,0,0" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
                 </StackPanel>
                 <ComboBox x:Name="LogRetentionBox" Grid.Column="1" Margin="0,0,12,0"
@@ -165,7 +200,7 @@
                 <Button Grid.Column="2" Content="打开日志目录" Click="OpenLogs_Click" />
               </Grid>
             </Border>
-            <Border Style="{StaticResource CardStyle}" Margin="0,14,0,0">
+            <Border x:Name="DiagnosticCard" Style="{StaticResource CardStyle}" Margin="0,14,0,0">
               <StackPanel>
                 <TextBlock Text="测试诊断日志上传" FontSize="16" FontWeight="SemiBold" />
                 <TextBlock x:Name="DiagnosticDestinationText" Margin="0,6,0,10" TextWrapping="Wrap"
@@ -192,7 +227,7 @@
                   <ColumnDefinition Width="58" />
                   <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <Border Width="46" Height="46" CornerRadius="14" Background="{DynamicResource Accent}">
+                <Border Width="46" Height="46" CornerRadius="14" Background="{StaticResource LogoGradient}">
                   <TextBlock Text="M" Foreground="White" FontSize="25" FontWeight="Bold"
                              HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
@@ -214,9 +249,33 @@
               </Grid>
             </Border>
 
+            <Border x:Name="AboutUpdateCard" Style="{StaticResource CardStyle}" Margin="0,0,0,14">
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Margin="0,0,16,0">
+                  <TextBlock Text="检查更新" FontWeight="SemiBold" />
+                  <TextBlock x:Name="UpdateStatusText" FontSize="12" Margin="0,3,0,0" TextWrapping="Wrap"
+                             Foreground="{DynamicResource TextSecondary}" />
+                </StackPanel>
+                <Button x:Name="UpdateActionButton" Grid.Column="1" MinWidth="110" VerticalAlignment="Center"
+                        Click="UpdateAction_Click" />
+              </Grid>
+            </Border>
+
             <TextBlock Text="开源组件" FontSize="17" FontWeight="SemiBold" Margin="2,4,0,10" />
             <Border Style="{StaticResource CardStyle}" Padding="20,8">
               <StackPanel>
+                <Grid Margin="0,10">
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock Text="MikuN2N" FontWeight="SemiBold" />
+                    <TextBlock Text="本程序 · GPL-3.0-only，可自由使用、修改和分享" FontSize="12" Margin="0,3,0,0"
+                               Foreground="{DynamicResource TextSecondary}" />
+                  </StackPanel>
+                  <Button x:Name="SourceCodeButton" Grid.Column="1" Content="源代码" Style="{StaticResource QuietButton}"
+                          Click="OpenLink_Click" />
+                </Grid>
+                <Border Height="1" Background="{DynamicResource Border}" />
                 <Grid Margin="0,10">
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <StackPanel>
@@ -243,7 +302,7 @@
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <StackPanel>
                     <TextBlock Text=".NET 9 · WPF · Windows Forms" FontWeight="SemiBold" />
-                    <TextBlock Text="桌面运行时与界面框架 · 源代码 MIT；Windows 自包含运行时依照 .NET Library License" FontSize="12" Margin="0,3,0,0"
+                    <TextBlock Text="桌面运行时与界面框架 · MIT" FontSize="12" Margin="0,3,0,0"
                                TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
                   </StackPanel>
                   <Button Grid.Column="1" Content="许可说明" Style="{StaticResource QuietButton}"
@@ -253,7 +312,7 @@
             </Border>
 
             <StackPanel Orientation="Horizontal" Margin="2,14,0,0">
-              <Button Content="查看随附 GPL 许可证" Click="OpenBundledLicense_Click" Margin="0,0,10,0" />
+              <Button Content="许可证与第三方声明" Click="OpenBundledLicense_Click" Margin="0,0,10,0" />
               <Button Content="复制版本信息" Click="CopyVersion_Click" />
             </StackPanel>
           </StackPanel>
@@ -262,7 +321,7 @@
     </TabControl>
 
     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
-      <Button Content="取消" Width="90" Margin="0,0,10,0" Click="Cancel_Click" />
+      <Button Content="取消" Width="90" Margin="0,0,10,0" IsCancel="True" />
       <Button Content="保存" Width="100" Style="{StaticResource PrimaryButton}" Click="Save_Click" />
     </StackPanel>
     <Canvas x:Name="EasterEggOverlay" Grid.RowSpan="3" Panel.ZIndex="100" IsHitTestVisible="False" />

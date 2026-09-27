@@ -565,6 +565,8 @@ typedef struct n2n_edge_conf {
     struct peer_info *sn_edges;     // SN federation storage during configure
     n2n_ip_subnet_t sn_min_auto_ip_net;                        /* Address range of auto_ip service. */
     n2n_ip_subnet_t sn_max_auto_ip_net;                        /* Address range of auto_ip service. */
+    uint32_t mikun2n_relay_kbit;                               /* relayed DATA ceiling, kbit/s; 0 = unlimited */
+    uint32_t mikun2n_broadcast_pps;                            /* relayed broadcasts per source per second; 0 = unlimited */
 } n2n_edge_conf_t;
 
 
@@ -718,6 +720,7 @@ struct n3n_runtime_data {
     struct mikun2n_relay_flow *relay_flows;
     uint64_t relay_out_bytes, relay_out_sends, relay_send_errors;
     uint64_t relay_overflow_bytes, relay_overflow_packets;
+    struct mikun2n_relay_policy *relay_policy;              /* allocated when a limit is configured */
     int tcp_sock;                                           /* auxiliary socket for optional TCP connections */
     n2n_mac_t mac_addr;
     bool lock_communities;                                    /* If true, only loaded and matching communities can be used. */

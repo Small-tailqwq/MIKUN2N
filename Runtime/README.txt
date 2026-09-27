@@ -308,19 +308,60 @@
      entry against its source bytes and scan decompressed contents for personal
      paths; the validation report records actual mismatches and per-file hashes.
 
+ 50. 0.5.8-5: Remove the waste and fragility found in a 15-hour client log.
+     IPv6: a fixed 2-second keepalive against the 6.5-second lease (itself chained
+     through the peer's probes) tolerated about two consecutive losses; with ~5%
+     probe loss readiness expired 65 times while the path stayed usable, each time
+     sending DATA through the supernode and restarting IPv4 calibration. Keepalives
+     are now scheduled for the loss case and repeated every 500 ms near the end of
+     either lease; a PONG restores the 2-second cadence. IPv4 scanning resumes only
+     after IPv6 stays unavailable for 15 seconds, and a working IPv4 path is kept
+     warm while IPv6 carries DATA so a brief gap falls back to it, not the relay.
+     IPv4: an established path whose receive side goes quiet keeps its entry and
+     winning worker socket for 20 seconds, relaying meanwhile and probing the old
+     endpoint every second; closing that socket had made even a short interruption
+     need a full re-punch. Pending entries expire on last_seen regardless of the
+     upstream 16-entry threshold, and identities that neither send nor are answered
+     for by the supernode for 30 seconds stop being punched and are queried less
+     often (one evening accumulated 15 departed identities of one host, each with a
+     full budget). Group MACs outside IPv4/IPv6 multicast (LLDP, STP) are dropped
+     at the TAP instead of becoming a permanent pending peer. A late bank plan is
+     accepted only by a live calibration, and a spray without workers is never
+     charged. A missed APDM coordination recalibrates twice (10 s apart, no round
+     charged) before this round falls back to the single-socket scanner, which
+     produced no connection in 39 rounds of about 11,600 packets. Only one heavy
+     scan runs at a time. Punch outcome lines name the peer MAC.
+     Supernode: optional mikun2n_relay_kbit and mikun2n_broadcast_pps police relayed
+     DATA only. Control messages are never limited; under contention each sending
+     edge gets an equal share and may borrow while the link is idle. Both default to
+     0 (unlimited); get_relay_stats reports the limits and drop/borrow counters.
+     No wire change: IPv6 generation stays 3 and mixed versions interoperate.
+     Offline regressions cover keepalive scheduling, departed-identity detection and
+     the relay policy; live pairing and server deployment are not yet verified.
+
 构建要求：Windows 目标需要在 CFLAGS 中带上 `-std=gnu17`（随包的旧 src/win32/getopt.c 在本
 工具链的 C23 默认标准下编译不过），并带上 `-ffile-prefix-map=<构建路径>=<占位路径>`，把调试
 信息里的绝对路径映射掉。曾经发布的二进制内嵌了构建机的用户名与目录结构（`Users/<name>/.../
 n3n-build/...` 共 13 条），加映射后重编已清零。重编后请重新核对二进制里不再出现本机路径。
 
-- n3n-3.4.4-source.zip：与当前 n3n-edge.exe 对应的修改版源码（含上述改动），供 GPLv3 合规使用。官方原版源码见 https://github.com/n42n/n3n （tag 3.4.4）
+- n3n-3.4.4-source.zip：与当前 n3n-edge.exe 对应的修改版源码（含上述改动），供 GPLv3 合规使用。
+  压缩包根目录的 MIKUN2N-MODIFICATIONS.md 是 GPLv3 第 5(a) 条要求的修改声明（修改者、日期与改动范围）。
+  官方原版源码见 https://github.com/n42n/n3n （tag 3.4.4）
+- LICENSE-n2n.txt：n3n 的 GPLv3 许可证全文。
 
-源码目录中的 edge.exe 仅保留作历史排查参考，不会复制到正式构建或发布包。
+旧版 n2n edge.exe 无法提供对应源码，已从仓库与所有发布包中移除；本机若自行放置
+Runtime/edge.exe，程序仍会在缺少 n3n-edge.exe 时回退使用它，但它不得再随包分发。
 
 可选文件：
-- tap-windows-installer.exe：OpenVPN 官方 TAP-Windows 9.24.7 驱动安装器
+- tap-windows-installer.exe：OpenVPN 官方 TAP-Windows 9.24.7 驱动安装器（未修改的官方签名安装器）
+- LICENSE-tap-windows.txt：从该安装器内提取的原始许可证（GPLv2 + WDK 系统库例外）
 
-注意：分发 n2n/n3n 二进制时必须同时遵守 GPLv3 许可证并提供对应源代码。
+.NET 运行时：
+- LICENSE-dotnet.txt、THIRD-PARTY-NOTICES-dotnet.txt：自包含发布嵌入的 .NET 9 / WPF / WinForms 运行时
+  （MIT）许可证与其第三方声明，取自 Microsoft.NETCore.App.Runtime.win-x64 运行时包。
+
+注意：分发 n2n/n3n 二进制时必须同时遵守 GPLv3 许可证并提供对应源代码；分发 TAP 安装器时须附带
+其许可证并按 THIRD-PARTY-NOTICES.txt 的书面承诺提供源码。汇总说明见 THIRD-PARTY-NOTICES.txt。
 Windows source build: run sh scripts/build-mikun2n-windows.sh from the extracted source root in Git Bash with MinGW-w64 on PATH.
 Source packaging: tools/package-native-source.py --source <patched-root> --archive Runtime/n3n-3.4.4-source.zip --report <validation.json>. Generated config.mak/configure/headers are excluded and recreated by the build scripts.
 Linux server build: use supernode/build-supernode.sh from the MikuN2N source release; it runs autogen.sh before configure.

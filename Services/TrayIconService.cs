@@ -46,7 +46,14 @@ public sealed class TrayIconService : IDisposable
             ContextMenuStrip = menu,
             Visible = true
         };
-        _notifyIcon.DoubleClick += (_, _) => ShowRequested?.Invoke(this, EventArgs.Empty);
+        _notifyIcon.MouseClick += (_, args) =>
+        {
+            if (args.Button == Forms.MouseButtons.Left)
+            {
+                ShowRequested?.Invoke(this, EventArgs.Empty);
+            }
+        };
+        _notifyIcon.BalloonTipClicked += (_, _) => ShowRequested?.Invoke(this, EventArgs.Empty);
     }
 
     public void Update(ConnectionSnapshot snapshot, bool isRunning)
@@ -54,7 +61,7 @@ public sealed class TrayIconService : IDisposable
         _connectionItem.Text = isRunning ? "断开连接" : "连接";
         var state = snapshot.State switch
         {
-            ConnectionState.Connected => $"已连接 · {snapshot.VirtualIp}",
+            ConnectionState.Connected => $"已连接 · {snapshot.VirtualIp} · {snapshot.PeerCount} 位朋友在线",
             ConnectionState.Connecting => "正在连接",
             ConnectionState.Reconnecting => "正在恢复连接",
             ConnectionState.Error => "连接异常",
@@ -67,8 +74,15 @@ public sealed class TrayIconService : IDisposable
     public void ShowMinimizedTip()
     {
         _notifyIcon.BalloonTipTitle = "MikuN2N 仍在后台运行";
-        _notifyIcon.BalloonTipText = "双击托盘图标可恢复窗口，右键可连接、设置或退出。";
+        _notifyIcon.BalloonTipText = "点击托盘图标可恢复窗口，右键可连接、设置或退出。";
         _notifyIcon.ShowBalloonTip(3500);
+    }
+
+    public void ShowUpdateReadyTip(string version)
+    {
+        _notifyIcon.BalloonTipTitle = $"MikuN2N {version} 已准备好";
+        _notifyIcon.BalloonTipText = "点击这里打开窗口，选择是否现在更新。";
+        _notifyIcon.ShowBalloonTip(5000);
     }
 
     public void Dispose()

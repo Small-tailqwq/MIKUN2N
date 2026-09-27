@@ -20,9 +20,15 @@ tools/**/*.exe
 !Runtime/
 !Runtime/**
 Runtime/*.bak*
+# Legacy n2n edge.exe has no reproducible corresponding source, so it must never be
+# redistributed through this repository. EdgeController still falls back to a local copy.
+Runtime/edge.exe
 
 # Local agent overrides may carry machine-specific paths, personal server addresses and
 # group names. Never commit them; the tracked instruction files must stay generic.
 *.local.md
 AGENTS.local.md
 CLAUDE.local.md
+
+# Service units rendered on a server during deployment; the templates are the source.
+supernode/*.concrete

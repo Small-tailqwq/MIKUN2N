@@ -140,6 +140,11 @@ struct peer_info {
     uint16_t punch_peer_bank_spread;
     uint16_t punch_peer_bank_rate;
     uint32_t punch_peer_bank_nonce;
+    uint8_t punch_coord_misses;
+    uint64_t punch_bank_retry_ms;
+    uint64_t punch_ipv6_lost_ms;
+    uint64_t mikun2n_peer_info_ms;
+    time_t punch_recover_since;
 
     n2n_sock_t mikun2n_ipv6_address;
     /* Advertised candidates can be ULA; only a checked public endpoint carries data. */
@@ -154,6 +159,7 @@ struct peer_info {
     uint64_t mikun2n_ipv6_valid_until_ms;
     uint64_t mikun2n_ipv6_peer_ready_until_ms;
     uint64_t mikun2n_ipv6_ready_report_ms;
+    uint64_t mikun2n_ipv6_ready_seen_ms;
     uint64_t mikun2n_ipv6_legacy_log_ms;
     uint64_t punch_ipv6_stable_ms;
     uint64_t punch_ipv6_paused_ms;

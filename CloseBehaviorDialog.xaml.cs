@@ -14,6 +14,7 @@ public partial class CloseBehaviorDialog : Window
         InitializeComponent();
         Icon = AppIconService.Icon;
         SourceInitialized += (_, _) => ((App)Application.Current).ThemeManager.ApplyWindow(this);
+        Loaded += (_, _) => MinimizeButton.Focus();
     }
 
     private void Minimize_Click(object sender, RoutedEventArgs e)
@@ -28,5 +29,4 @@ public partial class CloseBehaviorDialog : Window
         DialogResult = true;
     }
 
-    private void Cancel_Click(object sender, RoutedEventArgs e) => Close();
 }

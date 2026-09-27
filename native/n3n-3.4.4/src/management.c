@@ -24,6 +24,7 @@
 #include "mikun2n_ipv6.h"
 #include "mikun2n_build_version.h"
 #include "mikun2n_relay.h"
+#include "mikun2n_relay_policy.h"
 #include "peer_info.h"   // for peer_info
 
 #ifdef _WIN32
@@ -1290,11 +1291,19 @@ static void jsonrpc_get_relay_stats (char *id, struct n3n_runtime_data *eee, con
         "{\"schema\":1,\"started_at\":%llu,\"sampled_at\":%llu,"
         "\"out_bytes\":%llu,\"out_sends\":%llu,\"send_errors\":%llu,"
         "\"overflow_bytes\":%llu,\"overflow_packets\":%llu,"
+        "\"policy_kbit\":%u,\"policy_broadcast_pps\":%u,"
+        "\"policy_dropped_bytes\":%llu,\"policy_dropped_packets\":%llu,"
+        "\"policy_broadcast_dropped\":%llu,\"policy_borrowed_packets\":%llu,"
         "\"flow_count\":%u,\"flow_limit\":%u,\"flows\":[",
         (unsigned long long)eee->start_time, (unsigned long long)time(NULL),
         (unsigned long long)eee->relay_out_bytes, (unsigned long long)eee->relay_out_sends,
         (unsigned long long)eee->relay_send_errors,
         (unsigned long long)eee->relay_overflow_bytes, (unsigned long long)eee->relay_overflow_packets,
+        eee->conf.mikun2n_relay_kbit, eee->conf.mikun2n_broadcast_pps,
+        (unsigned long long)(eee->relay_policy ? eee->relay_policy->dropped_bytes : 0),
+        (unsigned long long)(eee->relay_policy ? eee->relay_policy->dropped_packets : 0),
+        (unsigned long long)(eee->relay_policy ? eee->relay_policy->broadcast_dropped : 0),
+        (unsigned long long)(eee->relay_policy ? eee->relay_policy->borrowed_packets : 0),
         HASH_COUNT(eee->relay_flows), MIKUN2N_RELAY_MAX);
     HASH_ITER(hh, eee->relay_flows, flow, tmp) {
         if(index++ < offset) continue;
