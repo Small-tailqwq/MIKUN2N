@@ -1,0 +1,16 @@
+# Text files are stored and checked out with LF on every platform, independent of
+# core.autocrlf: supernode/*.sh and the native autotools scripts run on Linux or MSYS,
+# and the native source archive is verified byte for byte against the worktree.
+* text=auto eol=lf
+
+# Formats whose Windows tooling expects CRLF in the working tree.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.sln text eol=crlf
+
+*.exe binary
+*.dll binary
+*.zip binary
+*.suo binary
+*.png binary
+*.ico binary
