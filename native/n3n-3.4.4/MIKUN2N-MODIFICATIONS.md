@@ -23,6 +23,9 @@ Areas changed relative to upstream:
   identity (`src/mikun2n_build_version.h`).
 - Build and test tooling (`Makefile`, `tools/Makefile`, `tools/tests-*.c`,
   `scripts/build-mikun2n-windows.sh`).
+- Simplified Chinese translations of the README, this notice and selected documents
+  under `doc/` (`*.zh.md`, added 2026-09-28). The English originals are unchanged
+  and remain authoritative.
 
 Files whose name starts with `mikun2n_` are new. The per-release change log is
 `Runtime/README.txt` in the MikuN2N package; for the exact difference, compare this

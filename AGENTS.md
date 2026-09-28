@@ -97,6 +97,7 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 
 - 对外文档为双语：英文是规范名（`README.md`），中文版本加 `.zh.md` 后缀（`README.zh.md`），两版顶部互留语言跳转链接。下列路径均为英文版，中文版把 `.md` 换成 `.zh.md`。
 - 有意保持单语、不要补译：`Runtime/README.txt`（补丁清单的唯一权威来源，另抄一份必然与它漂移）、逐轮实测日志（`docs/V7*.md`、`docs/第*测试.md`、`docs/打洞测试*.md`、`docs/第二次测试.md`，除开头几行外都是需逐字保留的原始输出）、`AGENTS.md`/`CLAUDE.md`/`TODO.md` 与 `.agents/skills/**`（代理与维护者文档）、`Runtime/LICENSE*.txt` 与第三方声明（法律文本）；`supernode/*.template` 与 systemd 单元由安装脚本按文件名加载，注释按运维习惯保持中文。
+- `native/n3n-3.4.4/` 里的上游文档只翻译了面向使用者和自建者的部分（`README.zh.md`、`MIKUN2N-MODIFICATIONS.zh.md` 与 `doc/` 下 10 份 `*.zh.md`），其余保持英文。上游英文原文一律不改（包括不加语言跳转行），译文单向链回原文，避免补丁集里混进文档噪声、跟进上游时产生冲突；新增或修改译文会改变源码归档，需按上文重新生成 `Runtime/n3n-3.4.4-source.zip` 并更新其 SHA-256。
 - `supernode/README.md`：自建 supernode 的完整步骤（装 n3n、跑安装脚本、填进客户端、联邦、排查）。
 - `docs/FEDERATION.md`：多 supernode 联邦的设计、测试部署与已知边界（当前暂缓推进）。
 - `docs/TROUBLESHOOTING.md`、`docs/P2P-PUNCH-INTEGRATION.md`、`docs/NATPUNCH-V7-SUMMARY.md`：打洞与中继问题的历史排查结论与方案。
