@@ -878,21 +878,11 @@ public partial class MainWindow : Window
         {
             return;
         }
-        try
-        {
-            Clipboard.SetText(VirtualIpText.Text);
-            VirtualIpLabel.Text = "虚拟 IP · 已复制";
-            _copiedTimer.Stop();
-            _copiedTimer.Start();
-        }
-        catch (Exception exception)
-        {
-            // The clipboard is often briefly held by another program.
-            VirtualIpLabel.Text = "虚拟 IP · 复制失败，请重试";
-            _copiedTimer.Stop();
-            _copiedTimer.Start();
-            CrashLogService.Record("复制虚拟 IP", exception, fatal: false);
-        }
+        VirtualIpLabel.Text = ClipboardService.TrySetText(VirtualIpText.Text)
+            ? "虚拟 IP · 已复制"
+            : "虚拟 IP · 复制失败，请重试";
+        _copiedTimer.Stop();
+        _copiedTimer.Start();
     }
 
     private void ApplySnapshot(ConnectionSnapshot snapshot)
@@ -1029,13 +1019,9 @@ public partial class MainWindow : Window
         var copy = new MenuItem { Header = "复制虚拟 IP" };
         copy.Click += (_, _) =>
         {
-            try
+            if (!ClipboardService.TrySetText(peer.VirtualIp))
             {
-                Clipboard.SetText(peer.VirtualIp);
-            }
-            catch (Exception exception)
-            {
-                ThemedMessageDialog.Show(this, $"无法复制虚拟 IP：{exception.Message}", "复制失败", MessageKind.Warning);
+                ThemedMessageDialog.Show(this, "剪贴板正被其他程序占用，请稍后再试。", "复制失败", MessageKind.Warning);
             }
         };
         menu.Items.Add(copy);

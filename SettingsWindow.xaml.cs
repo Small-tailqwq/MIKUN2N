@@ -449,9 +449,14 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void CopyVersion_Click(object sender, RoutedEventArgs e) =>
-        TryOpen(() => Clipboard.SetText(
-            $"MikuN2N {BuildIdentity.Version}\nWindows {Environment.OSVersion.Version}\n.NET {Environment.Version}"));
+    private void CopyVersion_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ClipboardService.TrySetText(
+                $"MikuN2N {BuildIdentity.Version}\nWindows {Environment.OSVersion.Version}\n.NET {Environment.Version}"))
+        {
+            ThemedMessageDialog.Show(this, "剪贴板正被其他程序占用，请稍后再试。", "复制失败", MessageKind.Warning);
+        }
+    }
 
     /// <summary>
     /// Any exception reaching the dispatcher shuts the program down and drops the
