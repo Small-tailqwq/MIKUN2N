@@ -19,7 +19,7 @@ its own license.
 - Windows Authenticode: not signed
 - Bundled license: LICENSE-n2n.txt
 - Bundled corresponding source: n3n-3.4.4-source.zip
-- Source archive SHA-256: 974C3E04EDFDECA201994A568D149EC0BC0E31BB4987A85B6A43013E83109E63
+- Source archive SHA-256: D8CFE6009AEC022F8B43761FE26E5D22C442BDF5C92E3E61BB3E909B7912CD41
 
 2. TAP-Windows
 

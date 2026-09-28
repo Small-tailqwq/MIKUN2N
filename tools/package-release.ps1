@@ -21,6 +21,16 @@ $baseVersion = ($xml.Project.PropertyGroup | ForEach-Object { $_.BaseVersion } |
 $buildNumber = ($xml.Project.PropertyGroup | ForEach-Object { $_.BuildNumber } | Where-Object { $_ } | Select-Object -First 1)
 $version = "$baseVersion-$buildNumber"
 
+# GPLv3 requires the shipped archive to be the corresponding source of the shipped edge;
+# the tracked native tree is that source, so refuse to package an archive that drifted.
+$nativeReport = Join-Path $root "artifacts/$version/native-source-validation.json"
+python (Join-Path $PSScriptRoot 'package-native-source.py') --validate-only `
+    --source (Join-Path $root 'native/n3n-3.4.4') `
+    --archive (Join-Path $root 'Runtime/n3n-3.4.4-source.zip') --report $nativeReport
+if ($LASTEXITCODE -ne 0) {
+    throw 'Runtime/n3n-3.4.4-source.zip does not match native/n3n-3.4.4; regenerate it with tools/package-native-source.py'
+}
+
 $publish = Join-Path $root "publish/release-$version"
 if (Test-Path -LiteralPath $publish) {
     Remove-Item -LiteralPath $publish -Recurse -Force

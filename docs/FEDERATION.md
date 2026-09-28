@@ -22,7 +22,7 @@ For friends in different regions (e.g. Guangzhou ↔ Shanghai), the theoretical 
 - NAT probe replies (21001/21002) relax source validation to any known federation node, so an rtt re-anchor race no longer drops the reply.
 - Client configuration generation supports multiple `supernode=` lines, appending `supernode_selection=rtt` when there are multiple nodes (native n3n 3.4.x option: anchor to the lowest-RTT node, keeping REGISTER per node).
 
-### supernode side (C patch, in the n3n-build patched source)
+### supernode side (C patch, in `native/n3n-3.4.4`)
 
 - When a QUERY_PEER forwarded through the federation arrives at the peer's anchored supernode (`from_supernode` and no local `source_edge`), it trusts the NAT summary and bank-model fields carried in the query (the source supernode already validated them against its local registry), computes as usual, and issues the complementary-role punch plan of the same generation.
 - In the cross-supernode case, the GO deadlines for dual NAT4 are issued **independently by each side's anchored supernode**; the skew stays within one coordination interval (750ms query period) and is tolerated by the attempt-driven scanner.

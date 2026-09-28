@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$PatchedSource)
+param([string]$PatchedSource = (Join-Path $PSScriptRoot '../native/n3n-3.4.4'))
 $ErrorActionPreference = 'Stop'
 [xml]$project = Get-Content (Join-Path $PSScriptRoot '../MikuN2N.csproj') -Raw
 $properties = $project.Project.PropertyGroup | Where-Object { $_.BaseVersion }

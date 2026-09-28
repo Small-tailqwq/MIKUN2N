@@ -363,5 +363,5 @@ Runtime/edge.exe，程序仍会在缺少 n3n-edge.exe 时回退使用它，但�
 注意：分发 n2n/n3n 二进制时必须同时遵守 GPLv3 许可证并提供对应源代码；分发 TAP 安装器时须附带
 其许可证并按 THIRD-PARTY-NOTICES.txt 的书面承诺提供源码。汇总说明见 THIRD-PARTY-NOTICES.txt。
 Windows source build: run sh scripts/build-mikun2n-windows.sh from the extracted source root in Git Bash with MinGW-w64 on PATH.
-Source packaging: tools/package-native-source.py --source <patched-root> --archive Runtime/n3n-3.4.4-source.zip --report <validation.json>. Generated config.mak/configure/headers are excluded and recreated by the build scripts.
+Source packaging: tools/package-native-source.py --source native/n3n-3.4.4 --archive Runtime/n3n-3.4.4-source.zip --report <validation.json>. Generated config.mak/configure/headers are excluded and recreated by the build scripts.
 Linux server build: use supernode/build-supernode.sh from the MikuN2N source release; it runs autogen.sh before configure.

@@ -31,6 +31,8 @@
     <Compile Remove="tools\offline-tests\**\*.cs" />
     <EmbeddedResource Remove="tools\offline-tests\**\*" />
     <None Remove="tools\offline-tests\bin\**\*;tools\offline-tests\obj\**\*" />
+    <Compile Remove="native\**" />
+    <None Remove="native\**" />
     <Content Include="Runtime\n3n-edge.exe;Runtime\n3n-3.4.4-source.zip;Runtime\LICENSE-n2n.txt;Runtime\LICENSE-tap-windows.txt;Runtime\LICENSE-dotnet.txt;Runtime\THIRD-PARTY-NOTICES.txt;Runtime\THIRD-PARTY-NOTICES-dotnet.txt;Runtime\README.txt;Runtime\tap-windows-installer.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

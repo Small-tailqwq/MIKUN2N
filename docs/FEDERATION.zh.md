@@ -30,7 +30,7 @@ supernode**，而客户端默认锚定的节点与对端可能相隔很远。联
 - 客户端配置生成支持多条 `supernode=`，多节点时追加 `supernode_selection=rtt`
   （n3n 3.4.x 原生选项：锚定最低 RTT 节点，逐节点维持 REGISTER）。
 
-### supernode 侧（C 补丁，位于 n3n-build patched 源码）
+### supernode 侧（C 补丁，位于 `native/n3n-3.4.4`）
 
 - QUERY_PEER 经联邦转发到达对端锚定的 supernode 时（`from_supernode` 且本地无
   `source_edge`），信任查询内携带的 NAT 摘要与 bank 模型字段（来源 supernode 已

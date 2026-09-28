@@ -136,7 +136,7 @@
 ## 验证方式
 
 - Phase A：`dotnet build` 通过；本机连接后，一个中继 peer 前 25s 显示「打洞中…」，之后转「pSp 中继」。
-- Phase B/C：MinGW 重编 n3n（`<n3n-build>\n3n-3.4.4-patched`，
+- Phase B/C：MinGW 重编 n3n（`native/n3n-3.4.4`，
   `./scripts/hack_fakeautoconf.sh && make -j4`，`config.mak` 的 CFLAGS 需 `-std=gnu17`），
   两台在手机器实测 sym↔sym；日志核对 `last_p2p` 是否刷新、是否出现双向直连。
 - 每次难例结果保留模型/attempt/lane/offset/首命中/中继原因，沿用 natpunch 研究口径。

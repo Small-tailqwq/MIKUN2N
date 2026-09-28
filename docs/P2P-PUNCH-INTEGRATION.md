@@ -101,7 +101,7 @@ Current boundary: this is a Phase B canary that does not change the public super
 ## Validation
 
 - Phase A: `dotnet build` passes; after a local connection, a relayed peer shows "punching…" for the first 25s, then switches to "pSp relay".
-- Phase B/C: rebuild n3n with MinGW (`<n3n-build>\n3n-3.4.4-patched`, `./scripts/hack_fakeautoconf.sh && make -j4`, `config.mak` CFLAGS needs `-std=gnu17`), test sym↔sym on two on-hand machines; check the log for a `last_p2p` refresh and whether a bidirectional direct path appears.
+- Phase B/C: rebuild n3n with MinGW (`native/n3n-3.4.4`, `./scripts/hack_fakeautoconf.sh && make -j4`, `config.mak` CFLAGS needs `-std=gnu17`), test sym↔sym on two on-hand machines; check the log for a `last_p2p` refresh and whether a bidirectional direct path appears.
 - Keep the model/attempt/lane/offset/first-hit/relay-reason for every hard-case result, following the natpunch research convention.
 
 ## Related

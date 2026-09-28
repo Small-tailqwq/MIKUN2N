@@ -9,14 +9,14 @@
 # 需要管理员权限。
 param(
     [string]$TapGuid = '',
-    [string]$EdgeExe = (Join-Path $(if ($env:N3N_PATCHED_SOURCE) { $env:N3N_PATCHED_SOURCE } else { '..\n3n-build\n3n-3.4.4-patched' }) 'apps\n3n-edge.exe'),
+    [string]$EdgeExe = (Join-Path $PSScriptRoot '..\native\n3n-3.4.4\apps\n3n-edge.exe'),
     [int]$Metric = 1
 )
 . (Join-Path $PSScriptRoot 'TapAdapters.ps1')
 $TapGuid = Resolve-TapGuid $TapGuid
 $ErrorActionPreference = 'Continue'
 if (-not (Test-Path $EdgeExe)) {
-    throw "找不到 n3n-edge.exe：$EdgeExe`n请用 -EdgeExe 指定，或设置 `$env:N3N_PATCHED_SOURCE 指向 patched 源码树。"
+    throw "找不到 n3n-edge.exe：$EdgeExe`n请用 -EdgeExe 指定，或先在 native/n3n-3.4.4 里构建 edge。"
 }
 $Session = 'mikun2n-metric'
 

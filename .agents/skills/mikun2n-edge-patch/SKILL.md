@@ -9,33 +9,30 @@ description: 修改 MikuN2N 的 n3n edge/supernode 补丁、重建 Runtime/n3n-e
 
 ## 环境位置
 
-patched 源码树与工具链都在仓库外，路径因机器而异，不要写进受版本控制的文件。本机路径记在
-同目录的 `SKILL.local.md`（已被 `.gitignore` 覆盖，不随仓库分发）；没有这份文件时先问用户
-要路径，或按下面的约定自行推断。
+patched 源码树在本仓库的 `native/n3n-3.4.4/`。它的历史从一个未修改的上游 n3n 3.4.4 基线提交
+（标题 `native: import upstream n3n 3.4.4 ...`）开始，之后每个原生版本一个提交；原生改动与客户端
+改动共用同一个版本提交和 tag。看某一版的原生改动用 `git diff <上一版>..<这一版> -- native/`，
+看相对上游的完整补丁集就和基线提交做 diff，不要解压 `Runtime/n3n-3.4.4-source.zip` 逐文件比对。
+
+工具链在仓库外，路径因机器而异，不要写进受版本控制的文件。本机路径记在同目录的
+`SKILL.local.md`（已被 `.gitignore` 覆盖，不随仓库分发）；没有这份文件时先问用户，或按下表推断。
 
 | 变量 | 含义 | 默认推断 |
 |---|---|---|
-| `$PatchedSource` | n3n 3.4.4 patched 源码树 | 与 MikuN2N 仓库同级的 `n3n-build\n3n-3.4.4-patched` |
 | `$ToolchainBin` | MinGW-w64 的 `bin` 目录（默认不在 PATH 上） | `%USERPROFILE%\mingw64\mingw64\bin` |
-
-`n3n-build/` 是独立 git 仓库，不在 MikuN2N 仓库内，也不随仓库分发。它按版本提交并打同名 tag
-（`0.5.8-1`、`0.5.8-2`）：看原生改动用 `git diff <上一版>..<这一版>`，不要再解压
-`Runtime/n3n-3.4.4-source.zip` 逐文件比对。仓库里另有 `n3n-edge.exe.original-backup` 与
-`backups/`（改动前的原始二进制与快照，已被 gitignore）。
 
 - 打洞算法参考实现：`tools/natpunch/`（Windows UDP NAT4 打洞实验工具 v7.x，C 源码 + 协调服务器 + 日志分析），edge 侧的 bank 模型、cone 逃逸、fast/volatile 判定都从它移植或对齐
 - 打包产物：`Runtime/n3n-edge.exe`、`Runtime/n3n-3.4.4-source.zip`、`Runtime/README.txt`
 
 ## 打补丁并重建 n3n-edge.exe
 
-1. 在 patched 源码树里改代码，用 `git diff` 复核改动范围。
-2. 前置工具链并构建（先按上表解析 `$PatchedSource` 与 `$ToolchainBin`）：
+1. 在 `native/n3n-3.4.4/` 里改代码，用 `git diff -- native/` 复核改动范围。
+2. 前置工具链并构建（先按上表解析 `$ToolchainBin`；构建前先运行 `tools/sync-native-version.ps1` 同步构建标识）：
 
    ```powershell
-   $PatchedSource = if ($env:N3N_PATCHED_SOURCE) { $env:N3N_PATCHED_SOURCE } else { "..\n3n-build\n3n-3.4.4-patched" }
    $ToolchainBin  = if ($env:N3N_TOOLCHAIN_BIN) { $env:N3N_TOOLCHAIN_BIN } else { "$env:USERPROFILE\mingw64\mingw64\bin" }
    $env:Path = "$ToolchainBin;$env:Path"
-   cd $PatchedSource
+   cd native/n3n-3.4.4
    ./scripts/hack_fakeautoconf.sh
    make -j4
    ```
@@ -43,7 +40,7 @@ patched 源码树与工具链都在仓库外，路径因机器而异，不要写
    Windows 目标需要在 `config.mak` 的 `CFLAGS` 里保留 `-std=gnu17`（当前为 `-g -O2 -std=gnu17`），否则随包的旧 `src/win32/getopt.c` 在当前 GCC 的 C23 默认标准下编译失败。
    构建完先跑离线回归：`tools/tests-ipv6.exe`（方向性尺寸、短 ACK 绑定、分片乱序/重复/过期/重叠、错误会话与端点拒绝、大探测丢失后保活仍在、EMSGSIZE 与瞬态失败）与 `tests-wire`（wire 编解码）。它们通过只说明协议层正确，不代替双端实机。
 3. 把新二进制拷到 `Runtime/n3n-edge.exe`，并在 `Runtime/README.txt` 的编号补丁清单末尾追加一条：版本前缀 + 问题现象（含实测数据）+ 改动点 + 影响范围。清单要写"为什么"，不要逐行复述代码。
-4. 重新打包源码：把 patched 源码树的源码（不含 `.o`、`.exe` 等构建产物）打成 `Runtime/n3n-3.4.4-source.zip`，替换旧文件。GPLv3 要求分发二进制时提供对应源码，归档必须与刚发布的二进制同源——打包后用字节数或哈希核对 `src/edge_utils.c`、`src/management.c` 等关键文件在归档与源码树中一致。
+4. 重新打包源码：`python tools/package-native-source.py --source native/n3n-3.4.4 --archive Runtime/n3n-3.4.4-source.zip --report artifacts/<版本>/native-source-validation.json`。它只收 `git ls-files` 里的源码（排除生成文件与构建产物），并逐字节核对归档与工作树；再把新归档的 SHA-256 写进 `Runtime/THIRD-PARTY-NOTICES.txt`，并更新 `native/n3n-3.4.4/MIKUN2N-MODIFICATIONS.md` 的版本与日期（改了它要重新打包）。GPLv3 要求归档与发布的二进制同源，`tools/package-release.ps1` 打包前会重跑这项核对，不一致就拒绝发布。
 5. 客户端侧的配套改动（管理方法、界面文案、设置项）在 MikuN2N 仓库里完成，并实际运行程序验证连接行为。
 
 ## 重建 natpunch 参考客户端

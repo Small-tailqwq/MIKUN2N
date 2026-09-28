@@ -37,9 +37,9 @@ dotnet build
 
 输出：`bin/Debug/net9.0-windows/`。`MikuN2N.csproj` 里的 `BaseVersion` 与 `BuildNumber` 生成诸如 `0.5.8-1` 的版本号。每交付一个新包就把序号加一；同一交付的重建保持该序号不变，`BaseVersion` 变化时重置为 1。报告问题时，从界面或 `build-identity.txt` 记录版本号。
 
-每次交付对应一次提交加一个同名 tag（`git diff 0.5.8-1..0.5.8-2` 即该版本的全部改动）；打过补丁的原生源码树在独立的 `n3n-build` 仓库中以同样方式标记版本。客户端离线回归测试位于 `tools/offline-tests`，用 `dotnet run --project tools/offline-tests -- <空临时目录>` 运行；原生检查是打过补丁的源码树里的 `tests-wire` 与 `tools/tests-ipv6.c`。这些只覆盖协议与会话逻辑——不是真实连接。
+每次交付对应一次提交加一个同名 tag（`git diff 0.5.8-1..0.5.8-2` 即该版本的全部改动），这也包括打过补丁的原生 edge：它位于 `native/n3n-3.4.4/`，建立在一个未修改的上游 3.4.4 基线提交之上，因此 `git log -- native/` 列出每一次原生改动，与该基线做 diff 即得到完整补丁集。客户端离线回归测试位于 `tools/offline-tests`，用 `dotnet run --project tools/offline-tests -- <空临时目录>` 运行；原生检查是 `native/n3n-3.4.4` 里的 `tests-wire` 与 `tools/tests-ipv6.c`。这些只覆盖协议与会话逻辑——不是真实连接。
 
-打过补丁的原生源码包含在 `Runtime/n3n-3.4.4-source.zip` 里。在新的原生发布构建之前，运行 `tools/sync-native-version.ps1 -PatchedSource <源码根目录>` 从项目版本生成其构建标识。然后在 Git Bash 里、MinGW-w64 GCC 与 make 位于 PATH 的前提下，从原生源码根目录运行 `sh scripts/build-mikun2n-windows.sh`。直接重建随附的源码包会保留其内置标识。这使用 GNU C17，并在调试信息里映射构建路径。把 `apps/n3n-edge.exe` 复制到 `Runtime/n3n-edge.exe`，然后一起更新源码包与各组件哈希。
+打过补丁的原生源码位于 `native/n3n-3.4.4/`，发布包以 `Runtime/n3n-3.4.4-source.zip` 随附。在新的原生发布构建之前，运行 `tools/sync-native-version.ps1` 从项目版本生成其构建标识。然后在 Git Bash 里、MinGW-w64 GCC 与 make 位于 PATH 的前提下，从原生源码根目录运行 `sh scripts/build-mikun2n-windows.sh`。直接重建随附的源码包会保留其内置标识。这使用 GNU C17，并在调试信息里映射构建路径。把 `apps/n3n-edge.exe` 复制到 `Runtime/n3n-edge.exe`，然后用 `tools/package-native-source.py --source native/n3n-3.4.4 --archive Runtime/n3n-3.4.4-source.zip --report <validation.json>` 重新生成源码包，并一起更新各组件哈希。源码包与 `native/` 不逐字节一致时，`tools/package-release.ps1` 会拒绝打包。
 
 ## 发布
 

@@ -23,7 +23,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 |---|---|
 | 任意 C# 代码 | `dotnet build` |
 | 诊断会话、上传授权、日志轮转 | `dotnet run --project tools/offline-tests -- <一个空临时目录>`（会写出 64 MiB 分段，别指向仓库） |
-| 原生 IPv6 尺寸发现、分片、重组 | patched 源码树 `make` 后运行 `tools/tests-ipv6.exe`；wire 编解码用 `tests-wire` |
+| 原生 IPv6 尺寸发现、分片、重组 | `native/n3n-3.4.4` 里 `make` 后运行 `tools/tests-ipv6.exe`；wire 编解码用 `tests-wire` |
 | 连接、进程生命周期、TAP 网卡、UDP 发现 | 没有单元测试能覆盖，必须实机连接；这属于需要用户明确授权的验证，不要自行启动程序 |
 
 XAML 能编译只说明语法正确：界面改动按下面「界面主题」一节在两套主题下实际运行确认。
@@ -34,7 +34,7 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 
 入口在根目录：`App.xaml.cs`（启动/主题/单实例/托盘/日志清理接线，并负责把旧格式设置就地升级）、`MainWindow.xaml.cs`（主界面与接线）、`SettingsWindow.xaml.cs`（常规/关于/节点三个页签）、`NodeEditDialog.xaml.cs`（单个节点的表单）、`CloseBehaviorDialog.xaml.cs`、`ConflictingProcessDialog.xaml.cs`、`LogUploadConsentDialog.xaml.cs`（诊断上传授权弹窗，只在测试包里出现）。`Models/` 是数据模型，其中 `SupernodeNode` 是一个节点的「名称 + 服务器地址 + 小组名称」。
 
-`Services/` 一览（`Runtime/` 下是与发布包一起分发的第三方二进制与说明；`tools/` 是本地验证与实验脚本；`tools/natpunch/` 是打洞算法的独立参考实现，`tools/offline-tests/` 是客户端侧的离线回归工程，跑法见上面「构建与运行」）：
+`Services/` 一览（`native/n3n-3.4.4/` 是打过补丁的 n3n edge 源码，历史从未修改的上游基线提交开始；`Runtime/` 下是与发布包一起分发的第三方二进制与说明；`tools/` 是本地验证与实验脚本；`tools/natpunch/` 是打洞算法的独立参考实现，`tools/offline-tests/` 是客户端侧的离线回归工程，跑法见上面「构建与运行」）：
 
 | 文件 | 职责 |
 |---|---|
@@ -76,12 +76,13 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 
 - 所有面向用户的文案用简体中文，语气与现有一致（简洁、非技术化、重连过程中让人安心）。代码、注释、提交信息与文档用英文。
 - 注释很少，只解释不显然的"为什么"（竞态、协议怪癖、平台怪癖），不复述代码在做什么。
+- 行尾由 `.gitattributes` 统一：文本文件在索引和工作区都是 LF（`.bat`/`.cmd`/`.sln` 在工作区为 CRLF），不依赖各机器的 `core.autocrlf`。不要把 CRLF 写回 LF 文件，原生源码归档按字节核对工作树。
 - WPF 与 WinForms 类型会重名（`Brush`、`Color`、`Point` 等），现有文件用显式 `using X = ...` 别名解决（如 `MediaColor`、`WpfBrush`、`Forms.NotifyIcon`），照这个写法做，不要在行内写全限定名。
-- 应用版本由 `MikuN2N.csproj` 的 `<BaseVersion>` 和 `<BuildNumber>` 组成，格式为 `0.5.8-1`、`0.5.8-2`，不再追加时间戳。每次交付新的测试包或发布包前将构建序号加一；同一交付的编译重试不加号。`BaseVersion` 变化时序号重置为 `1`。显示处一律经 `Services/BuildIdentity.cs` 读取。重建原生 edge 前运行 `tools/sync-native-version.ps1 -PatchedSource <源码目录>`，使原生构建标识与本次版本一致；单独替换 edge 时仍显示实际运行二进制报告的标识，不用客户端版本冒充。IPv6 兼容性按握手协议代次判断，不按构建号是否相同判断。
+- 应用版本由 `MikuN2N.csproj` 的 `<BaseVersion>` 和 `<BuildNumber>` 组成，格式为 `0.5.8-1`、`0.5.8-2`，不再追加时间戳。每次交付新的测试包或发布包前将构建序号加一；同一交付的编译重试不加号。`BaseVersion` 变化时序号重置为 `1`。显示处一律经 `Services/BuildIdentity.cs` 读取。重建原生 edge 前运行 `tools/sync-native-version.ps1`（默认作用于 `native/n3n-3.4.4`），使原生构建标识与本次版本一致；单独替换 edge 时仍显示实际运行二进制报告的标识，不用客户端版本冒充。IPv6 兼容性按握手协议代次判断，不按构建号是否相同判断。
 - 本仓库按开源发布对待：节点地址、小组名称、联机密钥与个人机器路径只允许出现在 `*.local.md`（已被 gitignore）里，不要写进代码、默认值、测试脚本或受版本控制的文档。
-- `Runtime/` 分发第三方二进制（n3n edge、TAP-Windows 安装器）及其许可证（`LICENSE-n2n.txt`、`LICENSE-tap-windows.txt`、`LICENSE-dotnet.txt`）与源码归档 `n3n-3.4.4-source.zip`；本体 `LICENSE` 以 `LICENSE.txt` 随包。改动打包内容时保持许可证与源码可得性义务完整，汇总见 `Runtime/THIRD-PARTY-NOTICES.txt`，规则见 `Runtime/README.txt`。换 edge 或源码包后同步更新声明里的 SHA-256；patched 树根目录的 `MIKUN2N-MODIFICATIONS.md` 是 GPLv3 §5(a) 的修改声明，每次原生改动更新其中的版本与日期。
-- 公开发布包一律用 `tools/package-release.ps1` 生成（它检查许可证、源码与本机账户路径），产物与 `SHA256SUMS` 挂到同名 tag 的 GitHub Release 上，客户端的在线更新只认这两个文件；推 tag 会由 `.github/workflows/release.yml` 建草稿 Release，核对说明后再发布。私有测试包（`TestProfilePath`）不走这个流程。
-- 每交付一版就打一个提交，标题为 `0.5.8-2: <本版做了什么>`，正文写改动与理由，并用同名 tag 标记该提交（`0.5.8-1`、`0.5.8-2`）。审阅某一版改了什么，直接 `git diff <上一版>..<这一版>`，不要靠解压发布包逐文件比对。原生侧改动在 `n3n-build` 仓库用同样的粒度提交与打 tag。
+- `Runtime/` 分发第三方二进制（n3n edge、TAP-Windows 安装器）及其许可证（`LICENSE-n2n.txt`、`LICENSE-tap-windows.txt`、`LICENSE-dotnet.txt`）与源码归档 `n3n-3.4.4-source.zip`；本体 `LICENSE` 以 `LICENSE.txt` 随包。改动打包内容时保持许可证与源码可得性义务完整，汇总见 `Runtime/THIRD-PARTY-NOTICES.txt`，规则见 `Runtime/README.txt`。换 edge 或源码包后同步更新声明里的 SHA-256；`native/n3n-3.4.4/MIKUN2N-MODIFICATIONS.md` 是 GPLv3 §5(a) 的修改声明，每次原生改动更新其中的版本与日期。
+- 公开发布包一律用 `tools/package-release.ps1` 生成（它检查许可证、本机账户路径，并逐字节核对源码归档与 `native/` 一致），产物与 `SHA256SUMS` 挂到同名 tag 的 GitHub Release 上，客户端的在线更新只认这两个文件；推 tag 会由 `.github/workflows/release.yml` 建草稿 Release，核对说明后再发布。私有测试包（`TestProfilePath`）不走这个流程。
+- 每交付一版就打一个提交，标题为 `0.5.8-2: <本版做了什么>`，正文写改动与理由，并用同名 tag 标记该提交（`0.5.8-1`、`0.5.8-2`）。审阅某一版改了什么，直接 `git diff <上一版>..<这一版>`，不要靠解压发布包逐文件比对。原生改动（`native/`）与客户端改动进同一个版本提交；只看原生侧用 `git diff <上一版>..<这一版> -- native/`。
 - 每轮的发布包、离线测试日志、验证 JSON 与改动前快照留在 `artifacts/<版本>/`（不进版本控制）。审阅、发布核对或追查历史版本时先看那里的 `*-validation.json` 与 `*-tests*.log`；要对照上一版源码就看 `before/`。
 
 ## 边缘补丁与打洞算法
@@ -90,7 +91,7 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 
 **补丁清单的唯一权威来源是 `Runtime/README.txt`**（随发布包分发、按版本编号）。不要在本文件或其他地方再抄一份——历史上那份副本长期落后于 README，并与它关于冷却策略的表述互相矛盾。要看当前实际生效的行为读那份清单，不要依赖任何摘要。
 
-改动补丁、重建 `n3n-edge.exe` 或调试打洞失败时，加载 skill `mikun2n-edge-patch`，其中记录了源码树与构建工具链位置、n3n 与 natpunch 两侧的重建步骤，以及打洞算法的参考实现（`tools/natpunch/`）。
+改动补丁、重建 `n3n-edge.exe` 或调试打洞失败时，加载 skill `mikun2n-edge-patch`，其中记录了构建工具链位置、n3n 与 natpunch 两侧的重建步骤，以及打洞算法的参考实现（`tools/natpunch/`）。
 
 ## 文档索引
 
