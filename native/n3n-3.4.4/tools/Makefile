@@ -25,7 +25,7 @@ all: $(TOOLS) $(TESTS)
 
 # This regression includes the transport implementation to intercept OS sends.
 tests-ipv6: CPPFLAGS += -I../src
-tests-ipv6: tests-ipv6.c ../src/mikun2n_ipv6.c ../src/mikun2n_ipv6_frag.h ../src/mikun2n_ipv6.h ../src/peer_info.h ../include/n2n_typedefs.h ../src/libn3n.a Makefile
+tests-ipv6: tests-ipv6.c ../src/mikun2n_ipv6.c ../src/mikun2n_ipv6_frag.h ../src/mikun2n_stun.h ../src/mikun2n_ipv6.h ../src/peer_info.h ../include/n2n_typedefs.h ../src/libn3n.a Makefile
 	@echo "  CC      $@"
 	@$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) $< $(LDLIBS) -o $@
 

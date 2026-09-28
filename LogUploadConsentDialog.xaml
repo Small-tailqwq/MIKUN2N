@@ -7,6 +7,9 @@
   <StackPanel Margin="28">
     <TextBlock x:Name="ConsentTitleText" Text="允许上传本次联机的诊断日志吗？" FontSize="21" FontWeight="Bold" TextWrapping="Wrap" />
     <TextBlock x:Name="DestinationText" Margin="0,16,0,12" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
+    <TextBlock x:Name="CertificateWarningText" Margin="0,0,0,12" TextWrapping="Wrap" FontWeight="SemiBold"
+               Foreground="{DynamicResource Warning}" Visibility="Collapsed"
+               Text="注意：这台服务器的证书与上次记录的不一致。可能是服务器重新部署过，也可能是有人冒充。请先向节点提供者确认后再同意。" />
     <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="10" Padding="16">
       <TextBlock TextWrapping="Wrap" LineHeight="24"
                  Text="日志包含昵称、设备会话编号、IP / MAC 地址、网卡与 NAT 状态、IPv6 探针往返、直连 / 中继变化和错误信息，用于对照双方的连接过程。不会采集游戏数据内容、联机密钥、密码或其他文件。" />

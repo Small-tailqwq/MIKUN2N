@@ -2,6 +2,8 @@
 
 > [English](DIAGNOSTICS.md) | [简体中文](DIAGNOSTICS.zh.md)
 
+Two builds can upload. A private test build embeds its receiver and a batch token. Since 0.5.8-7 a normal build can upload to the **active node's own supernode** when the player enables “上传诊断日志到节点服务器” under experimental settings: the client connects to TCP 5443 on the node's first server address, shows the receiver's certificate fingerprint in the consent dialog and pins it for that node; a later mismatch is highlighted and needs fresh consent. Such uploads use batch `c-<first 16 hex digits of SHA-256(community)>` and authorize each segment with an HMAC keyed by the community name, which the receiver recomputes from the supernode's community list. No token is distributed, and only players who know a listed community can upload. The consent policy below applies to both.
+
 The private test build defaults to **每次询问** on each manual connection. Declining, pressing Escape, or closing the dialog leaves logs local. One-time consent covers that connection and automatic edge restarts; it never becomes saved consent. Settings also offers **始终允许** (requires a separate informed confirmation) and **始终拒绝** (no prompt or upload). Persistent permission is bound to the selected node identity/configuration, exact HTTPS receiver and pinned certificate. Editing or switching the active node clears it, even when switching back; receiver/certificate changes require fresh permission. It is never seeded by a private profile. Applying Ask or Deny revokes an active persistent upload. Both IPv4 and IPv6 sessions, including failed connection attempts, follow this policy.
 
 The main window can stop uploading or resume diagnostic recording/uploading without restarting the client, edge, or connection. Resume follows the selected consent mode and starts a new segment; refused/revoked records are never replayed. Each connection retains at most four 64 MiB segments (256 MiB) locally, rotating its oldest segment when full. Storage errors pause recording with a visible recovery action. Receiver outages retry within those bounds; lost unacknowledged segments are reported as incomplete delivery. Disconnect/exit attempts a final flush for at most eight seconds. A later connection never uploads earlier files.
@@ -39,8 +41,11 @@ Private test sessions record `MikuN2N latency` events for unicast probe sends, A
 On the supernode, copy this directory and run as root:
 
 ```sh
-bash install-diagnostics.sh --host YOUR_SERVER_HOST --batch ipv6-test-YOUR_BATCH
+bash install-diagnostics.sh --host YOUR_SERVER_HOST
+bash install-diagnostics.sh --host YOUR_SERVER_HOST --batch ipv6-test-YOUR_BATCH   # also a private test batch
 ```
+
+`--community-file` defaults to the supernode's `/etc/n3n/mikun2n-community.list`; only literal names count (regular expressions and user/key lines are skipped). A node receiver's certificate is valid for 825 days because clients pin it rather than trust a CA.
 
 Allow TCP 5443 in both host and provider firewalls. The receiver uses a dedicated account, a locally generated TLS certificate, a batch-specific upload credential, 128 KiB requests, atomic/idempotent numbered JSONL chunks, a 64 MiB segment limit and a rolling 2 GiB total limit (the oldest retained segments are removed first). Logs are accessible to administrators through SSH only; the HTTP service has no download API. Segments expire 24 hours after first receipt, with cleanup at startup and every five minutes. This server policy also applies to older clients whose dialog still says seven days. Reinstalling updates the profile's retention field without rotating credentials or certificates. A pinned certificate in the package authenticates the server without disabling TLS verification globally. Redirects and system proxies are disabled for uploads. The certificate expires after 90 days.
 

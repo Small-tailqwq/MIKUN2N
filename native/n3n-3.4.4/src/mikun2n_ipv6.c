@@ -9,6 +9,7 @@
 #include <n3n/random.h>
 #include <n3n/strings.h>
 #include "mikun2n_ipv6.h"
+#include "mikun2n_stun.h"
 #include "n2n_wire.h"
 #include "peer_info.h"
 #include "portable_endian.h"
@@ -172,19 +173,25 @@ static void ipv6_stun_init (struct n3n_runtime_data *eee) {
     eee->mikun2n_ipv6_stun_initialized = true;
     const char *setting = getenv("MIKUN2N_IPV6_STUN_SERVERS");
     unsigned count = 0;
-    // The launcher resolves optional observer hostnames outside the edge loop.
+    // The launcher resolves optional observer hostnames outside the edge loop. An "m:"
+    // prefix marks the supernode's own observer, which answers only tagged requests.
     while(setting && *setting && count < 2) {
         const char *end = strchr(setting, ';');
         size_t len = end ? (size_t)(end - setting) : strlen(setting);
+        bool tagged = len > 2 && !strncmp(setting, "m:", 2);
+        const char *start = tagged ? setting + 2 : setting;
+        len -= tagged ? 2 : 0;
         char text[64];
         if(len && len < sizeof(text)) {
-            memcpy(text, setting, len);
+            memcpy(text, start, len);
             text[len] = 0;
             n2n_sock_t address = {0};
             address.family = AF_INET6;
             address.port = 3478;
-            if(inet_pton(AF_INET6, text, address.addr.v6) == 1 && mikun2n_ipv6_public(&address))
+            if(inet_pton(AF_INET6, text, address.addr.v6) == 1 && mikun2n_ipv6_public(&address)) {
+                eee->mikun2n_ipv6_stun_tagged[count] = tagged;
                 eee->mikun2n_ipv6_stun_servers[count++] = address;
+            }
         }
         setting = end ? end + 1 : NULL;
     }
@@ -209,7 +216,7 @@ static void ipv6_stun_tick (struct n3n_runtime_data *eee, uint64_t now_ms) {
     }
     if(eee->mikun2n_ipv6_stun_pending || now_ms < eee->mikun2n_ipv6_stun_next_ms)
         return;
-    uint8_t request[20] = {0, 1, 0, 0, 0x21, 0x12, 0xa4, 0x42};
+    uint8_t request[MIKUN2N_STUN_TAGGED_REQUEST_BYTES] = {0, 1, 0, 0, 0x21, 0x12, 0xa4, 0x42};
     if(!ipv6_stun_random(request + 8, 12)) {
         eee->mikun2n_ipv6_stun_next_ms = now_ms + 10000;
         V6_DIAG("mapping_request_failed reason=random_unavailable");
@@ -217,14 +224,18 @@ static void ipv6_stun_tick (struct n3n_runtime_data *eee, uint64_t now_ms) {
     }
     memcpy(eee->mikun2n_ipv6_stun_transaction, request + 8, 12);
     n2n_sock_t *observer = &eee->mikun2n_ipv6_stun_servers[eee->mikun2n_ipv6_stun_index];
-    ssize_t sent = ipv6_send_raw(eee, observer, request, sizeof(request));
+    // Third-party observers get the anonymous 20-byte request; only the supernode's
+    // own observer learns which registered edge is asking.
+    size_t size = eee->mikun2n_ipv6_stun_tagged[eee->mikun2n_ipv6_stun_index]
+        ? mikun2n_stun_tag_request(request, eee->device.mac_addr) : 20;
+    ssize_t sent = ipv6_send_raw(eee, observer, request, size);
     int error = sent < 0 ? ipv6_socket_error() : 0;
-    eee->mikun2n_ipv6_stun_pending = sent == (ssize_t)sizeof(request);
+    eee->mikun2n_ipv6_stun_pending = sent == (ssize_t)size;
     eee->mikun2n_ipv6_stun_sent_ms = now_ms;
     eee->mikun2n_ipv6_stun_next_ms = now_ms + 10000;
     n2n_sock_str_t text;
     V6_DIAG("mapping_request observer=%s sent=%d bytes=%u error=%d",
-            sock_to_cstr(text, observer), eee->mikun2n_ipv6_stun_pending, (unsigned)sizeof(request), error);
+            sock_to_cstr(text, observer), eee->mikun2n_ipv6_stun_pending, (unsigned)size, error);
     if(!eee->mikun2n_ipv6_stun_pending && eee->mikun2n_ipv6_stun_servers[1].family)
         eee->mikun2n_ipv6_stun_index ^= 1;
 }

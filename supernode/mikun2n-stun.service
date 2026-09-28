@@ -1,0 +1,24 @@
+[Unit]
+Description=MikuN2N IPv6 mapping observer (UDP 3478, registered edges only)
+After=network-online.target mikun2n-supernode.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The supernode's management socket is owned by the user it drops privileges to.
+User=nobody
+Group=nogroup
+EnvironmentFile=/etc/mikun2n-stun/stun.env
+ExecStart=/usr/bin/python3 /opt/mikun2n/stun/mikun2n-stun.py --ipv6 ${MIKUN2N_STUN_IPV6} --mgmt ${MIKUN2N_STUN_MGMT}
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=64M
+TasksMax=8
+
+[Install]
+WantedBy=multi-user.target

@@ -109,11 +109,7 @@ public partial class MainWindow : Window
             DiagnosticUploadConsent.Invalidate(_settings);
             _settingsStore.Save(_settings, KeyBox.Password);
         }
-        if (TestBuildProfile.Current is not null)
-        {
-            DiagnosticsPanel.Visibility = Visibility.Visible;
-            RefreshDiagnosticPreferenceStatus();
-        }
+        RefreshDiagnosticsPanel();
         RefreshNodeBox();
 
         _logFlushTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(250), DispatcherPriority.Background,
@@ -482,16 +478,24 @@ public partial class MainWindow : Window
         {
             _connectionBusy = true;
             await FinishDiagnosticsAsync();
-            if (TestBuildProfile.Current is { } profile)
+            var (receiver, certificateChanged) = TestBuildProfile.Current is { } profile
+                ? (profile, false)
+                : _settings.ExperimentalDiagnosticUpload
+                    ? await ResolveNodeReceiverAsync(node)
+                    : ((TestBuildProfile?)null, false);
+            if (_closeInProgress) return;
+            if (receiver is not null)
             {
-                var consent = ResolveDiagnosticConsent(profile);
+                var consent = ResolveDiagnosticConsent(receiver, certificateChanged);
                 if (_closeInProgress) return;
                 try
                 {
-                    _diagnostics = new TestDiagnosticsSession(profile, consent, KeyBox.Password,
+                    _diagnostics = new TestDiagnosticsSession(receiver, consent, KeyBox.Password,
                         status => Dispatcher.InvokeAsync(() => UpdateDiagnosticStatus(status)));
                     StopUploadButton.IsEnabled = consent;
                     ResumeDiagnosticsButton.IsEnabled = true;
+                    if (receiver.IsNodeReceiver && receiver.CertificateSha256.Length == 0)
+                        DiagnosticsStatusText.Text = "节点服务器没有开启日志接收，详细日志只保存在本机。";
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
@@ -635,26 +639,70 @@ public partial class MainWindow : Window
             await diagnostics.StopUploadAsync();
     }
 
-    private bool ResolveDiagnosticConsent(TestBuildProfile profile)
+    private async Task<(TestBuildProfile Receiver, bool CertificateChanged)> ResolveNodeReceiverAsync(SupernodeNode node)
     {
+        var host = NodeServiceProbe.PrimaryHost(node.Server) ?? string.Empty;
+        DiagnosticsStatusText.Text = "正在检查节点服务器是否开启日志接收…";
+        var fingerprint = host.Length == 0 ? null
+            : await NodeServiceProbe.FetchReceiverCertificateAsync(host, CancellationToken.None);
+        var pinned = _settings.DiagnosticCertificatePins.GetValueOrDefault(node.Id);
+        return (TestBuildProfile.ForNode(node, host, fingerprint ?? string.Empty),
+            fingerprint is not null && pinned is not null &&
+            !string.Equals(pinned, fingerprint, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool ResolveDiagnosticConsent(TestBuildProfile profile, bool certificateChanged = false)
+    {
+        // A node that answered with no receiver has nothing to consent to.
+        if (profile.IsNodeReceiver && profile.CertificateSha256.Length == 0) return false;
         if (_settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny) return false;
         if (DiagnosticUploadConsent.IsAllowed(_settings, profile)) return true;
-        if (_settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow)
+        bool consent;
+        if (_settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow && profile.IsNodeReceiver &&
+            _settings.DiagnosticUploadTarget.Length == 0 && !certificateChanged)
         {
-            DiagnosticUploadConsent.Invalidate(_settings);
-            SaveSettings();
+            // "Always allow" chosen in Settings before this node's receiver certificate was
+            // known: the first connection binds it after the persistent confirmation.
+            consent = new LogUploadConsentDialog(profile, persistent: true, node: _settings.ActiveNode) { Owner = this }
+                .ShowDialog() == true;
+            if (consent)
+                _settings.DiagnosticUploadTarget = DiagnosticUploadConsent.Target(profile, _settings.ActiveNode);
+            else
+                DiagnosticUploadConsent.Invalidate(_settings);
         }
-        return new LogUploadConsentDialog(profile, node: _settings.ActiveNode) { Owner = this }.ShowDialog() == true;
+        else
+        {
+            if (_settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow)
+                DiagnosticUploadConsent.Invalidate(_settings);
+            consent = new LogUploadConsentDialog(profile, node: _settings.ActiveNode, certificateChanged: certificateChanged)
+                { Owner = this }.ShowDialog() == true;
+        }
+        if (consent && profile.IsNodeReceiver)
+            _settings.DiagnosticCertificatePins[profile.Node.Id] = profile.CertificateSha256;
+        SaveSettings();
+        return consent;
     }
 
     private void RefreshDiagnosticPreferenceStatus()
     {
-        if (_diagnostics is not null || TestBuildProfile.Current is not { } profile) return;
-        DiagnosticsStatusText.Text = _settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny
-            ? "已设为始终拒绝上传，日志仅保存在本机"
-            : DiagnosticUploadConsent.IsAllowed(_settings, profile)
-                ? "当前节点已授权自动上传，可随时停止"
-                : "连接前会询问日志上传授权；更改节点后须重新授权";
+        if (_diagnostics is not null) return;
+        if (TestBuildProfile.Current is { } profile)
+            DiagnosticsStatusText.Text = _settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny
+                ? "已设为始终拒绝上传，日志仅保存在本机"
+                : DiagnosticUploadConsent.IsAllowed(_settings, profile)
+                    ? "当前节点已授权自动上传，可随时停止"
+                    : "连接前会询问日志上传授权；更改节点后须重新授权";
+        else if (_settings.ExperimentalDiagnosticUpload)
+            DiagnosticsStatusText.Text = _settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny
+                ? "已设为始终拒绝上传，日志仅保存在本机"
+                : "连接时检查节点服务器是否开启日志接收，上传前会征得你的同意";
+    }
+
+    private void RefreshDiagnosticsPanel()
+    {
+        DiagnosticsPanel.Visibility = TestBuildProfile.Current is not null || _settings.ExperimentalDiagnosticUpload
+            ? Visibility.Visible : Visibility.Collapsed;
+        RefreshDiagnosticPreferenceStatus();
     }
 
     private void UpdateDiagnosticStatus(string status)
@@ -666,11 +714,11 @@ public partial class MainWindow : Window
 
     private async void ResumeDiagnostics_Click(object sender, RoutedEventArgs e)
     {
-        if (_diagnostics is not { } diagnostics || TestBuildProfile.Current is not { } profile) return;
+        if (_diagnostics is not { } diagnostics) return;
         ResumeDiagnosticsButton.IsEnabled = false;
         try
         {
-            var consent = ResolveDiagnosticConsent(profile);
+            var consent = ResolveDiagnosticConsent(diagnostics.Receiver);
             if (_closeInProgress) return;
             await diagnostics.ResumeAsync(consent);
         }
@@ -802,8 +850,12 @@ public partial class MainWindow : Window
             CloseBehavior = _settings.CloseBehavior,
             LogRetentionDays = _settings.LogRetentionDays,
             ExperimentalIpv6P2p = _settings.ExperimentalIpv6P2p,
+            ExperimentalDiagnosticUpload = _settings.ExperimentalDiagnosticUpload,
             DiagnosticUpload = _settings.DiagnosticUpload,
-            DiagnosticUploadTarget = _settings.DiagnosticUploadTarget
+            DiagnosticUploadTarget = _settings.DiagnosticUploadTarget,
+            DiagnosticCertificatePins = _settings.DiagnosticCertificatePins,
+            AutoCheckUpdates = _settings.AutoCheckUpdates,
+            SkippedUpdateVersion = _settings.SkippedUpdateVersion
         };
         _settingsStore.Save(_settings, KeyBox.Password);
     }
@@ -1238,6 +1290,7 @@ public partial class MainWindow : Window
         _settings.CloseBehavior = window.SelectedCloseBehavior;
         _settings.LogRetentionDays = window.SelectedLogRetentionDays;
         _settings.ExperimentalIpv6P2p = window.SelectedExperimentalIpv6P2p;
+        _settings.ExperimentalDiagnosticUpload = window.SelectedExperimentalDiagnosticUpload;
         _settings.AutoCheckUpdates = window.SelectedAutoCheckUpdates;
         var previousUpload = _settings.DiagnosticUpload;
         var previousTarget = _settings.DiagnosticUploadTarget;
@@ -1256,11 +1309,13 @@ public partial class MainWindow : Window
             if (_settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny ||
                 (_settings.DiagnosticUpload == DiagnosticUploadPreference.Ask && previousUpload != _settings.DiagnosticUpload))
                 await diagnostics.StopUploadAsync();
-            else if (TestBuildProfile.Current is { } profile && DiagnosticUploadConsent.IsAllowed(_settings, profile) &&
+            else if (diagnostics.Receiver.IsNodeReceiver && !_settings.ExperimentalDiagnosticUpload)
+                await diagnostics.StopUploadAsync();
+            else if (DiagnosticUploadConsent.IsAllowed(_settings, diagnostics.Receiver) &&
                      (previousUpload != _settings.DiagnosticUpload || previousTarget != _settings.DiagnosticUploadTarget))
                 await diagnostics.ResumeAsync(true);
         }
-        RefreshDiagnosticPreferenceStatus();
+        RefreshDiagnosticsPanel();
         if (window.InstallUpdateRequested)
         {
             if (!_edgeController.IsRunning || ThemedMessageDialog.Confirm(this,

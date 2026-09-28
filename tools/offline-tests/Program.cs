@@ -38,6 +38,25 @@ DiagnosticUploadConsent.Invalidate(settings);
 Check(settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny, "deny survives endpoint changes");
 Console.WriteLine("PASS: persisted consent, node/receiver/certificate edits, switch-back revocation, deny");
 
+// Reference vector from supernode/diagnostics-receiver.py (community_batch and its HMAC).
+var communityNode = new SupernodeNode { Id = "n1", Name = "Friends", Server = "203.0.113.7:3076", Community = "offline-group" };
+var nodeReceiver = TestBuildProfile.ForNode(communityNode, "203.0.113.7", new string('C', 64));
+Check(nodeReceiver.IsNodeReceiver && nodeReceiver.BatchId == "c-b897d2c8aa7662fd", "community batch matches the receiver");
+Check(nodeReceiver.CommunityProof("0123456789abcdef0123456789abcdef") ==
+      "ce01015fc08e955a26e62dfd7b1bc13ef183bdee886e10f545989125643fddc5", "community proof matches the receiver");
+Check(nodeReceiver.UploadUrl == "https://203.0.113.7:5443/" &&
+      TestBuildProfile.ForNode(communityNode, "2001:db8::7", "").UploadUrl == "https://[2001:db8::7]:5443/", "receiver URL");
+var nodeSettings = new AppSettings { Nodes = [communityNode], ActiveNodeId = communityNode.Id,
+    DiagnosticUpload = DiagnosticUploadPreference.AlwaysAllow };
+nodeSettings.DiagnosticUploadTarget = DiagnosticUploadConsent.Target(nodeReceiver, communityNode);
+Check(DiagnosticUploadConsent.IsAllowed(nodeSettings, nodeReceiver), "node receiver permission persists");
+Check(!DiagnosticUploadConsent.IsAllowed(nodeSettings, TestBuildProfile.ForNode(communityNode, "203.0.113.7", new string('D', 64))),
+    "a different node receiver certificate revokes permission");
+Check(!JsonSerializer.Serialize(nodeReceiver).Contains("offline-group\"", StringComparison.Ordinal) ||
+      JsonSerializer.Deserialize<TestBuildProfile>(JsonSerializer.Serialize(nodeReceiver))!.UploadCommunity.Length == 0,
+    "community proof key is never serialized from a receiver description");
+Console.WriteLine("PASS: node receiver batch, proof and URL match the receiver; certificate change revokes permission");
+
 var root = Path.Combine(Path.GetFullPath(args.Single()),Guid.NewGuid().ToString("N"));
 
 var updateRoot = Path.Combine(root,"update");

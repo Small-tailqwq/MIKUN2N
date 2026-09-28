@@ -1024,27 +1024,47 @@ public sealed partial class EdgeController : IAsyncDisposable
         }
         if (parameters.Diagnostics is not null)
             startInfo.Environment["MIKUN2N_IPV6_DIAGNOSTICS"] = "1";
-        if (parameters.Engine == EdgeEngine.N3n && parameters.ExperimentalIpv6P2p &&
-            TestBuildProfile.Current is { Ipv6StunHost.Length: > 0 } profile)
+        string? observerNote = null;
+        if (parameters.Engine == EdgeEngine.N3n && parameters.ExperimentalIpv6P2p)
         {
             using var lookupCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            lookupCancellation.CancelAfter(TimeSpan.FromSeconds(3));
+            lookupCancellation.CancelAfter(TimeSpan.FromSeconds(4));
             try
             {
-                var addresses = await Dns.GetHostAddressesAsync(
-                    profile.Ipv6StunHost, AddressFamily.InterNetworkV6, lookupCancellation.Token);
-                var observers = addresses.Where(address => (address.GetAddressBytes()[0] & 0xe0) == 0x20)
-                    .Distinct().Take(2).Select(address => address.ToString()).ToArray();
+                string[] observers;
+                if (TestBuildProfile.Current is { Ipv6StunHost.Length: > 0 } profile)
+                {
+                    var addresses = await Dns.GetHostAddressesAsync(
+                        profile.Ipv6StunHost, AddressFamily.InterNetworkV6, lookupCancellation.Token);
+                    observers = addresses.Where(NodeServiceProbe.IsGlobalIpv6)
+                        .Distinct().Take(2).Select(address => address.ToString()).ToArray();
+                }
+                else
+                {
+                    // Prefer the supernode's own observer (tagged requests, registered edges
+                    // only); the public fallback answers when the host offers none or it times out.
+                    var host = NodeServiceProbe.PrimaryHost(parameters.Server);
+                    var own = host is null ? null : await NodeServiceProbe.DiscoverObserverAsync(host, lookupCancellation.Token);
+                    var fallback = await NodeServiceProbe.ResolveFallbackObserverAsync(lookupCancellation.Token);
+                    observers = new[] { own is null ? null : $"m:{own}", fallback?.ToString() }
+                        .OfType<string>().ToArray();
+                    observerNote = own is not null
+                        ? $"IPv6 实验：地址探测使用节点服务器 {own}{(fallback is null ? string.Empty : "，备用 Cloudflare")}。"
+                        : fallback is not null
+                            ? "IPv6 实验：节点服务器未提供地址探测，改用 Cloudflare。"
+                            : "IPv6 实验：没有可用的地址探测服务，NAT66 网络下对方可能无法主动连入。";
+                }
                 startInfo.Environment["MIKUN2N_IPV6_STUN_SERVERS"] = string.Join(';', observers);
                 parameters.Diagnostics?.Write("ipv6_mapping_observers", new
                 {
-                    host = profile.Ipv6StunHost, port = 3478, addresses = observers
+                    port = NodeServiceProbe.ObserverPort, addresses = observers
                 });
             }
             catch (Exception exception) when (exception is SocketException or OperationCanceledException)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 startInfo.Environment["MIKUN2N_IPV6_STUN_SERVERS"] = string.Empty;
+                observerNote = "IPv6 实验：查找地址探测服务超时，本次不做 NAT66 地址探测。";
                 parameters.Diagnostics?.Write("ipv6_mapping_lookup_failed", new
                 {
                     error = exception.GetType().Name
@@ -1105,6 +1125,8 @@ public sealed partial class EdgeController : IAsyncDisposable
             }
             diagnostics.CaptureNetwork();
         }
+        if (observerNote is not null)
+            AppendLog(run, observerNote);
 
         process.OutputDataReceived += (_, args) => AppendLog(run, args.Data);
         process.ErrorDataReceived += (_, args) => AppendLog(run, args.Data);

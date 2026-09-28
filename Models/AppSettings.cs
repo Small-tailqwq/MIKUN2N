@@ -39,8 +39,15 @@ public sealed class AppSettings
     public ClosePreference CloseBehavior { get; set; } = ClosePreference.Ask;
     public int LogRetentionDays { get; set; } = 30;
     public bool ExperimentalIpv6P2p { get; set; }
+    /// <summary>Offer uploading detailed diagnostics to the active node's own supernode.</summary>
+    public bool ExperimentalDiagnosticUpload { get; set; }
     public DiagnosticUploadPreference DiagnosticUpload { get; set; } = DiagnosticUploadPreference.Ask;
     public string DiagnosticUploadTarget { get; set; } = string.Empty;
+    /// <summary>
+    /// Receiver certificate first accepted for each node id. A later mismatch is shown in
+    /// the consent dialog instead of being trusted silently.
+    /// </summary>
+    public Dictionary<string, string> DiagnosticCertificatePins { get; set; } = [];
     public bool AutoCheckUpdates { get; set; } = true;
     public string SkippedUpdateVersion { get; set; } = string.Empty;
 

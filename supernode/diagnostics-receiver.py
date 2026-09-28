@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Receive consented test-session JSONL over pinned TLS; expose no log download API."""
+"""Receive consented test-session JSONL over pinned TLS; expose no log download API.
+
+Two ways to authorize an upload:
+* a private test batch with its own bearer token (MIKUN2N_DIAGNOSTICS_BATCH/_TOKEN_SHA256);
+* community mode (MIKUN2N_DIAGNOSTICS_COMMUNITY_FILE): the batch is derived from a
+  community served by this supernode, and the client proves it knows that community
+  name with an HMAC bound to the batch and session. Only literal community names
+  from the supernode's community list are accepted.
+"""
 import argparse
 import datetime as dt
 import hashlib
@@ -18,13 +26,48 @@ MAX_BODY = 128 * 1024
 MAX_SESSION = 64 * 1024 * 1024
 MAX_TOTAL = 2 * 1024 * 1024 * 1024
 RETENTION_SECONDS = 24 * 3600
+COMMUNITY_PROOF = "mikun2n-diagnostics-v1"
+COMMUNITY_RELOAD_SECONDS = 30
 ROUTE = re.compile(r"/v1/logs/([A-Za-z0-9-]{1,64})/([0-9a-f]{32})/([0-9]{8})\Z")
 
 
+def community_batch(name):
+    return "c-" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
+
+
+class Communities:
+    """Literal community names from the supernode's community list, keyed by batch."""
+
+    def __init__(self, path):
+        self.path, self.stamp, self.checked, self.by_batch = Path(path), None, 0.0, {}
+        self.lock = threading.Lock()
+
+    def lookup(self, batch):
+        with self.lock:
+            now = time.monotonic()
+            if now - self.checked >= COMMUNITY_RELOAD_SECONDS:
+                self.checked = now
+                try:
+                    stamp = self.path.stat().st_mtime_ns
+                    if stamp != self.stamp:
+                        names = []
+                        for line in self.path.read_text(encoding="utf-8").splitlines():
+                            name = line.strip()
+                            # Skip comments, user/password entries and regular expressions.
+                            if name and not name.startswith(("#", "*")) and not re.search(r"[.*+?\[\]\\\s]", name):
+                                names.append(name)
+                        self.by_batch = {community_batch(name): name for name in names}
+                        self.stamp = stamp
+                except (OSError, UnicodeError):
+                    pass
+            return self.by_batch.get(batch)
+
+
 class Storage:
-    def __init__(self, root, batch):
+    def __init__(self, root, batch, communities=None):
         self.root = Path(root)
         self.batch = batch
+        self.communities = communities
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lock = threading.Lock()
         self.expired = set()
@@ -47,7 +90,7 @@ class Storage:
             self.total = sum(self.sizes.values())
 
     def store(self, batch, session, chunk, data):
-        if batch != self.batch:
+        if batch != self.batch and not (self.communities and self.communities.lookup(batch)):
             return 403
         if not data.endswith(b"\n"):
             return 400
@@ -160,11 +203,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         authorization = self.headers.get("Authorization", "")
-        authorized = authorization.startswith("Bearer ") and hmac.compare_digest(
-            hashlib.sha256(authorization[7:].encode()).hexdigest(), self.server.token_hash)
         match = ROUTE.fullmatch(self.path)
         if not match:
             return self.reply(404)
+        batch, session = match.group(1), match.group(2)
+        authorized = False
+        if self.server.token_hash and batch == self.server.storage.batch and authorization.startswith("Bearer "):
+            authorized = hmac.compare_digest(
+                hashlib.sha256(authorization[7:].encode()).hexdigest(), self.server.token_hash)
+        elif authorization.startswith("MikuN2N-Community ") and self.server.storage.communities:
+            community = self.server.storage.communities.lookup(batch)
+            if community is not None:
+                expected = hmac.new(community.encode("utf-8"),
+                                    f"{COMMUNITY_PROOF}\n{batch}\n{session}".encode(), hashlib.sha256).hexdigest()
+                authorized = hmac.compare_digest(authorization[18:].strip().lower(), expected)
         if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Encoding"):
             return self.reply(400)
         if self.headers.get_content_type() != "application/x-ndjson":
@@ -197,12 +249,16 @@ def main():
     parser.add_argument("--cert", required=True)
     parser.add_argument("--key", required=True)
     args = parser.parse_args()
-    batch = os.environ["MIKUN2N_DIAGNOSTICS_BATCH"]
-    token_hash = os.environ["MIKUN2N_DIAGNOSTICS_TOKEN_SHA256"]
-    if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", batch) or not re.fullmatch(r"[0-9a-f]{64}", token_hash):
+    batch = os.environ.get("MIKUN2N_DIAGNOSTICS_BATCH", "")
+    token_hash = os.environ.get("MIKUN2N_DIAGNOSTICS_TOKEN_SHA256", "")
+    community_file = os.environ.get("MIKUN2N_DIAGNOSTICS_COMMUNITY_FILE", "")
+    if (batch or token_hash) and (not re.fullmatch(r"[A-Za-z0-9-]{1,64}", batch) or
+                                  not re.fullmatch(r"[0-9a-f]{64}", token_hash)):
         parser.error("Invalid diagnostics configuration")
+    if not token_hash and not community_file:
+        parser.error("Configure a private batch token, a community file, or both")
     os.umask(0o077)
-    storage = Storage(args.storage, batch)
+    storage = Storage(args.storage, batch or None, Communities(community_file) if community_file else None)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(args.cert, args.key)

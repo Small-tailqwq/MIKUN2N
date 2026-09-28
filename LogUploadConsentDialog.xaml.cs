@@ -7,12 +7,26 @@ namespace MikuN2N;
 
 public partial class LogUploadConsentDialog : Window
 {
-    public LogUploadConsentDialog(TestBuildProfile profile, bool persistent = false, SupernodeNode? node = null)
+    public LogUploadConsentDialog(TestBuildProfile profile, bool persistent = false, SupernodeNode? node = null,
+        bool certificateChanged = false)
     {
         InitializeComponent();
         Icon = AppIconService.Icon;
-        DestinationText.Text = $"接收服务器：{new Uri(profile.UploadUrl).Authority}" +
-            (node is null ? string.Empty : $"\n当前节点：{node.Name}（{node.Server}）");
+        var authority = new Uri(profile.UploadUrl).Authority;
+        if (profile.IsNodeReceiver)
+        {
+            var fingerprint = profile.CertificateSha256.ToUpperInvariant();
+            ConsentTitleText.Text = "允许把本次联机的诊断日志上传到节点服务器吗？";
+            DestinationText.Text = $"接收服务器：{authority}，即当前节点「{node?.Name}」所用的服务器。\n" +
+                $"证书指纹：{fingerprint[..16]}…{fingerprint[^8..]}\n" +
+                "日志会交给这台服务器的管理员查看。只有在你信任该节点服务器及其管理员时才应同意。";
+            CertificateWarningText.Visibility = certificateChanged ? Visibility.Visible : Visibility.Collapsed;
+        }
+        else
+        {
+            DestinationText.Text = $"接收服务器：{authority}" +
+                (node is null ? string.Empty : $"\n当前节点：{node.Name}（{node.Server}）");
+        }
         if (persistent)
         {
             ConsentTitleText.Text = "始终允许向此服务器上传诊断日志？";

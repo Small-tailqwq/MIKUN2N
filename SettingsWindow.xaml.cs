@@ -43,6 +43,7 @@ public partial class SettingsWindow : Window
     public ClosePreference SelectedCloseBehavior { get; private set; }
     public int SelectedLogRetentionDays { get; private set; }
     public bool SelectedExperimentalIpv6P2p { get; private set; }
+    public bool SelectedExperimentalDiagnosticUpload { get; private set; }
     public bool SelectedAutoCheckUpdates { get; private set; }
     /// <summary>Set when the player chose to restart into a staged update; the owner runs it after saving.</summary>
     public bool InstallUpdateRequested { get; private set; }
@@ -71,13 +72,15 @@ public partial class SettingsWindow : Window
         DiagnosticUploadBox.SelectedValue = settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow &&
             TestBuildProfile.Current is { } consentProfile && !DiagnosticUploadConsent.IsAllowed(settings, consentProfile)
                 ? "Ask" : Enum.IsDefined(settings.DiagnosticUpload) ? settings.DiagnosticUpload.ToString() : "Ask";
-        DiagnosticUploadBox.IsEnabled = TestBuildProfile.Current is not null;
-        // Public builds upload nothing; showing the card there only suggests they do.
-        DiagnosticCard.Visibility = TestBuildProfile.Current is null ? Visibility.Collapsed : Visibility.Visible;
         DiagnosticDestinationText.Text = TestBuildProfile.Current is { } diagnosticProfile
             ? $"接收服务器：{new Uri(diagnosticProfile.UploadUrl).Authority}。授权绑定当前节点、接收地址及证书；编辑或切换节点后须重新授权。"
-            : "此版本未配置诊断接收端，日志仅保存在本机。";
+            : $"接收服务器：当前节点所用的服务器（TCP {TestBuildProfile.NodeReceiverPort}）。首次上传前会显示它的证书指纹，请只在信任该节点服务器及其管理员时同意。授权绑定当前节点及证书；编辑或切换节点后须重新授权。";
         ExperimentalIpv6Box.IsChecked = settings.ExperimentalIpv6P2p;
+        ExperimentalDiagnosticsBox.IsChecked = settings.ExperimentalDiagnosticUpload;
+        // Builds without a receiver upload nothing; showing the card there only suggests they do.
+        ExperimentalDiagnosticsBox.Visibility = TestBuildProfile.Current is null ? Visibility.Visible : Visibility.Collapsed;
+        ExperimentalDiagnosticsHint.Visibility = ExperimentalDiagnosticsBox.Visibility;
+        RefreshDiagnosticCard();
         SelectedAutoCheckUpdates = settings.AutoCheckUpdates;
         AutoCheckUpdatesBox.IsChecked = settings.AutoCheckUpdates;
         _updates = ((App)Application.Current).Updates;
@@ -342,6 +345,15 @@ public partial class SettingsWindow : Window
         return true;
     }
 
+    private void ExperimentalDiagnosticsBox_Changed(object sender, RoutedEventArgs e) => RefreshDiagnosticCard();
+
+    private void RefreshDiagnosticCard()
+    {
+        var available = TestBuildProfile.Current is not null || ExperimentalDiagnosticsBox.IsChecked == true;
+        DiagnosticCard.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+        DiagnosticUploadBox.IsEnabled = available;
+    }
+
     private void ThemeButton_Checked(object sender, RoutedEventArgs e)
     {
         if (!IsLoaded)
@@ -364,6 +376,12 @@ public partial class SettingsWindow : Window
         SelectedDiagnosticUpload = Enum.TryParse<DiagnosticUploadPreference>(DiagnosticUploadBox.SelectedValue?.ToString(), out var upload)
             ? upload : DiagnosticUploadPreference.Ask;
         SelectedDiagnosticUploadTarget = string.Empty;
+        SelectedExperimentalDiagnosticUpload = ExperimentalDiagnosticsBox.IsChecked == true;
+        // The node receiver's certificate is only known when connecting; "always allow"
+        // is confirmed and bound then, and kept as long as the binding still matches.
+        if (SelectedDiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow && TestBuildProfile.Current is null &&
+            _originalDiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow)
+            SelectedDiagnosticUploadTarget = _originalDiagnosticTarget;
         if (SelectedDiagnosticUpload == DiagnosticUploadPreference.AlwaysAllow && TestBuildProfile.Current is { } profile)
         {
             var node = _nodes.FirstOrDefault(node => node.Id == _activeNodeId);

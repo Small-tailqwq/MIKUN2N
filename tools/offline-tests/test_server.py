@@ -75,3 +75,39 @@ with tempfile.TemporaryDirectory(dir=root) as temporary:
         assert not (storage.root/'offline/b').exists()
         assert storage.store('offline','b','00000000',row('b'))==410
     print('PASS: receiver idempotence, sequence checks, oldest-segment eviction and retention')
+
+    community_list=Path(temporary)/'community.list'
+    community_list.write_text('# comment\noffline-group\nntop[0-9]\n* user key\n',encoding='utf-8')
+    communities=receiver.Communities(community_list)
+    batch=receiver.community_batch('offline-group')
+    assert batch=='c-b897d2c8aa7662fd' and communities.lookup(batch)=='offline-group'
+    assert communities.lookup(receiver.community_batch('ntop[0-9]')) is None
+    community_storage=receiver.Storage(str(Path(temporary)/'community-logs'),None,communities)
+    def community_row(batch_id,session):
+        return (json.dumps(dict(schema=1,batch=batch_id,session=session))+'\n').encode()
+    assert community_storage.store(batch,'a','00000000',community_row(batch,'a'))==201
+    unknown=receiver.community_batch('someone-else')
+    assert community_storage.store(unknown,'a','00000000',community_row(unknown,'a'))==403
+    assert community_storage.store('offline','a','00000000',community_row('offline','a'))==403
+    print('PASS: community mode accepts literal listed communities only; client proof vector matches')
+
+    stun=load('stun','mikun2n-stun.py')
+    import struct
+    transaction=bytes(range(12))
+    def request(software):
+        attribute=struct.pack('!HH',0x8022,len(software))+software+b'\0'*((-len(software))%4)
+        return struct.pack('!HHI',1,len(attribute),0x2112A442)+transaction+attribute
+    tagged=request(b'MikuN2N/1 00ffaf5487d2')          # native tagged request, 48 bytes
+    discover=request(b'MikuN2N/1 discover'.ljust(32))  # client discovery request, 56 bytes
+    assert len(tagged)==48 and len(discover)==56
+    assert stun.parse(tagged)==(transaction,'00ffaf5487d2') and stun.parse(discover)==(transaction,None)
+    assert stun.parse(struct.pack('!HHI',1,0,0x2112A442)+transaction) is None      # anonymous request
+    assert stun.parse(request(b'SomethingElse/1 00ffaf5487d2')) is None
+    assert stun.parse(tagged[:-4]) is None and stun.parse(tagged+b'\0\0\0\0') is None
+    v6_answer=stun.answer(transaction,[stun.address_attribute(stun.XOR_MAPPED,'2001:db8::1',50001,transaction,True)])
+    v4_answer=stun.answer(transaction,[stun.address_attribute(stun.XOR_MAPPED,'203.0.113.9',50001,transaction,True),
+        stun.address_attribute(stun.OTHER_ADDRESS,'2001:db8::2',3478,transaction,False)])
+    assert len(v6_answer)<=len(tagged) and len(v4_answer)<=len(discover)
+    limiter=stun.Limiter()
+    assert all(limiter.allow(['p']) for _ in range(stun.BUCKET_SIZE)) and not limiter.allow(['p'])
+    print('PASS: observer answers only tagged requests, never exceeds request size, and rate limits sources')

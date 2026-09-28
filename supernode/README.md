@@ -40,10 +40,12 @@ Allow all of the following in both the host firewall and the provider security g
 | 3076, or your chosen main port | Registration, rendezvous and relay |
 | 21001 | NAT observation endpoint A |
 | 21002 | NAT observation endpoint B |
+| 3478 (IPv4 and IPv6, optional) | IPv6 mapping observer for edges behind NAT66 |
+| TCP 5443 (optional) | Diagnostics receiver, only with player consent |
 
 The two observation endpoints **must use the same public IPv4 address as the supernode**. NAT classification compares replies from that host's different ports. The installer starts the existing Python observation service alongside n3n; it requires Python 3 and uses fixed ports 21001/21002. Deploy one such pair per host/address. Changing the service name does not create another independent pair of observation ports.
 
-An IPv6 address is not required on the server for this IPv6 peer experiment. Both clients still need working IPv4 connectivity to the supernode for registration and rendezvous; a native IPv6-only client without an IPv4 path cannot connect. IPv6 supports global and routed-ULA/NAT66 candidates. Matching test clients can use a separately configured IPv6 STUN observer on UDP 3478 to discover the public mapping of their peer socket, then exchange it through the existing NAT66-capable supernode. This enables both peers to initiate checks, including when a public peer filters unsolicited inbound UDP. Without an observer, a ULA peer still depends on its first outbound probe reaching the public peer. A reported mapping alone never establishes a data path; peer challenge/response validation remains required. Endpoint-dependent mappings, blocked UDP and unavailable observers can still prevent IPv6 P2P. NAT66-to-NAT66 is not field-validated. Smaller paths use a 1232-byte UDP probe budget after a size error or probe timeout; data above the checked budget falls back individually to IPv4. The existing client firewall rule allows inbound UDP 50001 on all profiles but does not configure routers.
+An IPv6 address is not required on the server for this IPv6 peer experiment. Both clients still need working IPv4 connectivity to the supernode for registration and rendezvous; a native IPv6-only client without an IPv4 path cannot connect. IPv6 supports global and routed-ULA/NAT66 candidates. An edge behind NAT66 learns the public mapping of its peer socket from a STUN observer on UDP 3478 and exchanges it through the supernode. Since 0.5.8-7 clients first ask the supernode host for its own observer (see "IPv6 mapping observer" below) and fall back to Cloudflare's public STUN service; private test profiles can still name their own observer. This enables both peers to initiate checks, including when a public peer filters unsolicited inbound UDP. Without an observer, a ULA peer still depends on its first outbound probe reaching the public peer. A reported mapping alone never establishes a data path; peer challenge/response validation remains required. Endpoint-dependent mappings, blocked UDP and unavailable observers can still prevent IPv6 P2P. NAT66-to-NAT66 is not field-validated. Smaller paths use a 1232-byte UDP probe budget after a size error or probe timeout; data above the checked budget falls back individually to IPv4. The existing client firewall rule allows inbound UDP 50001 on all profiles but does not configure routers.
 
 IPv6 wire version 2 also requires the peer to advertise a still-valid receive path before DATA switches to IPv6. Older client wire versions retain IPv4 connectivity. Upgrade every client for IPv6 tests; this handshake update does not require another supernode deployment. A smaller incoming probe triggers a matching size check immediately. Stable IPv6 pauses extra IPv4 scans after five seconds, preserving existing IPv4 destinations and relay fallback.
 
@@ -90,6 +92,16 @@ sudo ss -lunp
 If registration works but NAT discovery fails, check UDP 21001/21002, both firewalls and the probe unit. If registration fails, check the main UDP port and community configuration. NAT4-to-NAT4 success depends on the observed mapping behavior; relay is an expected outcome for unpredictable networks.
 
 To try IPv6, install a server built from this release and enable the experimental setting on both clients before connecting. The peer label changes to `直连 · IPv6` only while the local IPv6 path is validated. Broadcast discovery and relay still use the existing IPv4 virtual network. IPv6-only server addresses are not supported by this experiment.
+
+## IPv6 mapping observer (optional)
+
+On a host with a global IPv6 address, install the observer next to the supernode:
+
+```bash
+sudo bash supernode/install-stun.sh
+```
+
+It listens on UDP 3478 and answers only MikuN2N requests: over IPv4, a discovery request that returns the observer's IPv6 address (the client asks before starting the edge); over IPv6, a tagged Binding request whose MAC belongs to an edge currently registered on this supernode, which the observer reads from the supernode's management socket. Anonymous STUN requests and unknown MACs are ignored, every answer is at most as large as its request (no amplification), and each source prefix and MAC is rate limited. `--ipv6` overrides the detected global address. Open UDP 3478 for IPv4 and IPv6 in the provider security group; without the observer, clients use Cloudflare instead.
 
 ## Relay traffic statistics
 

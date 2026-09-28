@@ -150,7 +150,24 @@
                     </Style>
                   </CheckBox.Style>
                 </CheckBox>
-                <TextBlock Text="双方开启后尝试使用 IPv6 直连，连接不通时自动使用原有线路。游戏仍使用虚拟局域网。保存后在下次连接时生效。"
+                <TextBlock Text="双方开启后尝试使用 IPv6 直连，连接不通时自动使用原有线路。游戏仍使用虚拟局域网。路由器做了 NAT66 时，会借助节点服务器（或 Cloudflare）探测公网地址。保存后在下次连接时生效。"
+                           TextWrapping="Wrap" Margin="0,7,0,0"
+                           Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+                <CheckBox x:Name="ExperimentalDiagnosticsBox" Content="上传诊断日志到节点服务器" Margin="0,14,0,0"
+                          Checked="ExperimentalDiagnosticsBox_Changed" Unchecked="ExperimentalDiagnosticsBox_Changed">
+                  <CheckBox.Style>
+                    <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                      <Style.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                          <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+                          <Setter Property="FontWeight" Value="SemiBold" />
+                        </Trigger>
+                      </Style.Triggers>
+                    </Style>
+                  </CheckBox.Style>
+                </CheckBox>
+                <TextBlock x:Name="ExperimentalDiagnosticsHint"
+                           Text="联机出问题时，把详细日志交给节点服务器的管理员排查。需要节点服务器开启日志接收；每次上传前仍会征得你的同意，可随时停止。"
                            TextWrapping="Wrap" Margin="0,7,0,0"
                            Foreground="{DynamicResource TextSecondary}" FontSize="12" />
               </StackPanel>
@@ -202,7 +219,7 @@
             </Border>
             <Border x:Name="DiagnosticCard" Style="{StaticResource CardStyle}" Margin="0,14,0,0">
               <StackPanel>
-                <TextBlock Text="测试诊断日志上传" FontSize="16" FontWeight="SemiBold" />
+                <TextBlock Text="诊断日志上传" FontSize="16" FontWeight="SemiBold" />
                 <TextBlock x:Name="DiagnosticDestinationText" Margin="0,6,0,10" TextWrapping="Wrap"
                            Foreground="{DynamicResource TextSecondary}" />
                 <ComboBox x:Name="DiagnosticUploadBox" SelectedValuePath="Tag" HorizontalAlignment="Left" Width="180">

@@ -266,6 +266,34 @@ int main(void) {
     ab->mikun2n_peer_info_ms=clock_ms-25000;
     assert(ipv6_peer_silent(ab,clock_ms));
     puts("PASS: departed identities are recognised from supernode silence and no traffic");
+
+    struct n3n_runtime_data *c = calloc(1,sizeof(*c));
+    assert(c);
+    const uint8_t stun_mac[6] = {0x00,0xff,0xaf,0x54,0x87,0xd2};
+    memcpy(c->device.mac_addr,stun_mac,6);
+    c->mikun2n_ipv6_socket = 1;
+#ifdef _WIN32
+    _putenv_s("MIKUN2N_IPV6_STUN_SERVERS","m:2606:4700::1;2606:4700::2");
+#else
+    setenv("MIKUN2N_IPV6_STUN_SERVERS","m:2606:4700::1;2606:4700::2",1);
+#endif
+    sent_count=0;
+    ipv6_stun_tick(c,1000);
+    assert(c->mikun2n_ipv6_stun_tagged[0] && !c->mikun2n_ipv6_stun_tagged[1]);
+    assert(sent_count==1 && sent_packets[0].size==MIKUN2N_STUN_TAGGED_REQUEST_BYTES);
+    assert(ipv6_read_u16(sent_packets[0].bytes)==0x0001);
+    assert(ipv6_read_u16(sent_packets[0].bytes+2)+20u==sent_packets[0].size);
+    assert(ipv6_read_u16(sent_packets[0].bytes+20)==0x8022);
+    assert(ipv6_read_u16(sent_packets[0].bytes+22)==MIKUN2N_STUN_SOFTWARE_BYTES);
+    assert(!memcmp(sent_packets[0].bytes+24,"MikuN2N/1 00ffaf5487d2",MIKUN2N_STUN_SOFTWARE_BYTES));
+    assert(!sent_packets[0].bytes[46] && !sent_packets[0].bytes[47]);
+    ipv6_stun_tick(c,5000);
+    assert(c->mikun2n_ipv6_stun_index==1 && !c->mikun2n_ipv6_stun_pending);
+    ipv6_stun_tick(c,11000);
+    assert(sent_count==2 && sent_packets[1].size==20);
+    assert(ipv6_read_u16(sent_packets[1].bytes+2)==0);
+    puts("PASS: supernode observer gets a tagged request, third-party fallback stays anonymous");
+    free(c);
     HASH_DEL(a->known_peers,ab);HASH_DEL(b->known_peers,ba);peer_info_free(ab);peer_info_free(ba);free(a);free(b);
     return 0;
 }

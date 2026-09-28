@@ -339,6 +339,21 @@
      Offline regressions cover keepalive scheduling, departed-identity detection and
      the relay policy; live pairing and server deployment are not yet verified.
 
+ 51. 0.5.8-7: Let normal builds discover their NAT66 mapping, without an open STUN.
+     An edge behind NAT66 advertised its private ULA as its IPv6 candidate, which no
+     peer can reach; only private test builds could point it at a STUN observer. The
+     launcher may now pass observers prefixed "m:" in MIKUN2N_IPV6_STUN_SERVERS. Such
+     an observer is the supernode's own (supernode/mikun2n-stun.py): the edge sends
+     it a Binding request carrying a SOFTWARE attribute "MikuN2N/1 <device MAC>",
+     padded to 48 bytes so the 44-byte answer never amplifies a spoofed source, and
+     the observer answers only MACs currently registered on that supernode. An
+     unprefixed observer (the public fallback) still receives the anonymous 20-byte
+     request, so no identifier leaves for a third party. Order and failover are
+     unchanged: the second observer is used after the first times out. Peers are not
+     affected by the request format; wire generation stays 3 and 0.5.8-5 peers
+     interoperate. Offline regressions check the tagged bytes and the anonymous
+     fallback request.
+
 构建要求：Windows 目标需要在 CFLAGS 中带上 `-std=gnu17`（随包的旧 src/win32/getopt.c 在本
 工具链的 C23 默认标准下编译不过），并带上 `-ffile-prefix-map=<构建路径>=<占位路径>`，把调试
 信息里的绝对路径映射掉。曾经发布的二进制内嵌了构建机的用户名与目录结构（`Users/<name>/.../

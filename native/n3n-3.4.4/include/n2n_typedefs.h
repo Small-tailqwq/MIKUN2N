@@ -671,6 +671,7 @@ struct n3n_runtime_data {
     n2n_sock_t mikun2n_ipv6_mapped_address;
     uint64_t mikun2n_ipv6_mapped_ms;
     n2n_sock_t mikun2n_ipv6_stun_servers[2];
+    bool mikun2n_ipv6_stun_tagged[2];
     uint8_t mikun2n_ipv6_stun_transaction[12];
     uint64_t mikun2n_ipv6_stun_sent_ms;
     uint64_t mikun2n_ipv6_stun_next_ms;

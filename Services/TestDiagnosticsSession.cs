@@ -42,6 +42,7 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
     public string SessionId { get; } = Guid.NewGuid().ToString("N");
     public string LogPath => _current?.Path ?? string.Empty;
     public bool UploadAllowed => _uploadAllowed;
+    public TestBuildProfile Receiver => _profile;
     public bool IsRecording { get { lock (_gate) return !_disposed && !_storageFailed; } }
 
     private sealed class Segment(string id, string path, FileStream file, bool allowed)
@@ -189,7 +190,8 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
         // Called only after explicit consent or a deliberately saved Allow preference.
         var handler = _uploadHandlerFactory?.Invoke() ?? CreatePinnedHandler();
         _client = new HttpClient(handler) { BaseAddress = new Uri(_profile.UploadUrl), Timeout = TimeSpan.FromSeconds(8) };
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _profile.UploadToken);
+        if (!_profile.IsNodeReceiver)
+            _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _profile.UploadToken);
         _uploadCancellation = new CancellationTokenSource();
         _worker = Task.Run(() => UploadLoopAsync(_client, _uploadCancellation.Token));
     }
@@ -224,7 +226,12 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
                 {
                     using var body = new ByteArrayContent(pending.Bytes);
                     body.Headers.ContentType = new MediaTypeHeaderValue("application/x-ndjson");
-                    using var response = await client.PostAsync($"v1/logs/{_profile.BatchId}/{pending.Segment.Id}/{pending.Chunk:D8}", body, token);
+                    using var request = new HttpRequestMessage(HttpMethod.Post,
+                        $"v1/logs/{_profile.BatchId}/{pending.Segment.Id}/{pending.Chunk:D8}") { Content = body };
+                    if (_profile.IsNodeReceiver)
+                        request.Headers.Authorization = new AuthenticationHeaderValue("MikuN2N-Community",
+                            _profile.CommunityProof(pending.Segment.Id));
+                    using var response = await client.SendAsync(request, token);
                     var code = (int)response.StatusCode;
                     if (code == 507)
                     {
