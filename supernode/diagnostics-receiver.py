@@ -52,10 +52,17 @@ class Communities:
                     if stamp != self.stamp:
                         names = []
                         for line in self.path.read_text(encoding="utf-8").splitlines():
-                            name = line.strip()
-                            # Skip comments, user/password entries and regular expressions.
-                            if name and not name.startswith(("#", "*")) and not re.search(r"[.*+?\[\]\\\s]", name):
-                                names.append(name)
+                            entry = line.strip()
+                            # Skip comments and n2n user/password entries. n3n writes
+                            # "name [virtual subnet]" per line, so only the first field
+                            # names the community; a regular expression cannot map to one
+                            # fixed batch and stays rejected.
+                            if not entry or entry.startswith(("#", "*")):
+                                continue
+                            name = entry.split()[0]
+                            if re.search(r"[.*+?\[\]\\]", name):
+                                continue
+                            names.append(name)
                         self.by_batch = {community_batch(name): name for name in names}
                         self.stamp = stamp
                 except (OSError, UnicodeError):

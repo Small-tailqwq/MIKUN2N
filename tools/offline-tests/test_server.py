@@ -77,10 +77,13 @@ with tempfile.TemporaryDirectory(dir=root) as temporary:
     print('PASS: receiver idempotence, sequence checks, oldest-segment eviction and retention')
 
     community_list=Path(temporary)/'community.list'
-    community_list.write_text('# comment\noffline-group\nntop[0-9]\n* user key\n',encoding='utf-8')
+    # n3n writes "name [virtual subnet]" per line, n2n a bare name; both must resolve,
+    # while regular expressions and user/password entries stay rejected.
+    community_list.write_text('# comment\noffline-group 192.0.2.0/24\nplain-group\nntop[0-9] 10.9.0.0/24\n* user key\n',encoding='utf-8')
     communities=receiver.Communities(community_list)
     batch=receiver.community_batch('offline-group')
     assert batch=='c-b897d2c8aa7662fd' and communities.lookup(batch)=='offline-group'
+    assert communities.lookup(receiver.community_batch('plain-group'))=='plain-group'
     assert communities.lookup(receiver.community_batch('ntop[0-9]')) is None
     community_storage=receiver.Storage(str(Path(temporary)/'community-logs'),None,communities)
     def community_row(batch_id,session):
