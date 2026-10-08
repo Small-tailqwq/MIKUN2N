@@ -495,7 +495,20 @@ public partial class MainWindow : Window
                     StopUploadButton.IsEnabled = consent;
                     ResumeDiagnosticsButton.IsEnabled = true;
                     if (receiver.IsNodeReceiver && receiver.CertificateSha256.Length == 0)
+                    {
                         DiagnosticsStatusText.Text = "节点服务器没有开启日志接收，详细日志只保存在本机。";
+                        // An enabled preference with no receiver answer used to skip consent in
+                        // silence: no prompt, no upload, and one panel line as the only sign.
+                        // The player asked to upload, so name the unreachable receiver instead.
+                        if (_settings.DiagnosticUpload != DiagnosticUploadPreference.AlwaysDeny)
+                        {
+                            ThemedMessageDialog.Show(this,
+                                $"连接前检查了 {new Uri(receiver.UploadUrl).Authority} 的日志接收端，没有得到响应。" +
+                                "本次详细日志只保存在本机，不会上传。\n\n" +
+                                $"若这台服务器应当接收日志，请确认它的诊断接收端正在运行，并且已放行 TCP {TestBuildProfile.NodeReceiverPort}（主机防火墙和云安全组都要放行）。",
+                                "本次不上传诊断日志", MessageKind.Warning);
+                        }
+                    }
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
