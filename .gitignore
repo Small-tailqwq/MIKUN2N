@@ -29,6 +29,8 @@ Runtime/edge.exe
 *.local.md
 AGENTS.local.md
 CLAUDE.local.md
+# Maintainer follow-ups stay untracked so they can name private deployments and live evidence.
+TODO.md
 
 # Service units rendered on a server during deployment; the templates are the source.
 supernode/*.concrete
