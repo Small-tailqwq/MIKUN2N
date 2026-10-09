@@ -80,6 +80,7 @@ public partial class MainWindow : Window
     private ContextMenu? _activePeerMenu;
     private string? _activePeerMenuNodeId;
     private PeerConnectionMode _activePeerMenuMode;
+    private PeerAssistWindow? _peerAssistWindow;
 
     public MainWindow()
     {
@@ -128,6 +129,8 @@ public partial class MainWindow : Window
 
         _edgeController.SnapshotChanged += EdgeController_SnapshotChanged;
         _edgeController.LogReceived += EdgeController_LogReceived;
+        _edgeController.PeerAssistRequested += EdgeController_PeerAssistRequested;
+        Closed += (_, _) => _edgeController.PeerAssistRequested -= EdgeController_PeerAssistRequested;
         _trayIcon = new TrayIconService();
         _trayIcon.ShowRequested += (_, _) => Dispatcher.InvokeAsync(ShowFromTray);
         _trayIcon.SettingsRequested += (_, _) => Dispatcher.InvokeAsync(() =>
@@ -206,7 +209,7 @@ public partial class MainWindow : Window
     /// <summary>Brings an already open dialog forward instead of stacking a second one on top.</summary>
     private bool FocusOpenDialog()
     {
-        var dialog = OwnedWindows.OfType<Window>().FirstOrDefault(window => window.IsVisible);
+        var dialog = OwnedWindows.OfType<Window>().FirstOrDefault(window => window.IsVisible && window is not PeerAssistWindow);
         if (dialog is null)
         {
             return false;
@@ -989,6 +992,7 @@ public partial class MainWindow : Window
         }
         CloseStalePeerMenu(displayPeers);
         SynchronizeDisplayedPeers(displayPeers);
+        RefreshPeerAssistRequests();
         PeersEmptyText.Visibility = displayPeers.Count > 0
             ? Visibility.Collapsed
             : Visibility.Visible;
@@ -1091,6 +1095,10 @@ public partial class MainWindow : Window
         };
         menu.Items.Add(copy);
 
+        var assist = new MenuItem { Header = "选择协助转发…" };
+        assist.Click += (_, _) => OpenPeerAssist(peer);
+        menu.Items.Add(assist);
+
         if (peer.ConnectionMode is PeerConnectionMode.PunchFailed or PeerConnectionMode.Relayed)
         {
             var retry = new MenuItem { Header = "重新尝试直连" };
@@ -1114,7 +1122,7 @@ public partial class MainWindow : Window
 
         if (peer.ConnectionMode is PeerConnectionMode.Direct or PeerConnectionMode.Ipv6Direct or
             PeerConnectionMode.Relayed or PeerConnectionMode.ForcedRelayed or
-            PeerConnectionMode.Punching or PeerConnectionMode.PunchFailed)
+            PeerConnectionMode.Punching or PeerConnectionMode.PunchFailed or PeerConnectionMode.PeerAssisted)
         {
             var forced = peer.ConnectionMode == PeerConnectionMode.ForcedRelayed;
             var relayItem = new MenuItem
@@ -1138,7 +1146,7 @@ public partial class MainWindow : Window
                         MessageKind.Warning);
                 }
             };
-            if (menu.Items.Count == 1)
+            if (menu.Items.Count == 2)
             {
                 menu.Items.Add(new Separator());
             }
@@ -1161,6 +1169,47 @@ public partial class MainWindow : Window
             }
         };
         menu.IsOpen = true;
+    }
+
+    private void EdgeController_PeerAssistRequested(object? sender, PeerAssistRequest request)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            RefreshPeerAssistRequests();
+            AppendLogLine($"{request.RequesterNickname} 请求协助与 {request.TargetNickname} 通信，可在「协助申请」中同意或拒绝。");
+        });
+    }
+
+    private void RefreshPeerAssistRequests()
+    {
+        var count = _edgeController.GetPeerAssistRequests().Count;
+        PeerAssistRequestsButton.Content = $"协助申请（{count}）";
+        PeerAssistRequestsButton.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void PeerAssistRequests_Click(object sender, RoutedEventArgs e) => OpenPeerAssist(null);
+
+    private void OpenPeerAssist(PeerSnapshot? target)
+    {
+        if (_peerAssistWindow is { } existing)
+        {
+            existing.SetTarget(target);
+            if (existing.WindowState == WindowState.Minimized)
+            {
+                existing.WindowState = WindowState.Normal;
+            }
+            existing.Activate();
+            return;
+        }
+        var window = new PeerAssistWindow(_edgeController, target) { Owner = this };
+        _peerAssistWindow = window;
+        window.RequestsChanged += (_, _) => RefreshPeerAssistRequests();
+        window.Closed += (_, _) =>
+        {
+            _peerAssistWindow = null;
+            RefreshPeerAssistRequests();
+        };
+        window.Show();
     }
 
     private void CloseStalePeerMenu(IReadOnlyList<PeerSnapshot> peers)

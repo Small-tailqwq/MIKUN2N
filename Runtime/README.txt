@@ -354,6 +354,22 @@
      interoperate. Offline regressions check the tagged bytes and the anonymous
      fallback request.
 
+ 52. 0.5.8-8: Add opt-in, single-hop peer assistance for a selected peer pair.
+     An available direct path can still be unsuitable for a game, while relaying
+     all traffic through a small server is bandwidth-constrained. The client now
+     shares recent probe round-trip quality on demand and lets the requester
+     choose a friend; that friend approves each pair independently. Native
+     receive-only preparation precedes route activation. Leased circuits preserve
+     the original n3n packet and peer identity while forwarding through checked
+     IPv4/IPv6 legs, never through another helper or a supernode. Path challenges,
+     duplicate suppression, endpoint binding and a warm original IPv4 route allow
+     fallback without changing TAP addresses. IPv6 legs retain size discovery and
+     fragmentation; fragment IDs are atomic across TAP and forwarding threads.
+     Management advertises peer_assist_version=1 and exposes set_peer_assist and
+     get_peer_assists. IPv6 generation stays 3. There are no user bandwidth-quota
+     settings. Existing IPv6/wire offline regressions pass; three-party transfer,
+     game continuity and both UI themes still require live acceptance.
+
 构建要求：Windows 目标需要在 CFLAGS 中带上 `-std=gnu17`（随包的旧 src/win32/getopt.c 在本
 工具链的 C23 默认标准下编译不过），并带上 `-ffile-prefix-map=<构建路径>=<占位路径>`，把调试
 信息里的绝对路径映射掉。曾经发布的二进制内嵌了构建机的用户名与目录结构（`Users/<name>/.../

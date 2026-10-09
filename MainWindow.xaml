@@ -281,7 +281,7 @@
         <Border Grid.Row="3" Style="{StaticResource CardStyle}" Margin="0,0,0,16">
           <StackPanel>
             <Grid Margin="0,0,0,12">
-              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
               <StackPanel>
                 <TextBlock Text="联机好友" FontSize="17" FontWeight="SemiBold" />
                 <TextBlock Text="显示同一小组里也打开了 MikuN2N 的朋友；右键某一行可复制 IP 或切换线路。"
@@ -293,6 +293,10 @@
                       ToolTip="已连接时会自动发现同一小组里的朋友。">
                 <TextBlock Text="自动发现中" Foreground="{DynamicResource SuccessText}" FontSize="11" FontWeight="SemiBold" />
               </Border>
+              <Button x:Name="PeerAssistRequestsButton" Grid.Column="2" Content="协助申请"
+                      Visibility="Collapsed" Margin="8,0,0,0" VerticalAlignment="Center"
+                      Style="{StaticResource QuietButton}" Click="PeerAssistRequests_Click"
+                      ToolTip="朋友请求你协助转发；点击查看后可同意或拒绝。" />
             </Grid>
             <Grid>
               <DataGrid x:Name="PeersGrid" AutoGenerateColumns="False" IsReadOnly="True"

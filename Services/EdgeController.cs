@@ -1293,6 +1293,8 @@ public sealed partial class EdgeController : IAsyncDisposable
                         run.NativeVersion = PeerDiscoveryService.NormalizeVersion(
                             info.TryGetProperty("mikun2n_build_version", out var build) ? build.GetString() : null);
                         run.Ipv6WireVersion = ReadWireVersion(info, "ipv6_wire_version");
+                        run.PeerAssistSupported = ReadWireVersion(info, "peer_assist_version") == 1;
+                        run.PeerDiscovery?.UpdateLocalAssistCapability(run.PeerAssistSupported);
                         AppendLog(run, $"本机版本：客户端 {BuildIdentity.Version}，n3n 构建 {run.NativeVersion ?? "未报告"}，IPv6 协议 {run.Ipv6WireVersion?.ToString() ?? "未报告"}。");
                         run.Diagnostics?.Write("native_identity", info);
                     }
@@ -1311,6 +1313,8 @@ public sealed partial class EdgeController : IAsyncDisposable
                 run.PeerRowMacs = rowMacs;
                 run.PeerPathKeys = pathKeys;
                 run.NativePunchTelemetry = hasPunchTelemetry;
+                run.PeerDiscovery?.UpdatePeerModes(run.Peers.ToDictionary(
+                    peer => peer.NodeId, peer => GetPeerConnectionMode(run, peer, allowLatencyInference: false)));
                 if (run.IsN3n && DateTimeOffset.Now >= run.NextNatPollAt)
                 {
                     run.NextNatPollAt = DateTimeOffset.Now + TimeSpan.FromSeconds(4);
@@ -1791,6 +1795,8 @@ public sealed partial class EdgeController : IAsyncDisposable
                     _ = ApplyRemoteRelayPolicyAsync(run, request);
                 run.PeerDiscovery = discovery;
                 run.VirtualIp = address.ToString();
+                discovery.UpdateLocalAssistCapability(run.PeerAssistSupported);
+                run.PeerAssist = new PeerAssistCoordinator(this, run, discovery);
                 AppendLog(run, $"MikuN2N：好友发现已启动（{address}，UDP 43121）。");
                 // Shells out to netsh/powershell, so it must not hold up the poll loop.
                 run.TunedAdapterId = _tapAdapterId ?? ResolveTapAdapterId();
@@ -1857,7 +1863,8 @@ public sealed partial class EdgeController : IAsyncDisposable
                 }
                 var path = GetPeerPath(run, peer);
                 var measuredPeer = run.PeerDiscovery?.ApplyPeerPath(peer, path) ?? peer;
-                peers[index] = AddPeerIdentity(run, measuredPeer) with { ConnectionMode = mode };
+                peers[index] = AddPeerIdentity(run, measuredPeer) with { ConnectionMode = mode,
+                    AssistRelayName = run.PeerAssist?.ActiveRelayName(peer.NodeId) };
             }
             foreach (var key in run.RelayedSince.Keys.Where(key => !present.Contains(key)).ToArray())
             {
@@ -1880,6 +1887,7 @@ public sealed partial class EdgeController : IAsyncDisposable
                 PeerConnectionMode.PunchFailed);
         var failedCount = peers.Count(peer =>
             peer.ConnectionMode == PeerConnectionMode.PunchFailed);
+        var assistedCount = peers.Count(peer => peer.ConnectionMode == PeerConnectionMode.PeerAssisted);
         var detail = peers.Length == 0
             ? "已连接，正在等待朋友上线。"
             : punchingCount > 0
@@ -1887,6 +1895,8 @@ public sealed partial class EdgeController : IAsyncDisposable
                 : failedCount > 0
                     ? $"已连接；{directCount} 位朋友直连，{relayedCount} 位经服务器中转，其中 {failedCount} 位已停止自动尝试，可右键重试。"
                 : $"已连接；{directCount} 位朋友直连，{relayedCount} 位经服务器中转。";
+        if (assistedCount > 0)
+            detail += $" {assistedCount} 位经好友协助转发。";
         // Network hints (UPnP/CGNAT) now live beside the NAT type; the detail line keeps
         // only what the player has to act on, such as a key mismatch.
         if (!string.IsNullOrWhiteSpace(run.CompatibilityHint))
@@ -2298,6 +2308,8 @@ public sealed partial class EdgeController : IAsyncDisposable
 
     private static string? GetPeerPath(EdgeRun run, PeerSnapshot peer)
     {
+        if (run.PeerAssist?.ActivePath(peer.NodeId) is { } assistPath)
+            return "assist:" + assistPath;
         var paths = run.PeerPathKeys;
         if (!paths.TryGetValue($"ip:{peer.VirtualIp}", out var path) &&
             !paths.TryGetValue($"name:{peer.Nickname}", out path))
@@ -2344,10 +2356,12 @@ public sealed partial class EdgeController : IAsyncDisposable
             LocalIpv6WireVersion = run.ExperimentalIpv6P2p ? run.Ipv6WireVersion : null };
     }
 
-    private static PeerConnectionMode GetPeerConnectionMode(EdgeRun run, PeerSnapshot peer)
+    private static PeerConnectionMode GetPeerConnectionMode(EdgeRun run, PeerSnapshot peer, bool allowLatencyInference = true)
     {
+        if (run.PeerAssist?.ActivePath(peer.NodeId) is not null)
+            return PeerConnectionMode.PeerAssisted;
         if (run.PeerModes.TryGetValue($"ip:{peer.VirtualIp}", out var mode) ||
-            run.PeerModes.TryGetValue($"name:{peer.Nickname}", out mode))
+            (allowLatencyInference && run.PeerModes.TryGetValue($"name:{peer.Nickname}", out mode)))
         {
             return mode;
         }
@@ -2377,7 +2391,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         // supernode; the traffic is on the local network even when the n3n
         // management rows fail to correlate (common for multicast-discovered
         // LAN peers whose row keys never match the discovery data).
-        return peer.LatencyMs is >= 0 and <= 2
+        return allowLatencyInference && peer.LatencyMs is >= 0 and <= 2
             ? PeerConnectionMode.LanDirect
             : PeerConnectionMode.Unknown;
     }
@@ -2704,6 +2718,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         }
 
         TryCancel(run.MonitorCancellation);
+        run.PeerAssist?.Stop();
         run.PeerDiscovery?.Stop();
         run.PortMapping?.Dispose();
         run.MonitorCancellation.Dispose();
@@ -2805,6 +2820,8 @@ public sealed partial class EdgeController : IAsyncDisposable
         /// <summary>Adapter whose metric this run changed, so teardown can hand it back.</summary>
         public string? TunedAdapterId { get; set; }
         public PeerDiscoveryService? PeerDiscovery { get; set; }
+        public PeerAssistCoordinator? PeerAssist { get; set; }
+        public bool PeerAssistSupported { get; set; }
         public UpnpPortMappingService? PortMapping { get; set; }
         public string? NetworkHint { get; set; }
         public string? CompatibilityHint { get; set; }

@@ -61,6 +61,31 @@ public sealed class N2nManagementClient : IDisposable
             ? SendJsonRpcAsync("get_info", authenticated: false, cancellationToken)
             : Task.FromResult(default(JsonElement));
 
+    public async Task<IReadOnlyList<JsonElement>> GetPeerAssistsAsync(CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(2));
+        try { return await CallJsonRpcAsync("get_peer_assists", authenticated: true, timeout.Token); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        { throw new InvalidOperationException("原生协助状态查询超时。"); }
+    }
+
+    public async Task SetPeerAssistAsync(string circuit, string role, string firstMac,
+        string secondMac, bool enabled, CancellationToken cancellationToken)
+    {
+        if (_protocol != ManagementProtocol.N3nHttp)
+            throw new NotSupportedException("当前 edge 不支持好友协助转发。");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(2));
+        try
+        {
+            await SendJsonRpcAsync("set_peer_assist", authenticated: true, timeout.Token,
+                new object[] { circuit, role, firstMac, secondMac, enabled });
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        { throw new InvalidOperationException("原生协助配置响应超时。"); }
+    }
+
     /// <returns>
     /// How many peer entries the edge actually updated. Zero means the policy was
     /// recorded but no known/pending peer carries that virtual address yet.

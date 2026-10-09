@@ -22,6 +22,7 @@
 #include "base64.h"      // for base64decode
 #include "management.h"
 #include "mikun2n_ipv6.h"
+#include "mikun2n_assist.h"
 #include "mikun2n_build_version.h"
 #include "mikun2n_relay.h"
 #include "mikun2n_relay_policy.h"
@@ -1040,6 +1041,7 @@ static void jsonrpc_get_info (char *id, struct n3n_runtime_data *eee, conn_t *co
                 "\"builddate\":\"%s\","
                 "\"mikun2n_build_version\":\"%s\","
                 "\"ipv6_wire_version\":%u,"
+                "\"peer_assist_version\":%u,"
                 "\"is_edge\":%i,"
                 "\"is_supernode\":%i,"
                 "\"macaddr\":\"%s\","
@@ -1049,6 +1051,7 @@ static void jsonrpc_get_info (char *id, struct n3n_runtime_data *eee, conn_t *co
                 BUILDDATE,
                 MIKUN2N_BUILD_VERSION,
                 MIKUN2N_IPV6_WIRE_VERSION,
+                MIKUN2N_ASSIST_VERSION,
                 eee->conf.is_edge,
                 eee->conf.is_supernode,
                 is_null_mac(eee->device.mac_addr) ? "" : macaddr_str(mac_buf, eee->device.mac_addr),
@@ -1326,6 +1329,72 @@ static void jsonrpc_get_relay_stats (char *id, struct n3n_runtime_data *eee, con
     jsonrpc_result_tail(conn, 200);
 }
 
+static int assist_hex (char c) {
+    if(c >= '0' && c <= '9') return c - '0';
+    if(c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if(c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int assist_parse_mac (const char *text, n2n_mac_t mac) {
+    if(strlen(text) != 17) return 0;
+    for(int i = 0; i < N2N_MAC_SIZE; i++) {
+        int hi = assist_hex(text[i * 3]), lo = assist_hex(text[i * 3 + 1]);
+        if(hi < 0 || lo < 0 || (i != N2N_MAC_SIZE - 1 && text[i * 3 + 2] != ':')) return 0;
+        mac[i] = (hi << 4) | lo;
+    }
+    return 1;
+}
+
+static void jsonrpc_set_peer_assist (char *id, struct n3n_runtime_data *eee, conn_t *conn, const char *params) {
+    char circuit_text[33] = {0}, role_text[16] = {0}, first_text[18] = {0}, second_text[18] = {0}, enabled[8] = {0};
+    uint8_t circuit[16], role = 0, any = 0;
+    n2n_mac_t first, second;
+    int consumed = 0;
+    if(!auth_check(eee, conn)) { auth_request(conn); return; }
+    if(!params || sscanf(params, " [ \"%32[0-9a-fA-F]\" , \"%15[a-z]\" , \"%17[0-9a-fA-F:]\" , \"%17[0-9a-fA-F:]\" , %7[a-z] ] %n",
+                          circuit_text, role_text, first_text, second_text, enabled, &consumed) != 5 ||
+       !consumed || params[consumed] || strlen(circuit_text) != 32 ||
+       (strcmp(enabled, "true") && strcmp(enabled, "false")) ||
+       !assist_parse_mac(first_text, first) || !assist_parse_mac(second_text, second)) {
+        jsonrpc_error(id, conn, 400, "expected [circuit32hex, role, firstMAC, secondMAC, boolean]", 0);
+        return;
+    }
+    if(!strcmp(role_text, "endpoint")) role = MIKUN2N_ASSIST_ENDPOINT;
+    else if(!strcmp(role_text, "relay")) role = MIKUN2N_ASSIST_RELAY;
+    else if(!strcmp(role_text, "standby")) role = MIKUN2N_ASSIST_STANDBY;
+    for(int i = 0; i < 16; i++) { circuit[i] = (assist_hex(circuit_text[i * 2]) << 4) | assist_hex(circuit_text[i * 2 + 1]); any |= circuit[i]; }
+    int result = any ? mikun2n_assist_set(eee, circuit, role, first, second, !strcmp(enabled, "true"), mikun2n_ipv6_now_ms()) : -1;
+    if(result < 0) { jsonrpc_error(id, conn, result == -2 ? 507 : 400, result == -2 ? "assistance table is full" : "invalid or conflicting assistance circuit", 0); return; }
+    jsonrpc_1uint(id, conn, result);
+}
+
+static void jsonrpc_get_peer_assists (char *id, struct n3n_runtime_data *eee, conn_t *conn, const char *params) {
+    uint64_t now_ms = mikun2n_ipv6_now_ms();
+    unsigned count = 0;
+    jsonrpc_result_head(id, conn);
+    sb_reprintf(&conn->request, "[");
+    for(unsigned i = 0; i < MIKUN2N_ASSIST_MAX; i++) {
+        mikun2n_assist_t snapshot;
+        mikun2n_assist_snapshot(eee, i, &snapshot);
+        const mikun2n_assist_t *assist = &snapshot;
+        if(!assist->role || now_ms >= assist->expires_ms) continue;
+        char circuit[33];
+        macstr_t first, second;
+        for(int j = 0; j < 16; j++) snprintf(circuit + j * 2, 3, "%02x", assist->circuit[j]);
+        sb_reprintf(&conn->request,
+                    "%s{\"circuit\":\"%s\",\"role\":\"%s\",\"first_mac\":\"%s\",\"second_mac\":\"%s\",\"active\":%s,\"tx_packets\":%llu,\"rx_packets\":%llu}",
+                    count ? "," : "", circuit,
+                    assist->role == MIKUN2N_ASSIST_RELAY ? "relay" : assist->role == MIKUN2N_ASSIST_STANDBY ? "standby" : "endpoint",
+                    macaddr_str(first, assist->first_mac), macaddr_str(second, assist->second_mac),
+                    mikun2n_assist_active(eee, assist, now_ms) ? "true" : "false",
+                    (unsigned long long)assist->tx_packets, (unsigned long long)assist->rx_packets);
+        if(jsonrpc_error_overflow(id, conn, ++count)) return;
+    }
+    sb_reprintf(&conn->request, "]");
+    jsonrpc_result_tail(conn, 200);
+}
+
 static void jsonrpc_help (char *id, struct n3n_runtime_data *eee, conn_t *conn, const char *params);
 
 struct mgmt_jsonrpc_method {
@@ -1338,6 +1407,7 @@ static const struct mgmt_jsonrpc_method jsonrpc_methods[] = {
     { "get_communities", jsonrpc_get_communities, "Show current communities" },
     { "get_edges", jsonrpc_get_edges, "List current edges/peers" },
     { "get_info", jsonrpc_get_info, "Provide basic edge information" },
+    { "get_peer_assists", jsonrpc_get_peer_assists, "List leased single-hop assistance circuits" },
     { "get_nat", jsonrpc_get_nat, "Show MikuN2N NAT behavior probe" },
     { "get_mac", jsonrpc_get_mac, "Show known mac addresses" },
     { "get_packetstats", jsonrpc_get_packetstats, "traffic counters" },
@@ -1350,6 +1420,7 @@ static const struct mgmt_jsonrpc_method jsonrpc_methods[] = {
     { "post.test", jsonrpc_post_test, "Send a test event" },
     { "reload_communities", jsonrpc_reload_communities, "Reloads communities and user's public keys" },
     { "set_peer_relay", jsonrpc_set_peer_relay, "Force or release supernode relay for one peer" },
+    { "set_peer_assist", jsonrpc_set_peer_assist, "Install, renew or remove a single-hop assistance circuit" },
     { "set_verbose", jsonrpc_set_verbose, "Set logging verbosity" },
     { "stop", jsonrpc_stop, "Stop the daemon" },
     // get_last_event?

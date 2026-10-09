@@ -32,7 +32,8 @@ public enum PeerConnectionMode
     ForcedRelayed,
     LanDirect,
     Punching,
-    PunchFailed
+    PunchFailed,
+    PeerAssisted
 }
 
 public sealed record PeerSnapshot(
@@ -46,7 +47,8 @@ public sealed record PeerSnapshot(
     string? ClientVersion = null,
     string? NativeVersion = null,
     int? Ipv6WireVersion = null,
-    int? LocalIpv6WireVersion = null)
+    int? LocalIpv6WireVersion = null,
+    string? AssistRelayName = null)
 {
     public string VersionText => ClientVersion ?? NativeVersion ?? "未报告";
     public bool Ipv6VersionMismatch => Ipv6WireVersion is > 0 && LocalIpv6WireVersion is > 0 &&
@@ -75,6 +77,7 @@ public sealed record PeerSnapshot(
         PeerConnectionMode.PunchFailed => "服务器中转（直连未成功）",
         PeerConnectionMode.Relayed => "服务器中转",
         PeerConnectionMode.ForcedRelayed => "服务器中转（手动）",
+        PeerConnectionMode.PeerAssisted => "好友协助转发",
         _ => "检测中"
     };
     public string ConnectionModeDescription => ConnectionMode switch
@@ -86,6 +89,7 @@ public sealed record PeerSnapshot(
         PeerConnectionMode.PunchFailed => "自动直连尝试已用完，当前经节点服务器中转，延迟可能略高。可右键重新尝试。",
         PeerConnectionMode.Relayed => "暂时无法直连，数据经节点服务器中转，延迟可能略高。程序会继续自动尝试。",
         PeerConnectionMode.ForcedRelayed => "已手动设为经服务器中转，可右键恢复自动直连。",
+        PeerConnectionMode.PeerAssisted => $"经 {AssistRelayName ?? "好友"} 协助双向传输，可在协助窗口结束。",
         _ => "正在确认连接方式…"
     };
 }

@@ -1,0 +1,129 @@
+<Window x:Class="MikuN2N.PeerAssistWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="协助转发" Width="1080" Height="760" MinWidth="760" MinHeight="520"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{DynamicResource WindowBackground}">
+  <Window.Resources>
+    <Style x:Key="AssistCell" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+  </Window.Resources>
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <StackPanel Margin="0,0,0,16">
+      <TextBlock Text="协助转发" FontSize="22" FontWeight="Bold" />
+      <TextBlock x:Name="TargetText" Margin="0,6,0,0" TextWrapping="Wrap" />
+      <TextBlock Text="朋友同意后，只协助你与指定对象双向通信。每份申请都需要单独同意，双方可随时结束。"
+                 Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" FontSize="12" Margin="0,5,0,0" />
+    </StackPanel>
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Margin="0,0,8,0">
+        <Border x:Name="CandidatesPanel" Style="{StaticResource CardStyle}" Padding="16" Margin="0,0,0,14">
+          <StackPanel>
+            <Grid Margin="0,0,0,10">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+              <TextBlock Text="选择协助的朋友" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <Button x:Name="RefreshButton" Grid.Column="1" Content="刷新" Click="Refresh_Click" />
+            </Grid>
+            <DataGrid x:Name="CandidatesGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                      SelectionChanged="Candidate_SelectionChanged"
+                      CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False"
+                      CanUserReorderColumns="False" SelectionMode="Single" SelectionUnit="FullRow"
+                      HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
+                      RowHeight="56" ColumnHeaderHeight="34" MinHeight="94" MaxHeight="230"
+                      ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="朋友" Binding="{Binding Name}" Width="1.2*" MinWidth="100"
+                                    ElementStyle="{StaticResource AssistCell}" />
+                <DataGridTextColumn Header="你 → 朋友" Binding="{Binding ToRelayText}" Width="*" MinWidth="126"
+                                    ElementStyle="{StaticResource AssistCell}" />
+                <DataGridTextColumn Header="朋友 → 对象" Binding="{Binding ToTargetText}" Width="*" MinWidth="126"
+                                    ElementStyle="{StaticResource AssistCell}" />
+                <DataGridTextColumn Header="探测样本 / 更新" Binding="{Binding EvidenceText}" Width="1.5*" MinWidth="175"
+                                    ElementStyle="{StaticResource AssistCell}" />
+                <DataGridTemplateColumn Header="候选状态" Width="1.5*" MinWidth="155">
+                  <DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="12"
+                                 VerticalAlignment="Center" ToolTip="{Binding Status}" />
+                    </DataTemplate>
+                  </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+              </DataGrid.Columns>
+            </DataGrid>
+            <TextBlock x:Name="CandidatesEmptyText" Text="暂时没有其他可协助的朋友。" Margin="0,10,0,0"
+                       Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+            <TextBlock Text="每段显示往返延迟 / 探测未响应比例。仅比较近期低频探测，不能证明可用带宽或游戏体验；缺少样本时不作推荐。"
+                       Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" FontSize="12" Margin="0,10,0,0" />
+            <Button x:Name="RequestButton" Content="向选中的朋友申请" Style="{StaticResource PrimaryButton}"
+                    HorizontalAlignment="Right" Margin="0,12,0,0" IsEnabled="False" Click="Request_Click" />
+          </StackPanel>
+        </Border>
+        <Border Style="{StaticResource CardStyle}" Padding="16" Margin="0,0,0,14">
+          <StackPanel>
+            <TextBlock Text="收到的协助申请" FontSize="16" FontWeight="SemiBold" />
+            <TextBlock Text="同意会占用你的上传和下载，可能影响你自己的游戏；其他人不会因此获得转发权限。"
+                       Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,10" />
+            <TextBlock x:Name="RequestsEmptyText" Text="没有待处理的申请。" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+            <ItemsControl x:Name="RequestsList">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border BorderBrush="{DynamicResource Border}" BorderThickness="0,1,0,0" Padding="0,10">
+                    <Grid>
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                      <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                        <TextBlock Text="{Binding RequesterNickname}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding TargetNickname, StringFormat='请求协助与 {0} 双向通信'}"
+                                   Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" FontSize="12" Margin="0,3,0,0" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="拒绝" Tag="{Binding CircuitId}" Click="Decline_Click" Margin="0,0,8,0" />
+                        <Button Content="同意协助" Tag="{Binding CircuitId}" Click="Accept_Click" Style="{StaticResource PrimaryButton}" />
+                      </StackPanel>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+        <Border Style="{StaticResource CardStyle}" Padding="16">
+          <StackPanel>
+            <TextBlock Text="本次连接中的协助" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10" />
+            <TextBlock x:Name="SessionsEmptyText" Text="暂无协助会话。" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+            <ItemsControl x:Name="SessionsList">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border BorderBrush="{DynamicResource Border}" BorderThickness="0,1,0,0" Padding="0,10">
+                    <Grid>
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                      <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                        <TextBlock Text="{Binding Description}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding StateText}" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,3,0,0" />
+                      </StackPanel>
+                      <Button Grid.Column="1" Content="结束协助" Tag="{Binding CircuitId}" Click="Stop_Click" VerticalAlignment="Center" />
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+    <Grid Grid.Row="2" Margin="0,16,0,0">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+      <StackPanel Margin="0,0,16,0" VerticalAlignment="Center">
+        <TextBlock x:Name="StatusText" Text="正在读取协助状态…" TextWrapping="Wrap" FontSize="12" />
+        <TextBlock Text="关闭窗口会取消尚未完成的申请；已经建立的协助会继续。"
+                   Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" FontSize="11" Margin="0,4,0,0" />
+      </StackPanel>
+      <Button Grid.Column="1" Content="关闭" Width="90" Click="Close_Click" />
+    </Grid>
+  </Grid>
+</Window>

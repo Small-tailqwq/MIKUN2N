@@ -2,8 +2,8 @@
 
 This source tree is a modified version of n3n 3.4.4
 (https://github.com/n42n/n3n, tag `3.4.4`). It was modified by the MikuN2N project
-between July and September 2026; the latest modification belongs to MikuN2N release
-0.5.8-7 (2026-09-28). It is the corresponding source of the `n3n-edge.exe` shipped with
+between July and October 2026; the latest modification belongs to MikuN2N release
+0.5.8-8 (2026-10-09). It is the corresponding source of the `n3n-edge.exe` shipped with
 that release and is distributed under the same license as n3n: GPL-3.0-only (see
 `LICENSES/preferred/GPL-3.0`). The upstream copyright notices are retained unchanged.
 
@@ -15,6 +15,10 @@ Areas changed relative to upstream:
   `src/peer_info.[ch]`, `src/wire.c`, `include/n2n_typedefs.h`).
 - Management API additions such as `get_nat`, `set_peer_relay` and extra `get_edges`
   fields (`src/management.c`).
+- Consented single-hop peer assistance with leased circuits, standby preparation,
+  direct-only forwarding over IPv4/IPv6, end-to-end path probes, and endpoint-bound
+  receive handling that preserves the original n3n payload and peer identity
+  (`src/mikun2n_assist.[ch]`, `src/edge_utils.c`, `src/management.c`).
 - Windows TAP fixes for MAC assignment, interface metric and media status
   (`src/win32/wintap.c`).
 - Experimental IPv6 transport with size discovery and bounded fragmentation

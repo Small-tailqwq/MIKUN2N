@@ -752,6 +752,16 @@ void mikun2n_ipv6_tick (struct n3n_runtime_data *eee, uint64_t now_ms) {
     ipv6_tick_peers(eee, eee->known_peers, now_ms);
 }
 
+static uint64_t ipv6_next_datagram_id (struct n3n_runtime_data *eee) {
+    /* On Windows, TAP sends and assistance forwarding on the receive thread
+     * share this session-wide ID space. A duplicate can join unrelated fragments. */
+#ifdef _WIN32
+    return (uint64_t)InterlockedIncrement64((volatile LONG64 *)&eee->mikun2n_ipv6_datagram_id);
+#else
+    return ++eee->mikun2n_ipv6_datagram_id;
+#endif
+}
+
 int mikun2n_ipv6_send (struct n3n_runtime_data *eee, struct peer_info *peer,
                       const uint8_t *data, size_t size, uint64_t now_ms) {
     uint8_t packet[N2N_PKT_BUF_SIZE];
@@ -771,8 +781,8 @@ int mikun2n_ipv6_send (struct n3n_runtime_data *eee, struct peer_info *peer,
     while(offset < size) {
         // Allocate only for fragments, including a DATA send retried after EMSGSIZE.
         if(fragmented && !id) {
-            id = ++eee->mikun2n_ipv6_datagram_id;
-            if(!id) id = ++eee->mikun2n_ipv6_datagram_id;
+            id = ipv6_next_datagram_id(eee);
+            if(!id) id = ipv6_next_datagram_id(eee);
         }
         unsigned header = fragmented ? IPV6_FRAGMENT_HEADER : IPV6_FRAME_SIZE;
         size_t chunk = min(size - offset, budget - header);

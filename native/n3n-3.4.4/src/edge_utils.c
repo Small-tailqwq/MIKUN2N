@@ -47,6 +47,7 @@
 #include "header_encryption.h"       // for packet_header_encrypt, packet_he...
 #include "management.h"              // for readFromMgmtSocket
 #include "mikun2n_ipv6.h"
+#include "mikun2n_assist.h"
 #include "mikun2n_build_version.h"
 #include "n2n.h"                     // for n3n_runtime_data, n2n_edge_...
 #include "n2n_wire.h"                // for fill_sockaddr, decod...
@@ -777,6 +778,9 @@ struct n3n_runtime_data* edge_init (const n2n_edge_conf_t *conf, int *rv) {
     // if called in-between, see "Supernode not responding" in update_supernode_reg(...)
     eee->sock = -1;
     eee->mikun2n_ipv6_socket = MIKUN2N_INVALID_SOCKET;
+#ifdef _WIN32
+    InitializeSRWLock(&eee->mikun2n_assist_lock);
+#endif
 #ifndef SKIP_MULTICAST_PEERS_DISCOVERY
     eee->udp_multicast_sock = -1;
 #endif
@@ -2720,6 +2724,60 @@ static int find_peer_destination (struct n3n_runtime_data * eee,
 
 /* ***************************************************** */
 
+static struct peer_info *mikun2n_assist_peer (struct n3n_runtime_data *eee, const n2n_mac_t mac) {
+    struct peer_info *peer;
+    HASH_FIND_PEER(eee->known_peers, mac, peer);
+    if(!peer) HASH_FIND_PEER(eee->pending_peers, mac, peer);
+    return peer;
+}
+
+int mikun2n_assist_forced_relay (struct n3n_runtime_data *eee, const n2n_mac_t mac) {
+    struct peer_info *peer = mikun2n_assist_peer(eee, mac);
+    if(peer && mikun2n_peer_force_relay(eee, peer)) return 1;
+    for(unsigned i = 0; i < eee->mikun2n_forced_relay_count; i++)
+        if(!memcmp(mac, eee->mikun2n_forced_relay_macs[i], N2N_MAC_SIZE)) return 1;
+    return 0;
+}
+
+static struct peer_info *mikun2n_assist_ipv4_peer (struct n3n_runtime_data *eee, const n2n_mac_t mac) {
+    struct peer_info *peer;
+    HASH_FIND_PEER(eee->known_peers, mac, peer);
+    if(!peer || peer->sock.family != AF_INET || !is_valid_peer_sock(&peer->sock) ||
+       mikun2n_sock_is_supernode(eee, &peer->sock) ||
+       !peer->last_p2p || time(NULL) - peer->last_p2p >= peer->timeout / 2) return NULL;
+    return peer;
+}
+
+int mikun2n_assist_direct_ready (struct n3n_runtime_data *eee, const n2n_mac_t mac, uint64_t now_ms) {
+    if(!eee->conf.allow_p2p || eee->conf.connect_tcp || mikun2n_assist_forced_relay(eee, mac)) return 0;
+    struct peer_info *peer = mikun2n_assist_peer(eee, mac);
+    return (peer && mikun2n_ipv6_active(eee, peer, now_ms)) || mikun2n_assist_ipv4_peer(eee, mac) != NULL;
+}
+
+int mikun2n_assist_direct_send (struct n3n_runtime_data *eee, const n2n_mac_t mac,
+                               const uint8_t *data, size_t size, uint64_t now_ms) {
+    if(!mikun2n_assist_direct_ready(eee, mac, now_ms)) return 0;
+    struct peer_info *peer = mikun2n_assist_peer(eee, mac);
+    if(peer && mikun2n_ipv6_send(eee, peer, data, size, now_ms)) return 1;
+    peer = mikun2n_assist_ipv4_peer(eee, mac);
+    if(!peer) return 0;
+    SOCKET fd = peer->punch_data_sock != MIKUN2N_INVALID_SOCKET ? peer->punch_data_sock : eee->sock;
+    return mikun2n_sendto_socket(fd, data, size, &peer->sock) == (ssize_t)size;
+}
+
+int mikun2n_assist_direct_accept (struct n3n_runtime_data *eee, const n2n_mac_t mac,
+                                 const n2n_sock_t *sender, SOCKET socket_fd, uint64_t now_ms) {
+    if(!eee->conf.allow_p2p || eee->conf.connect_tcp || mikun2n_assist_forced_relay(eee, mac)) return 0;
+    if(sender->family == AF_INET6)
+        return socket_fd == eee->mikun2n_ipv6_socket && mikun2n_ipv6_accept(eee, mac, sender, now_ms);
+    struct peer_info *peer = mikun2n_assist_ipv4_peer(eee, mac);
+    if(!peer || !sock_equal(sender, &peer->sock) ||
+       (socket_fd != eee->sock && socket_fd != peer->punch_data_sock)) return 0;
+    peer->last_seen = peer->last_p2p = time(NULL);
+    peer->punch_recover_since = 0;
+    return 1;
+}
+
 /** Send an ecapsulated ethernet PACKET to a destination edge or broadcast MAC
  *    address. */
 static int send_packet (struct n3n_runtime_data * eee,
@@ -2733,6 +2791,11 @@ static int send_packet (struct n3n_runtime_data * eee,
     n2n_sock_t destination;
     macstr_t mac_buf;
     struct peer_info *peer, *tmp_peer;
+
+    if(mikun2n_assist_send(eee, dstMac, pktbuf, pktlen, mikun2n_now_ms())) {
+        ++eee->stats.tx_p2p;
+        return 0;
+    }
 
     if(!is_multi_broadcast(dstMac) && eee->conf.mikun2n_ipv6) {
         HASH_FIND_PEER(eee->known_peers, dstMac, peer);
@@ -3042,6 +3105,8 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
     uint32_t header_enc = 0;
     uint64_t stamp = 0;
     int skip_add = 0;
+    n2n_mac_t assist_source;
+    int via_assist = 0;
 
     /* REVISIT: when UDP/IPv6 is supported we will need a flag to indicate which
      * IP transport version the packet arrived on. May need to UDP sockets. */
@@ -3071,6 +3136,10 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
 
     if(mikun2n_handle_nat_probe(eee, &sender, udp_buf, udp_size, now))
         return;
+
+    via_assist = mikun2n_assist_receive(eee, &sender, in_sock, udp_buf, &udp_size,
+                                       assist_source, mikun2n_now_ms());
+    if(via_assist < 0) return;
 
     if(eee->conf.header_encryption == HEADER_ENCRYPTION_ENABLED) {
         // match with static (1) or dynamic (2) ctx?
@@ -3114,6 +3183,8 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
     }
 
     msg_type = cmn.pc; /* packet code */
+    if(via_assist && (msg_type != MSG_TYPE_PACKET || (cmn.flags & N2N_FLAGS_FROM_SUPERNODE)))
+        return;
     if(sender.family == AF_INET6 &&
        (in_sock != eee->mikun2n_ipv6_socket || msg_type != MSG_TYPE_PACKET ||
         (cmn.flags & N2N_FLAGS_FROM_SUPERNODE)))
@@ -3162,7 +3233,9 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
             /* process PACKET - most frequent so first in list. */
             n2n_PACKET_t pkt;
 
-            decode_PACKET(&pkt, &cmn, udp_buf, &rem, &idx);
+            if(decode_PACKET(&pkt, &cmn, udp_buf, &rem, &idx) < 0) return;
+            if(via_assist && (memcmp(pkt.srcMac, assist_source, N2N_MAC_SIZE) ||
+                              memcmp(pkt.dstMac, eee->device.mac_addr, N2N_MAC_SIZE))) return;
 
             if(eee->conf.header_encryption == HEADER_ENCRYPTION_ENABLED) {
                 if(!find_peer_time_stamp_and_verify(
@@ -3181,6 +3254,13 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
                 // drop packets received before first registration with supernode
                 traceEvent(TRACE_DEBUG, "dropped PACKET recevied before first registration with supernode");
                 return;
+            }
+
+            if(via_assist) {
+                /* The last hop belongs to R, never to pkt.srcMac. Preserve the
+                 * existing peer endpoint and the original payload identity. */
+                handle_PACKET(eee, 0, &pkt, &sender, udp_buf + idx, udp_size - idx);
+                break;
             }
 
             if(sender.family == AF_INET6) {
@@ -4310,7 +4390,7 @@ static void mikun2n_send_register_worker (struct n3n_runtime_data *eee,
  * pSp). A periodic REGISTER over the socket that carries the direct session
  * keeps both the mapping and the entry fresh, so cancel restores P2P at once.
  *
- * IPv6 DATA bypasses the IPv4 path the same way. Keeping a working IPv4 path
+ * IPv6 and peer assistance DATA bypass the IPv4 path the same way. Keeping a working IPv4 path
  * warm makes it the fallback for a brief IPv6 readiness gap instead of the
  * supernode; a path that stops answering is left to expire normally. */
 static void mikun2n_standby_keepalive (struct n3n_runtime_data *eee,
@@ -4323,7 +4403,8 @@ static void mikun2n_standby_keepalive (struct n3n_runtime_data *eee,
     if(mikun2n_sock_is_supernode(eee, &pp->sock))
         return;
     if(!mikun2n_peer_force_relay(eee, pp) &&
-       !(mikun2n_ipv6_active(eee, pp, mikun2n_now_ms()) &&
+       !((mikun2n_ipv6_active(eee, pp, mikun2n_now_ms()) ||
+          mikun2n_assist_peer_active(eee, pp->mac_addr, mikun2n_now_ms())) &&
          now - pp->last_p2p < pp->timeout))
         return;
     if(now - pp->punch_keepalive_at < MIKUN2N_RELAY_KEEPALIVE_SECS)
@@ -5238,6 +5319,7 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
         FD_ZERO(&readers);
         FD_ZERO(&writers);
         mikun2n_ipv6_tick(eee, mikun2n_now_ms());
+        mikun2n_assist_tick(eee, mikun2n_now_ms());
         if(eee->mikun2n_ipv6_socket != MIKUN2N_INVALID_SOCKET) {
             FD_SET(eee->mikun2n_ipv6_socket, &readers);
             max_sock = max(max_sock, (int)eee->mikun2n_ipv6_socket);
@@ -5304,6 +5386,10 @@ int run_edge_loop (struct n3n_runtime_data *eee) {
         if(eee->mikun2n_ipv6_socket != MIKUN2N_INVALID_SOCKET && wait_time.tv_sec > 0) {
             wait_time.tv_sec = 0;
             wait_time.tv_usec = 250000;
+        }
+        if(wait_time.tv_sec > 1 && mikun2n_assist_any(eee)) {
+            wait_time.tv_sec = 1;
+            wait_time.tv_usec = 0;
         }
         rc = select(max_sock + 1, &readers, &writers, NULL, &wait_time);
         now = time(NULL);

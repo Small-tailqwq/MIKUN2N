@@ -16,6 +16,7 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
     private static readonly TimeSpan PeerExpiry = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ProbeRetention = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan PublishInterval = TimeSpan.FromMilliseconds(250);
+    private const int MaxDiscoveryPacketBytes = 4096;
     private readonly object _socketGate = new();
     private readonly SemaphoreSlim _socketRecoveryGate = new(1, 1);
     private UdpClient _udp;
@@ -31,8 +32,11 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
     private readonly ConcurrentDictionary<string, PeerState> _peers = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _pendingRelayPolicies = new();
     private readonly ConcurrentDictionary<string, PendingProbe> _pendingProbes = new();
+    private readonly ConcurrentDictionary<string, PendingQualityQuery> _pendingQualityQueries = new();
+    private readonly SemaphoreSlim _qualityQuerySlots = new(16, 16);
     private long _measurementGeneration;
     private NativeIdentity _localIdentity = new(null, null);
+    private volatile bool _supportsPeerAssist;
     private readonly Task _receiveTask;
     private readonly Task _broadcastTask;
     private readonly Task _publishTask;
@@ -41,6 +45,92 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
 
     public event EventHandler<IReadOnlyList<PeerSnapshot>>? PeersChanged;
     public event EventHandler<RelayPolicyRequest>? RelayPolicyRequested;
+    public event EventHandler<PeerAssistEnvelope>? AssistMessageReceived;
+
+    public string LocalNodeId => _nodeId;
+    public string LocalVirtualIp => _localAddress.ToString();
+
+    public void UpdateLocalAssistCapability(bool supported) => _supportsPeerAssist = supported;
+
+    public bool SupportsPeerAssist(string nodeId) => _peers.TryGetValue(nodeId, out var peer) &&
+        peer.SupportsPeerAssist && DateTimeOffset.Now - peer.LastSeen < PeerExpiry;
+
+    public IReadOnlyList<PeerSnapshot> GetPeers() => _peers
+        .Select(peer => new PeerSnapshot(peer.Key, peer.Value.Nickname, peer.Value.Address.ToString(),
+            peer.Value.LatencyMs, peer.Value.LastSeen, peer.Value.Mode,
+            LatencyUnavailable: peer.Value.LatencyUnavailable,
+            ClientVersion: peer.Value.ClientVersion, NativeVersion: peer.Value.NativeVersion,
+            Ipv6WireVersion: peer.Value.Ipv6WireVersion))
+        .OrderBy(peer => peer.Nickname, StringComparer.CurrentCultureIgnoreCase)
+        .ToArray();
+
+    public void UpdatePeerModes(IReadOnlyDictionary<string, PeerConnectionMode> modes)
+    {
+        foreach (var nodeId in _peers.Keys)
+        {
+            var mode = modes.GetValueOrDefault(nodeId, PeerConnectionMode.Unknown);
+            while (_peers.TryGetValue(nodeId, out var current) && current.Mode != mode)
+            {
+                var updated = ResetMeasurement(current) with { Mode = mode };
+                if (_peers.TryUpdate(nodeId, updated, current))
+                {
+                    PublishPeers();
+                    break;
+                }
+            }
+        }
+    }
+
+    public LinkQualitySnapshot? GetLinkQuality(string peerNodeId) =>
+        _peers.TryGetValue(peerNodeId, out var peer) && DateTimeOffset.Now - peer.LastSeen < PeerExpiry
+            ? peer.Quality.Snapshot(peerNodeId, peer.Mode) : null;
+
+    public async Task<LinkQualitySnapshot?> QueryLinkQualityAsync(
+        string reporterNodeId, string targetNodeId, CancellationToken cancellationToken)
+    {
+        if (targetNodeId == _nodeId || reporterNodeId == targetNodeId ||
+            !_peers.ContainsKey(targetNodeId) || !_peers.TryGetValue(reporterNodeId, out var reporter) ||
+            reporter.QualityVersion != 1)
+            return null;
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _cancellation.Token);
+        await _qualityQuerySlots.WaitAsync(linked.Token);
+        var commandId = Guid.NewGuid().ToString("N");
+        var completion = new TaskCompletionSource<LinkQualitySnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var query = new PendingQualityQuery(reporterNodeId, reporter.Address, targetNodeId,
+            Stopwatch.GetTimestamp(), completion);
+        _pendingQualityQueries[commandId] = query;
+        try
+        {
+            await SendAsync(new DiscoveryPacket("quality-request", _nodeId, _nickname, commandId, null,
+                    TargetNodeId: reporterNodeId, QualityTargetNodeId: targetNodeId),
+                new IPEndPoint(reporter.Address, DiscoveryPort), linked.Token);
+            return await completion.Task.WaitAsync(TimeSpan.FromSeconds(3), linked.Token);
+        }
+        catch (TimeoutException)
+        {
+            return null;
+        }
+        finally
+        {
+            _pendingQualityQueries.TryRemove(commandId, out _);
+            _qualityQuerySlots.Release();
+        }
+    }
+
+    public async Task SendAssistMessageAsync(
+        string recipientNodeId, PeerAssistMessage message, CancellationToken cancellationToken)
+    {
+        if (!_supportsPeerAssist || !SupportsPeerAssist(recipientNodeId) ||
+            !IsValidAssistMessage(message, _nodeId, recipientNodeId) ||
+            !_peers.TryGetValue(recipientNodeId, out var recipient))
+            throw new InvalidOperationException("好友协助通道尚未就绪，请稍后重试。");
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _cancellation.Token);
+        await SendAsync(new DiscoveryPacket("assist", _nodeId, _nickname, Guid.NewGuid().ToString("N"), null,
+                TargetNodeId: recipientNodeId, AssistMessage: message),
+            new IPEndPoint(recipient.Address, DiscoveryPort), linked.Token);
+    }
 
     public void UpdateLocalIdentity(string? version, int? wireVersion) =>
         _localIdentity = new(NormalizeVersion(version), NormalizeWireVersion(wireVersion));
@@ -49,7 +139,7 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
     {
         var identity = _localIdentity;
         return packet with { ClientVersion = BuildIdentity.Version, NativeVersion = identity.Version,
-            Ipv6WireVersion = identity.WireVersion };
+            Ipv6WireVersion = identity.WireVersion, QualityVersion = 1, SupportsPeerAssist = _supportsPeerAssist };
     }
 
     internal static string? NormalizeVersion(string? value) =>
@@ -348,15 +438,34 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
         {
             return;
         }
-        _pendingProbes.TryRemove(packet.ReplyTo, out _);
+        if (!_pendingProbes.TryRemove(packet.ReplyTo, out _))
+            return;
         var elapsed = Stopwatch.GetElapsedTime(probe.SentAt, receivedAt);
         TraceLatency($"probe_ack node={packet.NodeId} probe={packet.ReplyTo} age_ms={elapsed.TotalMilliseconds:F1} generation={probe.Generation}");
+        RecordProbeQuality(probe, elapsed <= ProbeRetention ? elapsed.TotalMilliseconds : null);
         if (elapsed <= ProbeRetention)
         {
             ApplyLatency(packet.NodeId, address, probe.Generation,
                 (int)Math.Round(Math.Clamp(elapsed.TotalMilliseconds, 0, 60000)), receivedAt, "udp");
         }
     }
+
+    private void RecordProbeQuality(PendingProbe probe, double? rttMs)
+    {
+        if (_peers.TryGetValue(probe.NodeId, out var current) && current.Generation == probe.Generation &&
+            current.Address.Equals(probe.Address))
+            current.Quality.Record(probe.SentAt, rttMs);
+    }
+
+    private PeerState ResetMeasurement(PeerState peer) => peer with
+    {
+        LatencyMs = null,
+        LatencyAt = 0,
+        MeasurementStartedAt = Stopwatch.GetTimestamp(),
+        LatencyUnavailable = false,
+        Generation = Interlocked.Increment(ref _measurementGeneration),
+        Quality = new PeerLinkQuality()
+    };
 
     private void ApplyLatency(string nodeId, IPAddress address, long generation, int latency, long receivedAt, string source)
     {
@@ -382,9 +491,7 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
             {
                 var changed = current.PathKey is not null;
                 var updated = changed
-                    ? current with { PathKey = path, LatencyMs = null, LatencyAt = 0,
-                        MeasurementStartedAt = Stopwatch.GetTimestamp(), LatencyUnavailable = false,
-                        Generation = Interlocked.Increment(ref _measurementGeneration) }
+                    ? ResetMeasurement(current) with { PathKey = path }
                     : current with { PathKey = path };
                 if (!_peers.TryUpdate(snapshot.NodeId, updated, current))
                 {
@@ -433,6 +540,7 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
         {
             if (probe.Value.SentAt < cutoff && _pendingProbes.TryRemove(probe.Key, out _))
             {
+                RecordProbeQuality(probe.Value, null);
                 TraceLatency($"probe_timeout node={probe.Value.NodeId} ip={probe.Value.Address} probe={probe.Key} generation={probe.Value.Generation}");
             }
         }
@@ -453,7 +561,8 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
                 // the physical LAN would otherwise be recorded under its physical address.
                 // Everything downstream (notably set_peer_relay) treats the stored address
                 // as the peer's virtual IP, so anything outside the TAP subnet is not us.
-                if (result.RemoteEndPoint.Address.Equals(_localAddress) ||
+                if (result.Buffer.Length > MaxDiscoveryPacketBytes ||
+                    result.RemoteEndPoint.Address.Equals(_localAddress) ||
                     !IsInTapSubnet(result.RemoteEndPoint.Address))
                 {
                     continue;
@@ -488,6 +597,13 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
 
                 var knownSender = _peers.TryGetValue(packet.NodeId, out var knownPeer) &&
                                   knownPeer.Address.Equals(result.RemoteEndPoint.Address);
+                if (packet.Type is "quality-request" or "quality-response" or "assist")
+                {
+                    if (knownSender && result.RemoteEndPoint.Port == DiscoveryPort &&
+                        packet.TargetNodeId == _nodeId && Guid.TryParseExact(packet.ProbeId, "N", out _))
+                        await ReceivePeerControlAsync(packet, knownPeer!, result.RemoteEndPoint, cancellationToken);
+                    continue;
+                }
                 var now = DateTimeOffset.Now;
                 _peers.AddOrUpdate(
                     packet.NodeId,
@@ -496,7 +612,9 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
                         ? previous with { Nickname = packet.Nickname.Trim(), LastSeen = now,
                             ClientVersion = NormalizeVersion(packet.ClientVersion),
                             NativeVersion = NormalizeVersion(packet.NativeVersion),
-                            Ipv6WireVersion = NormalizeWireVersion(packet.Ipv6WireVersion) }
+                            Ipv6WireVersion = NormalizeWireVersion(packet.Ipv6WireVersion),
+                            QualityVersion = packet.QualityVersion == 1 ? 1 : 0,
+                            SupportsPeerAssist = packet.SupportsPeerAssist == true }
                         : NewPeer(packet, result.RemoteEndPoint.Address, now));
                 MeasureAck(packet, result.RemoteEndPoint.Address, receivedAt);
                 PublishPeers();
@@ -553,9 +671,96 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
         }
     }
 
+    private async Task ReceivePeerControlAsync(
+        DiscoveryPacket packet, PeerState sender, IPEndPoint endpoint, CancellationToken cancellationToken)
+    {
+        if (packet.Type == "quality-request" && IsValidNodeId(packet.QualityTargetNodeId) &&
+            packet.QualityTargetNodeId != _nodeId && TryAllowQualityResponse(packet.NodeId))
+        {
+            var quality = GetLinkQuality(packet.QualityTargetNodeId!);
+            await SendAsync(new DiscoveryPacket("quality-response", _nodeId, _nickname,
+                    Guid.NewGuid().ToString("N"), packet.ProbeId, TargetNodeId: packet.NodeId,
+                    QualityTargetNodeId: packet.QualityTargetNodeId, Quality: quality),
+                endpoint, cancellationToken);
+        }
+        else if (packet.Type == "quality-response" && packet.ReplyTo is not null &&
+            _pendingQualityQueries.TryGetValue(packet.ReplyTo, out var query) &&
+            query.ReporterNodeId == packet.NodeId && query.ReporterAddress.Equals(endpoint.Address) &&
+            query.TargetNodeId == packet.QualityTargetNodeId &&
+            (packet.Quality is null || IsValidQuality(packet.Quality, query.TargetNodeId)))
+        {
+            // Include the query RTT conservatively; remote clocks are never compared.
+            var quality = packet.Quality is null ? null : packet.Quality with
+            {
+                AgeSeconds = packet.Quality.AgeSeconds + Stopwatch.GetElapsedTime(query.SentAt).TotalSeconds,
+                CapturedAt = Stopwatch.GetTimestamp()
+            };
+            query.Completion.TrySetResult(quality);
+        }
+        else if (packet.Type == "assist" && _supportsPeerAssist && sender.SupportsPeerAssist &&
+            packet.AssistMessage is { } message && IsValidAssistMessage(message, packet.NodeId, _nodeId))
+        {
+            try
+            {
+                AssistMessageReceived?.Invoke(this, new PeerAssistEnvelope(
+                    packet.NodeId, sender.Nickname, endpoint.Address.ToString(), message));
+            }
+            catch (Exception exception)
+            {
+                LogDiagnostic($"MikuN2N：好友协助消息回调异常：{exception.Message}");
+            }
+        }
+    }
+
+    private bool TryAllowQualityResponse(string nodeId)
+    {
+        while (_peers.TryGetValue(nodeId, out var current))
+        {
+            var now = Stopwatch.GetTimestamp();
+            if (current.LastQualityResponseAt != 0 &&
+                Stopwatch.GetElapsedTime(current.LastQualityResponseAt, now).TotalMilliseconds < 500)
+                return false;
+            if (_peers.TryUpdate(nodeId, current with { LastQualityResponseAt = now }, current))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsValidNodeId(string? value) => value is { Length: >= 8 and <= 64 } &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+
+    private static bool IsValidAssistMessage(PeerAssistMessage message, string sender, string recipient) =>
+        message.Kind is { Length: >= 1 and <= 32 } &&
+        message.Kind.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-') &&
+        Guid.TryParseExact(message.CircuitId, "N", out _) &&
+        (message.ReplyTo is null || Guid.TryParseExact(message.ReplyTo, "N", out _)) &&
+        (message.Detail is null || message.Detail.Length <= 256) &&
+        IsValidNodeId(message.RequesterNodeId) && IsValidNodeId(message.TargetNodeId) && IsValidNodeId(message.RelayNodeId) &&
+        message.RequesterNodeId != message.TargetNodeId && message.RequesterNodeId != message.RelayNodeId &&
+        message.TargetNodeId != message.RelayNodeId &&
+        (sender == message.RequesterNodeId || sender == message.TargetNodeId || sender == message.RelayNodeId) &&
+        (recipient == message.RequesterNodeId || recipient == message.TargetNodeId || recipient == message.RelayNodeId);
+
+    private static bool IsValidQuality(LinkQualitySnapshot quality, string targetNodeId) =>
+        quality.PeerNodeId == targetNodeId && quality.WindowSeconds == 60 &&
+        quality.Samples is >= 0 and <= 64 && quality.Lost >= 0 && quality.Lost <= quality.Samples &&
+        double.IsFinite(quality.AgeSeconds) && quality.AgeSeconds is >= 0 and <= 3600 &&
+        Enum.IsDefined(quality.Mode) && ValidMetric(quality.RttMs) && ValidMetric(quality.JitterMs) &&
+        ValidMetric(quality.P95RttMs) &&
+        ((quality.Samples == quality.Lost && quality.RttMs is null && quality.P95RttMs is null) ||
+         (quality.Samples > quality.Lost && quality.RttMs is not null && quality.P95RttMs is not null)) &&
+        (quality.Samples == 0 ? quality.LossPercent is null :
+            quality.LossPercent is { } loss && double.IsFinite(loss) &&
+            Math.Abs(loss - 100.0 * quality.Lost / quality.Samples) < 0.001);
+
+    private static bool ValidMetric(double? metric) => metric is null ||
+        double.IsFinite(metric.Value) && metric.Value is >= 0 and <= 10000;
+
     private async Task SendAsync(DiscoveryPacket packet, IPEndPoint endpoint, CancellationToken cancellationToken)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(StampIdentity(packet));
+        if (payload.Length > MaxDiscoveryPacketBytes)
+            throw new InvalidOperationException("好友消息过长。");
         await SendPayloadAsync(payload, endpoint, cancellationToken);
     }
 
@@ -741,19 +946,7 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
             }
             _publishRequested = false;
 
-            var snapshots = _peers
-                .Select(peer => new PeerSnapshot(
-                    peer.Key,
-                    peer.Value.Nickname,
-                    peer.Value.Address.ToString(),
-                    peer.Value.LatencyMs,
-                    peer.Value.LastSeen,
-                    LatencyUnavailable: peer.Value.LatencyUnavailable,
-                    ClientVersion: peer.Value.ClientVersion,
-                    NativeVersion: peer.Value.NativeVersion,
-                    Ipv6WireVersion: peer.Value.Ipv6WireVersion))
-                .OrderBy(peer => peer.Nickname, StringComparer.CurrentCultureIgnoreCase)
-                .ToArray();
+            var snapshots = GetPeers();
             try
             {
                 PeersChanged?.Invoke(this, snapshots);
@@ -814,18 +1007,29 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
         bool? Reassert = null,
         string? ClientVersion = null,
         string? NativeVersion = null,
-        int? Ipv6WireVersion = null);
+        int? Ipv6WireVersion = null,
+        int? QualityVersion = null,
+        bool? SupportsPeerAssist = null,
+        string? QualityTargetNodeId = null,
+        LinkQualitySnapshot? Quality = null,
+        PeerAssistMessage? AssistMessage = null);
 
     private PeerState NewPeer(DiscoveryPacket packet, IPAddress address, DateTimeOffset now) =>
         new(packet.Nickname.Trim(), address, null, now, Stopwatch.GetTimestamp(),
             Interlocked.Increment(ref _measurementGeneration),
+            new PeerLinkQuality(),
             ClientVersion: NormalizeVersion(packet.ClientVersion),
             NativeVersion: NormalizeVersion(packet.NativeVersion),
-            Ipv6WireVersion: NormalizeWireVersion(packet.Ipv6WireVersion));
+            Ipv6WireVersion: NormalizeWireVersion(packet.Ipv6WireVersion),
+            QualityVersion: packet.QualityVersion == 1 ? 1 : 0,
+            SupportsPeerAssist: packet.SupportsPeerAssist == true);
 
     private sealed record NativeIdentity(string? Version, int? WireVersion);
 
     private sealed record PendingProbe(string NodeId, IPAddress Address, long SentAt, long Generation);
+
+    private sealed record PendingQualityQuery(string ReporterNodeId, IPAddress ReporterAddress,
+        string TargetNodeId, long SentAt, TaskCompletionSource<LinkQualitySnapshot?> Completion);
 
     private sealed record PeerState(
         string Nickname,
@@ -834,12 +1038,17 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
         DateTimeOffset LastSeen,
         long MeasurementStartedAt,
         long Generation,
+        PeerLinkQuality Quality,
         long LatencyAt = 0,
         string? PathKey = null,
         bool LatencyUnavailable = false,
         string? ClientVersion = null,
         string? NativeVersion = null,
-        int? Ipv6WireVersion = null);
+        int? Ipv6WireVersion = null,
+        int QualityVersion = 0,
+        bool SupportsPeerAssist = false,
+        PeerConnectionMode Mode = PeerConnectionMode.Unknown,
+        long LastQualityResponseAt = 0);
 }
 
 public sealed record RelayPolicyRequest(

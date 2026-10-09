@@ -633,6 +633,25 @@ typedef struct mikun2n_nat_state {
 
 #define MIKUN2N_FORCED_RELAY_MAX 64
 #define MIKUN2N_PUNCH_HISTORY_MAX 64
+#define MIKUN2N_ASSIST_MAX 32
+
+typedef struct mikun2n_assist {
+    uint8_t circuit[16];
+    uint8_t role; /* 1 endpoint, 2 relay, 3 standby */
+    n2n_mac_t first_mac;
+    n2n_mac_t second_mac;
+    uint64_t expires_ms;
+    uint64_t ready_until_ms;
+    uint64_t next_probe_ms;
+    uint64_t challenges[8];
+    uint64_t challenge_sent_ms[8];
+    unsigned next_challenge;
+    uint64_t tx_sequence;
+    uint64_t rx_sequence[2];
+    uint64_t rx_window[2];
+    uint64_t tx_packets;
+    uint64_t rx_packets;
+} mikun2n_assist_t;
 
 typedef struct mikun2n_punch_history {
     n2n_mac_t mac;
@@ -678,6 +697,10 @@ struct n3n_runtime_data {
     uint8_t mikun2n_ipv6_stun_index;
     bool mikun2n_ipv6_stun_initialized;
     bool mikun2n_ipv6_stun_pending;
+    mikun2n_assist_t mikun2n_assists[MIKUN2N_ASSIST_MAX];
+#ifdef _WIN32
+    SRWLOCK mikun2n_assist_lock;
+#endif
 
 #ifndef SKIP_MULTICAST_PEERS_DISCOVERY
     int udp_multicast_sock;                                              /**< socket for local multicast registrations. */
