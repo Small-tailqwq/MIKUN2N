@@ -57,6 +57,45 @@ Check(!JsonSerializer.Serialize(nodeReceiver).Contains("offline-group\"", String
     "community proof key is never serialized from a receiver description");
 Console.WriteLine("PASS: node receiver batch, proof and URL match the receiver; certificate change revokes permission");
 
+// Settings saved during a connection: the receiver check and consent must run for the
+// connection itself instead of waiting, unnoticed, for the next one.
+ActiveDiagnosticsChange Plan(DiagnosticUploadPreference upload, DiagnosticUploadPreference previous,
+    bool nodeUpload = true, bool previousNodeUpload = true, bool recording = true, bool uploading = false,
+    bool privateProfile = false, string target = "", string previousTarget = "")
+{
+    var saved = new AppSettings { Nodes = [communityNode], ActiveNodeId = communityNode.Id, DiagnosticUpload = upload,
+        DiagnosticUploadTarget = target, ExperimentalDiagnosticUpload = nodeUpload };
+    return DiagnosticUploadConsent.PlanSettingsChange(saved, previous, previousTarget, previousNodeUpload,
+        privateProfile, recording, uploading, recording && !privateProfile);
+}
+var allow = DiagnosticUploadPreference.AlwaysAllow;
+var ask = DiagnosticUploadPreference.Ask;
+var deny = DiagnosticUploadPreference.AlwaysDeny;
+Check(Plan(allow, ask) == ActiveDiagnosticsChange.Authorize, "always allow chosen mid-connection asks and binds now");
+Check(Plan(allow, ask, uploading: true) == ActiveDiagnosticsChange.Authorize, "a one-time upload still binds always allow");
+Check(Plan(allow, ask, previousNodeUpload: false, recording: false) == ActiveDiagnosticsChange.Start,
+    "enabling node uploads mid-connection starts a recording");
+Check(Plan(ask, ask, previousNodeUpload: false, recording: false) == ActiveDiagnosticsChange.Start &&
+      Plan(deny, deny, previousNodeUpload: false, recording: false) == ActiveDiagnosticsChange.Start,
+    "every preference gets the same recording as connecting would");
+Check(Plan(allow, ask, recording: false) == ActiveDiagnosticsChange.None &&
+      Plan(allow, ask, previousNodeUpload: false, recording: false, privateProfile: true) == ActiveDiagnosticsChange.None,
+    "no recording appears from unrelated saves or in private builds");
+Check(Plan(ask, ask, previousNodeUpload: false) == ActiveDiagnosticsChange.Authorize,
+    "re-enabling node uploads asks again");
+Check(Plan(ask, deny) == ActiveDiagnosticsChange.Authorize, "leaving always deny asks this connection");
+Check(Plan(ask, allow, uploading: true) == ActiveDiagnosticsChange.StopUpload &&
+      Plan(ask, allow) == ActiveDiagnosticsChange.None, "leaving always allow withdraws its upload without asking");
+Check(Plan(deny, allow, uploading: true) == ActiveDiagnosticsChange.StopUpload &&
+      Plan(deny, ask) == ActiveDiagnosticsChange.None, "always deny stops uploads and never prompts");
+Check(Plan(ask, ask, nodeUpload: false, uploading: true) == ActiveDiagnosticsChange.StopUpload,
+    "disabling node uploads stops the node upload");
+Check(Plan(allow, allow, uploading: true, target: "T", previousTarget: "T") == ActiveDiagnosticsChange.None &&
+      Plan(ask, ask, uploading: true) == ActiveDiagnosticsChange.None, "unrelated saves leave a running upload alone");
+Check(Plan(allow, allow, privateProfile: true, target: "B", previousTarget: "A") == ActiveDiagnosticsChange.Authorize,
+    "a re-bound private permission resumes upload");
+Console.WriteLine("PASS: settings saved during a connection reach consent, start, stop or leave uploads as chosen");
+
 var root = Path.Combine(Path.GetFullPath(args.Single()),Guid.NewGuid().ToString("N"));
 
 var updateRoot = Path.Combine(root,"update");

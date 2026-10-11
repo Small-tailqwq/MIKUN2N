@@ -275,7 +275,10 @@ extern char * sock_to_cstr (n2n_sock_str_t out,
         char tmp[INET6_ADDRSTRLEN+1];
 
         tmp[0] = '\0';
-        inet_ntop(AF_INET6, sock->addr.v6, tmp, sizeof(n2n_sock_str_t));
+        /* The length is the destination's own size; passing the larger
+         * n2n_sock_str_t size made glibc's fortified inet_ntop abort the
+         * Linux supernode on the first IPv6 socket it formatted. */
+        inet_ntop(AF_INET6, sock->addr.v6, tmp, sizeof(tmp));
         snprintf(out, N2N_SOCKBUF_SIZE, "[%s]:%hu", tmp[0] ? tmp : "", sock->port);
         return out;
     } else {

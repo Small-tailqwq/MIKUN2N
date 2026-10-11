@@ -108,6 +108,7 @@ void peer_info_free (struct peer_info *p) {
         }
     }
     free(p->hostname);
+    if(p->mikun2n_ipv6_diag_close) p->mikun2n_ipv6_diag_close(p);
     free(p->mikun2n_ipv6_reassembly);
     free(p);
 }

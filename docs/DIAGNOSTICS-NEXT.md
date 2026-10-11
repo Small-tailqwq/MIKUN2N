@@ -2,13 +2,11 @@
 
 > [English](DIAGNOSTICS-NEXT.md) | [简体中文](DIAGNOSTICS-NEXT.zh.md)
 
-Status: proposed on September 19, 2026. This document and the corresponding TODO
-describe future work. No logging policy, receiver limit, upload protocol, retention
-setting or running service was changed during this assessment.
+Status: proposed on September 19, 2026.
 
 ## Measured capacity
 
-A read-only snapshot of the receiver filesystem around 00:39 UTC+8 gives:
+A snapshot of the receiver filesystem around 00:39 UTC+8 gives:
 
 | Measure | Observed value |
 |---|---:|
@@ -29,7 +27,7 @@ is a storage snapshot, not an unconstrained daily demand estimate.
 Observed raw diagnostic generation ranges from about 23 to 51 MiB per client
 hour across these segments; an earlier supplied capped session reaches about
 53 MiB/hour. Several are short sessions rather than full-day steady workloads.
-Use 25-55 MiB/hour for the following planning scenarios, not a guaranteed bound.
+The following planning scenarios use an estimated 25-55 MiB/hour.
 
 | Scenario | Raw diagnostic data/day | Compressed data/day at a conservative 15% ratio |
 |---|---:|---:|
@@ -45,9 +43,8 @@ other services' growth, retransmissions and additional future instrumentation.
 A bounded sample of about 16.83 MiB, taken after the first five minutes of each
 available segment, compresses to about 1.83 MiB using gzip level 3 in independent
 32 KiB blocks: **10.89% of the original bytes**. Per-segment samples range from
-about 9.7% to 11.8%. This is an offline size measurement of existing records,
-not a measured production network saving or a new-client throughput benchmark.
-The 15% scenario allows some variation but is not a worst-case compression bound.
+about 9.7% to 11.8%. The planning estimate uses 15% to allow for variation in
+these offline samples.
 
 At the current filesystem occupancy, a **4 GiB actual allocated-storage budget**
 for diagnostics would leave about 5.83 GiB available if filled, assuming other
@@ -58,8 +55,7 @@ expiry is measured from a segment's first receipt, not separately from each row.
 
 This supports a moderate quota increase together with compression and batching.
 Uncompressed logging by ten continuously active clients can exceed current free
-space in a day; unlimited uploads/storage are not supported by these estimates.
-No quota increase has been deployed.
+space in a day.
 
 ## Current sources of overhead
 
@@ -77,7 +73,6 @@ Byte accounting across the retained NDJSON gives:
 Snapshot records contain changing timestamps, ages, counters and latency values;
 ordinary byte-for-byte deduplication will not remove their repetition. Preserve
 meaningful changes and summarize counters rather than comparing complete JSON.
-The byte shares identify an optimization target, not a guaranteed deletion ratio.
 
 `EdgeController` logs peer management rows every approximately 1.5 seconds, NAT
 rows about every four seconds, interface inventories every 30 seconds, and a full
@@ -134,26 +129,25 @@ size/readiness cases already found. Keep unfamiliar warnings and bounded raw
 context for issues the current schema does not anticipate; a known-error-only
 whitelist would undermine future investigation.
 
-Detailed tracing cannot guarantee complete packet-level attribution of every
-future fault. A hard process crash may prevent its final record; periodic progress
-checkpoints and explicit missing-tail indicators must distinguish that uncertainty
+A hard process crash may prevent its final record; periodic progress checkpoints
+and explicit missing-tail indicators must distinguish that uncertainty
 from a clean disconnect. No packet contents or credentials are added to the data.
 
 ## Upload priority, limits and recovery
 
 Event exemption means that exhausting a **routine allowance** does not stop a
-connect/disconnect/retry/fallback record or its bounded incident context. It does
-not mean ignoring physical disk exhaustion or sending unlimited bytes. Keep a
-reserved critical queue; routine backlog must not head-of-line block terminal
-or failure metadata. Retain logical event sequence, original event time and
+connect/disconnect/retry/fallback record or its bounded incident context. Physical
+storage and upload-rate limits still apply. Keep a reserved critical queue;
+routine backlog must not head-of-line block terminal or failure metadata.
+Retain logical event sequence, original event time and
 incident linkage even if urgent delivery overtakes an older routine batch.
 
 Proposed tuning points to verify before release:
 
 - Stable payload averages at most 1 KiB/s per client after compaction/compression.
   Incident detail/catch-up is paced to at most 8 KiB/s, with a bounded small burst
-  allowance. Retries share the same limiter. These are payload targets, not a
-  guarantee of whole-connection bandwidth or game latency on every network.
+  allowance. Retries share the same payload limiter; account for transport
+  overhead separately.
 - Batch stable data up to about 64 KiB decoded or 15 seconds, whichever comes
   first. Urgent incident headers should become eligible within about one second;
   detail follows within the bandwidth budget. Preserve the bounded exit flush.
@@ -178,7 +172,7 @@ currently starts a new consent-scoped segment and can discard prior pending work
 Endpoint-specific consent still gates all uploading. Pre-event upload context
 must contain only records collected within the current valid authorization and
 connection; do not include previously refused/revoked records or automatically
-replay earlier sessions. The update notice below is not permission to upload.
+replay earlier sessions.
 
 ## Local detail setting and update notice
 
@@ -190,9 +184,8 @@ omitting repetitive detailed samples. Either selection uses the same upload
 event policy and the same consent checks.
 
 The temporary bounded upload outbox is separate from user-retained local logs.
-Describe its purpose and limit explicitly: disabling retained detailed logs does
-not imply that authorized pending delivery never uses temporary disk storage.
-Do not make upload availability depend on whether a detailed local archive exists.
+Authorized pending uploads use this temporary storage even when detailed local
+logs are disabled. Explain the outbox purpose and limit in the setting.
 
 Current local defaults are 30 days, with choices of 7/30/90/180 days or permanent.
 There is also a four-segment, 256 MiB cap per diagnostic connection; that cap is
@@ -201,10 +194,9 @@ native text logs add approximately 2-10 MiB/hour in active longer sessions.
 
 For context, retaining uncompressed detail at 25-55 MiB/hour plus 2-10 MiB/hour
 of native text for eight hours/day would produce roughly 0.21-0.51 GiB/day,
-or **6.3-15.2 GiB over 30 days** without intervening size eviction. This is an
-uncapped planning scenario, not a claim about current bounded diagnostic storage.
-Compressing closed local files can reduce this, but the UI should estimate size
-from the user's actual recent rate rather than promise a fixed number.
+or **6.3-15.2 GiB over 30 days** without intervening size eviction. Compressing
+closed local files can reduce this. The UI should estimate size from the user's
+actual recent rate.
 
 Show the update explanation once per diagnostic-policy revision. Include what
 changed, the distinction between local detail and upload, current retention, a
@@ -220,9 +212,9 @@ existing incident traces to check that compaction retains the evidence needed fo
 previous IPv4/IPv6 failures, and compare upload projections with local detail on
 and off. Check quota-exhausted new-peer/disconnect/retry windows, priority under
 backlog, compression/idempotence, 507 waits, revocation, disk pressure, restart
-boundaries, rate limits and incomplete final flushes. Cold checks cannot establish
-real gameplay latency; any live/network/UI checks remain separately authorized.
+boundaries, rate limits and incomplete final flushes. Measure gameplay latency
+in a live session with participating players.
 
-Current assessment artifacts are the ignored `diagnostic-capacity.local.md` and
+Assessment artifacts are the ignored `diagnostic-capacity.local.md` and
 `diagnostic-capacity-report.local.md` under the September 18 analysis directory.
-Only file-content sizes and existing logs were measured; no load test was run.
+The measurements cover file-content sizes and existing logs.

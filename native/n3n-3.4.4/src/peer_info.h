@@ -47,6 +47,18 @@ typedef struct mikun2n_ipv6_probe {
     uint16_t bytes;
 } mikun2n_ipv6_probe_t;
 
+typedef struct {
+    uint64_t generation, local_mac, started_ms, report_ms, report_revision, report_seq, revision, path_generation;
+    uint64_t tx_attempted, tx_full, tx_full_bytes, tx_failed, tx_partial, tx_consumed_drop;
+    uint64_t tx_udp, tx_udp_bytes, tx_fragments, tx_udp_failed, tx_transient, tx_emsgsize;
+    uint64_t tx_inactive, tx_invalid_size, tx_budget, tx_datagram_highwater, tx_udp_highwater;
+    uint64_t tx_id_min, tx_id_max, tx_last_failure_id, tx_last_failure_offset, tx_last_failure_size, tx_last_error;
+    uint64_t rx_udp, rx_udp_bytes, rx_data, rx_bytes, rx_fragments, rx_control, rx_datagram_highwater, rx_udp_highwater;
+    uint64_t rx_id_min, rx_id_max, reject_header, reject_session, reject_version, reject_endpoint, reject_readiness;
+    uint64_t reject_policy, reject_candidate, reject_control, reject_pong, reject_alloc, resets;
+    mikun2n_ipv6_frag_diag_t frag;
+} mikun2n_ipv6_diag_t;
+
 struct peer_info {
     n2n_mac_t mac_addr;
     bool purgeable;
@@ -173,6 +185,9 @@ struct peer_info {
     uint16_t mikun2n_ipv6_peer_rx_limit;
     /* Allocated only by an edge receiving fragments; supernodes never allocate it. */
     mikun2n_ipv6_reassembly_t *mikun2n_ipv6_reassembly;
+    mikun2n_ipv6_diag_t mikun2n_ipv6_diag;
+    /* The common peer allocator also serves supernodes, which do not link IPv6 transport. */
+    void (*mikun2n_ipv6_diag_close)(struct peer_info *peer);
 
     UT_hash_handle hh;     /* makes this structure hashable */
 };

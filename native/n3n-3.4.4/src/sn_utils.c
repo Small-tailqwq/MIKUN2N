@@ -46,6 +46,7 @@
 #include "n2n_wire.h"           // for encode_buf, encode_PEER_INFO, encode_...
 #include "pearson.h"            // for pearson_hash_128, pearson_hash_32
 #include "peer_info.h"          // for purge_peer_list, clear_peer_list
+#include "mikun2n_nat_policy.h" // for mikun2n_bank_pair_kinds
 #include "portable_endian.h"    // for be16toh, htobe16
 #include "resolve.h"            // for resolve_create_thread, resolve_cancel...
 #include "sn_selection.h"       // for sn_selection_criterion_gather_data
@@ -2964,8 +2965,10 @@ static int process_udp (struct n3n_runtime_data * sss,
                             src_bank_nonce = query.mikun2n_bank_nonce;
                         }
 
-                        if(src_nat_kind == MIKUN2N_NAT_KIND_APDM &&
-                           scan->mikun2n_nat_kind == MIKUN2N_NAT_KIND_APDM &&
+                        /* A GO still needs both fresh bank reports, so the
+                         * edges decide which cone<->NAT4 rounds use banks. */
+                        if(mikun2n_bank_pair_kinds(src_nat_kind,
+                                                   scan->mikun2n_nat_kind) &&
                            src_bank_ready &&
                            !memcmp(scan->mikun2n_bank_target,
                                    query.srcMac, sizeof(n2n_mac_t)) &&

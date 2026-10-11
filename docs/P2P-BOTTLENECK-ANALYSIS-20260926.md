@@ -2,12 +2,12 @@
 
 > [English](P2P-BOTTLENECK-ANALYSIS-20260926.md) | [简体中文](P2P-BOTTLENECK-ANALYSIS-20260926.zh.md)
 
-This note follows the [September 18 IPv4 analysis](IPV4-PUNCH-ANALYSIS-20260918.md)
+This analysis follows the [September 18 IPv4 analysis](IPV4-PUNCH-ANALYSIS-20260918.md)
 and the [September 19 relay-pair analysis](RELAY-PAIR-ANALYSIS-20260919.md). It is
-based on this machine's native logs from September 9-20, mainly one 15-hour 0.5.8-4
+based on the supplied native logs from September 9-20, mainly one 15-hour 0.5.8-4
 session (September 19 19:27 to September 20 10:34), read against the native source
 at tag `0.5.8-4`. Peers are described by role; addresses, MACs and node names stay
-in local files. No client was connected and no server was changed for this analysis.
+in local files.
 
 ## What the logs show
 
@@ -96,7 +96,7 @@ coordination fail exactly when direct paths are most needed.
 
 ## Changes in 0.5.8-5
 
-The authoritative native list is item 50 in [Runtime/README.txt](../Runtime/README.txt).
+The native change record is [0.5.8-5, patch 50](../Runtime/changes/0.5.8-5.md#patch-50).
 In summary:
 
 - **IPv6 keepalive.** Probes are scheduled for the loss case and repeated every 500 ms

@@ -55,7 +55,7 @@ Client test usage: enter `vps.example.com:3077, vps2.example.com:3076` in one no
 ## Known limits and risks
 
 - **GO synchronization skew**: in cross-supernode dual NAT4 punching, each side's SN times its GO independently; skew ≈ clock difference + query phase difference (about 400ms on average), losing about 6% of the 7s window; the attempt-driven scan tolerates it. Fixing it needs a protocol field (breaking old/new compatibility), so it is not implemented for now.
-- **Model freshness**: on the federation forwarding path, the peer's bank model relies on being carried by QUERY_PEER; the reported TTL is tightened to 6s and the edge auto-recalibrates at 5s age (see Runtime/README.txt #37).
+- **Model freshness**: on the federation forwarding path, the peer's bank model relies on being carried by QUERY_PEER; the reported TTL is tightened to 6s and the edge auto-recalibrates at 5s age (see [patch 37](../Runtime/changes/unversioned.md#patch-37)).
 - **Trust model**: cross-node punch plans trust the NAT summary the source supernode already validated — mutual trust between the federation's supernodes is a prerequisite, so it should not be deployed across untrusted administrators.
 - **Compatibility**: patch #34's edge/supernode must be deployed together; an old edge connecting to multiple endpoints takes only the first (`SplitServers().First()` fallback), equivalent to ordinary single-node behavior.
 

@@ -21,7 +21,7 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
     private readonly SemaphoreSlim _socketRecoveryGate = new(1, 1);
     private UdpClient _udp;
     private readonly Action<string>? _diagnosticLog;
-    private readonly bool _traceLatency;
+    private volatile bool _traceLatency;
     private readonly string _nodeId;
     private readonly string _nickname;
     private readonly IPAddress _localAddress;
@@ -524,6 +524,9 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
             }
         }
     }
+
+    /// <summary>Diagnostics authorized after the connection started also want the latency trace.</summary>
+    public void EnableLatencyTrace() => _traceLatency = true;
 
     private void TraceLatency(string message)
     {

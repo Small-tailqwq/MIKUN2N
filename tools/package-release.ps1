@@ -15,6 +15,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
+python (Join-Path $PSScriptRoot 'agent_notes.py') check --repo-root $root
+if ($LASTEXITCODE -ne 0) { throw 'Agent Notes validation failed' }
+
 $project = Join-Path $root 'MikuN2N.csproj'
 [xml]$xml = Get-Content -LiteralPath $project -Raw
 $baseVersion = ($xml.Project.PropertyGroup | ForEach-Object { $_.BaseVersion } | Where-Object { $_ } | Select-Object -First 1)
@@ -44,8 +47,11 @@ $required = @(
     'MikuN2N.exe', 'LICENSE.txt', 'build-identity.txt',
     'Runtime/n3n-edge.exe', 'Runtime/n3n-3.4.4-source.zip', 'Runtime/tap-windows-installer.exe',
     'Runtime/LICENSE-n2n.txt', 'Runtime/LICENSE-tap-windows.txt', 'Runtime/LICENSE-dotnet.txt',
-    'Runtime/THIRD-PARTY-NOTICES.txt', 'Runtime/THIRD-PARTY-NOTICES-dotnet.txt', 'Runtime/README.txt'
+    'Runtime/THIRD-PARTY-NOTICES.txt', 'Runtime/THIRD-PARTY-NOTICES-dotnet.txt', 'Runtime/README.txt',
+    'Runtime/README.md', 'Runtime/README.zh.md', 'Runtime/BUILD.md', 'Runtime/BUILD.zh.md'
 )
+$required += Get-ChildItem -LiteralPath (Join-Path $root 'Runtime/changes') -Filter '*.md' -File |
+    ForEach-Object { "Runtime/changes/$($_.Name)" }
 foreach ($file in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $publish $file))) { throw "Package is missing $file" }
 }

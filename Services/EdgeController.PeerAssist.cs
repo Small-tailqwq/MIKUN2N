@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 using MikuN2N.Models;
 
 namespace MikuN2N.Services;
@@ -56,6 +58,9 @@ public sealed partial class EdgeController
         private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _acks = new();
         private readonly SemaphoreSlim _mutations = new(1, 1);
         private readonly Task _maintenance;
+        private long _lastDiagnosticSnapshot;
+        private string? _lastDiagnosticState;
+        private string? _lastManagementError;
         private string Local => _run.NodeId;
         private CancellationToken Token => _lifetime.Token;
 
@@ -74,7 +79,10 @@ public sealed partial class EdgeController
             _discovery.AssistMessageReceived -= OnMessage;
             _lifetime.Cancel();
             foreach (var circuit in _circuits.Values)
+            {
+                LogControl(circuit, "stop", "session_ended");
                 circuit.Completion.TrySetCanceled();
+            }
             foreach (var ack in _acks.Values) ack.TrySetCanceled();
         }
 
@@ -148,6 +156,7 @@ public sealed partial class EdgeController
             {
                 if (Conflicts(state)) throw new InvalidOperationException("与该好友已有协助申请或会话，请先结束。");
                 _circuits[state.Id] = state;
+                LogControl(state, "create", "requested");
             }
             finally { _mutations.Release(); }
             try
@@ -164,11 +173,13 @@ public sealed partial class EdgeController
             }
             catch (OperationCanceledException) when (!linked.IsCancellationRequested)
             {
+                LogControl(state, "expiry", "request_timeout");
                 await RemoveAsync(state.Id, "协助申请超时。", true, Token);
                 throw new InvalidOperationException("对方未及时确认，协助申请已取消。");
             }
-            catch
+            catch (Exception exception)
             {
+                LogControl(state, "request", "failed", error: exception.GetType().Name);
                 await RemoveAsync(state.Id, "协助申请已取消。", true, Token);
                 throw;
             }
@@ -181,6 +192,7 @@ public sealed partial class EdgeController
                 throw new InvalidOperationException("申请已过期或撤回。");
             if (!accept)
             {
+                LogControl(state, "approval", "declined");
                 await RemoveAsync(id, "对方未接受协助申请。", true, linked.Token);
                 return;
             }
@@ -191,10 +203,12 @@ public sealed partial class EdgeController
                 if (!Direct(state.Requester) || !Direct(state.Target))
                     throw new InvalidOperationException("你需要与申请人、通信对象都建立直连，才能协助转发。");
                 state.Phase = "preparing";
+                LogControl(state, "prepare", "started");
                 await InstallAsync(state, "relay", linked.Token);
             }
-            catch
+            catch (Exception exception)
             {
+                LogControl(state, "prepare", "failed", error: exception.GetType().Name);
                 state.Phase = "requested";
                 if (state.NativeRole is not null)
                     await RemoveCoreAsync(state, "协助配置未能确认，申请已取消。", true, Token);
@@ -205,15 +219,18 @@ public sealed partial class EdgeController
             {
                 await Task.WhenAll(ExchangeAsync(state, state.Requester, "prepare", "prepared", linked.Token),
                     ExchangeAsync(state, state.Target, "prepare", "prepared", linked.Token));
+                LogControl(state, "commit", "started");
                 await Task.WhenAll(ExchangeAsync(state, state.Requester, "commit", "committed", linked.Token),
                     ExchangeAsync(state, state.Target, "commit", "committed", linked.Token));
                 state.Phase = "committed";
+                LogControl(state, "commit", "confirmed");
                 state.RequesterSeen = state.TargetSeen = Stopwatch.GetTimestamp();
                 await SendAsync(state, state.Requester, "accepted", linked.Token);
                 _owner.AppendLog(_run, $"好友协助：已同意协助 {Name(state.Requester)} 与 {Name(state.Target)} 通信。");
             }
-            catch
+            catch (Exception exception)
             {
+                LogControl(state, "establish", "failed", error: exception.GetType().Name);
                 await RemoveAsync(id, "协助未能完成建立，已保留原路径。", true, Token);
                 throw;
             }
@@ -232,9 +249,24 @@ public sealed partial class EdgeController
                 state.SecondMac = ResolveMac(state.Relay == Local ? state.Target : state.Relay);
             }
             // A timed-out HTTP response may still have installed the native lease.
+            var roleChanged = state.NativeRole != role;
             state.NativeRole = role;
-            await _run.ManagementClient.SetPeerAssistAsync(state.Id, role, state.FirstMac,
-                state.SecondMac, true, token);
+            try
+            {
+                await _run.ManagementClient.SetPeerAssistAsync(state.Id, role, state.FirstMac,
+                    state.SecondMac, true, token);
+                if (roleChanged || state.NativeInstallError is not null)
+                    LogControl(state, "native_install", "confirmed");
+                state.NativeInstallError = null;
+            }
+            catch (Exception exception)
+            {
+                var error = exception.GetType().Name;
+                if (roleChanged || state.NativeInstallError != error)
+                    LogControl(state, "native_install", "unconfirmed", error: error);
+                state.NativeInstallError = error;
+                throw;
+            }
         }
 
         private string ResolveMac(string id)
@@ -294,7 +326,8 @@ public sealed partial class EdgeController
                 if (_circuits.TryGetValue(msg.CircuitId, out var ackState) && ackState.Matches(msg) &&
                     ackState.Relay == Local && (envelope.SenderNodeId == ackState.Requester || envelope.SenderNodeId == ackState.Target))
                     if (_acks.TryGetValue($"{msg.CircuitId}:{envelope.SenderNodeId}:{msg.Kind}", out var ack))
-                        ack.TrySetResult(true);
+                        if (ack.TrySetResult(true))
+                            LogControl(ackState, msg.Kind, "received", envelope.SenderNodeId);
                 return;
             }
 
@@ -316,6 +349,7 @@ public sealed partial class EdgeController
                     if (_circuits.Values.Any(c => c.Requester == msg.RequesterNodeId && c.Target == msg.TargetNodeId)) return;
                     state = new AssistCircuit(msg.CircuitId, msg.RequesterNodeId, msg.TargetNodeId, Local);
                     _circuits[state.Id] = state;
+                    LogControl(state, "create", "request_received", envelope.SenderNodeId);
                     _owner.PeerAssistRequested?.Invoke(_owner, new PeerAssistRequest(state.Id,
                         state.Requester, Name(state.Requester), state.Target, Name(state.Target), Local));
                     return;
@@ -332,11 +366,14 @@ public sealed partial class EdgeController
                         state = new AssistCircuit(msg.CircuitId, msg.RequesterNodeId, msg.TargetNodeId, msg.RelayNodeId);
                         if (Conflicts(state)) return;
                         _circuits[state.Id] = state;
+                        LogControl(state, "create", "prepare_received", envelope.SenderNodeId);
                     }
                     if (state.Phase != "committed")
                     {
+                        var phaseChanged = state.Phase != "prepared";
                         await InstallAsync(state, "standby", Token);
                         state.Phase = "prepared";
+                        if (phaseChanged) LogControl(state, "prepare", "confirmed", envelope.SenderNodeId);
                     }
                     state.RelaySeen = Stopwatch.GetTimestamp();
                     await SendAsync(state, state.Relay, "prepared", Token);
@@ -346,14 +383,19 @@ public sealed partial class EdgeController
                 if (msg.Kind == "commit" && envelope.SenderNodeId == state.Relay &&
                     state.Relay != Local && state.Phase is "prepared" or "committed")
                 {
+                    var phaseChanged = state.Phase != "committed";
                     await InstallAsync(state, "endpoint", Token);
                     state.Phase = "committed";
+                    if (phaseChanged) LogControl(state, "commit", "confirmed", envelope.SenderNodeId);
                     state.RelaySeen = Stopwatch.GetTimestamp();
                     await SendAsync(state, state.Relay, "committed", Token);
                 }
                 else if (msg.Kind == "accepted" && envelope.SenderNodeId == state.Relay &&
                          state.Requester == Local && state.Phase == "committed")
-                    state.Completion.TrySetResult(true);
+                {
+                    if (state.Completion.TrySetResult(true))
+                        LogControl(state, "accepted", "received", envelope.SenderNodeId);
+                }
                 else if (msg.Kind == "heartbeat" && envelope.SenderNodeId == state.Relay &&
                          state.Relay != Local && state.Phase == "committed")
                 {
@@ -367,7 +409,10 @@ public sealed partial class EdgeController
                     if (envelope.SenderNodeId == state.Target) state.TargetSeen = Stopwatch.GetTimestamp();
                 }
                 else if (msg.Kind == "stop" && state.Contains(envelope.SenderNodeId))
+                {
+                    LogControl(state, "stop", "received", envelope.SenderNodeId);
                     await RemoveCoreAsync(state, msg.Detail ?? "对方已结束协助。", state.Relay == Local, Token);
+                }
             }
             finally { _mutations.Release(); }
         }
@@ -395,6 +440,7 @@ public sealed partial class EdgeController
         private async Task RemoveCoreAsync(AssistCircuit state, string detail, bool notify, CancellationToken token)
         {
             if (!_circuits.TryRemove(state.Id, out _)) return;
+            LogControl(state, "stop", "started");
             _closedCircuits[state.Id] = Stopwatch.GetTimestamp();
             state.NativeActive = false;
             state.Completion.TrySetException(new InvalidOperationException(detail));
@@ -409,10 +455,17 @@ public sealed partial class EdgeController
                 {
                     await _run.ManagementClient.SetPeerAssistAsync(state.Id, state.NativeRole,
                         state.FirstMac, state.SecondMac, false, token);
+                    LogControl(state, "native_remove", "confirmed");
+                }
+                catch (OperationCanceledException)
+                {
+                    LogControl(state, "native_remove", "unconfirmed", error: nameof(OperationCanceledException));
+                    throw;
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
                     removalError = exception;
+                    LogControl(state, "native_remove", "unconfirmed", error: exception.GetType().Name);
                     _owner.AppendLog(_run, $"好友协助：本机撤销未获确认，将由短期租约失效：{exception.Message}");
                 }
             }
@@ -420,7 +473,11 @@ public sealed partial class EdgeController
                 foreach (var recipient in new[] { state.Requester, state.Target, state.Relay }.Where(p => p != Local))
                     try { await SendAsync(state, recipient, "stop", token, detail); }
                     catch (Exception exception) when (exception is not OperationCanceledException)
-                    { _owner.AppendLog(_run, $"好友协助：结束通知未送达：{exception.Message}"); }
+                    {
+                        LogControl(state, "stop_notify", "failed", recipient, exception.GetType().Name);
+                        _owner.AppendLog(_run, $"好友协助：结束通知未送达：{exception.Message}");
+                    }
+            LogControl(state, "stop", removalError is null ? "completed" : "native_unconfirmed");
             _owner.AppendLog(_run, $"好友协助：{detail}");
             if (removalError is not null)
                 throw new InvalidOperationException("撤销未获原生接口确认；已停止续期，协助会在 30 秒内失效。", removalError);
@@ -445,7 +502,10 @@ public sealed partial class EdgeController
                             if (state.Phase != "committed")
                             {
                                 if (Stopwatch.GetElapsedTime(state.Created).TotalSeconds > 60)
+                                {
+                                    LogControl(state, "expiry", "approval_timeout");
                                     await RemoveCoreAsync(state, "协助申请已过期。", true, Token);
+                                }
                                 continue;
                             }
                             var expired = state.Relay == Local
@@ -454,6 +514,7 @@ public sealed partial class EdgeController
                                 : Stopwatch.GetElapsedTime(state.RelaySeen).TotalSeconds > 15;
                             if (expired)
                             {
+                                LogControl(state, "expiry", "participant_timeout");
                                 await RemoveCoreAsync(state, "协助者或参与好友已失联，已恢复原路径。", true, Token);
                                 continue;
                             }
@@ -473,20 +534,87 @@ public sealed partial class EdgeController
                         var rows = await _run.ManagementClient.GetPeerAssistsAsync(Token);
                         foreach (var state in _circuits.Values)
                         {
+                            var wasActive = state.NativeActive;
                             state.NativeActive = rows.Any(row => row.TryGetProperty("circuit", out var id) &&
                                 id.GetString() == state.Id && row.TryGetProperty("active", out var active) &&
                                 active.ValueKind == System.Text.Json.JsonValueKind.True);
+                            if (wasActive != state.NativeActive)
+                                LogControl(state, "native_active", state.NativeActive ? "active" : "inactive");
                         }
+                        LogManagementSnapshot(rows, null);
                         if (_owner.IsCurrentRun(_run)) _owner.PublishConnected(_run);
                     }
                     catch (Exception exception) when (exception is not OperationCanceledException)
                     {
-                        foreach (var state in _circuits.Values) state.NativeActive = false;
-                        _owner.AppendLog(_run, $"好友协助：尚未确认转发状态：{exception.Message}");
+                        foreach (var state in _circuits.Values)
+                        {
+                            if (state.NativeActive) LogControl(state, "native_active", "unknown", error: exception.GetType().Name);
+                            state.NativeActive = false;
+                        }
+                        if (_lastManagementError != exception.GetType().Name)
+                            _owner.AppendLog(_run, $"好友协助：尚未确认转发状态：{exception.Message}");
+                        LogManagementSnapshot(null, exception.GetType().Name);
                     }
                 }
             }
             catch (OperationCanceledException) when (Token.IsCancellationRequested) { }
+        }
+
+        private void LogControl(AssistCircuit state, string action, string result,
+            string? peer = null, string? error = null)
+        {
+            var data = new
+            {
+                monoMs = Environment.TickCount64,
+                run = _run.SessionId, localNodeId = Local, circuit = state.Id,
+                requesterNodeId = state.Requester, targetNodeId = state.Target, relayNodeId = state.Relay,
+                phase = state.Phase, nativeRole = state.NativeRole,
+                nativeActive = result == "unknown" ? null : (bool?)state.NativeActive,
+                action, result, peerNodeId = peer, error
+            };
+            _run.Diagnostics?.Write("peer_assist_control", data);
+            _owner.AppendLog(_run, $"MikuN2N assistctl {JsonSerializer.Serialize(data)}");
+        }
+
+        private void LogManagementSnapshot(IReadOnlyList<JsonElement>? rows, string? error)
+        {
+            var circuits = _circuits.Values.OrderBy(c => c.Id).Take(32).Select(c => new
+            {
+                circuit = c.Id, requesterNodeId = c.Requester, targetNodeId = c.Target,
+                relayNodeId = c.Relay, phase = c.Phase, nativeRole = c.NativeRole,
+                nativeActive = error is null ? (bool?)c.NativeActive : null
+            }).ToArray();
+            var circuitCount = _circuits.Count;
+            var signature = $"{error}:{circuitCount}:" + JsonSerializer.Serialize(circuits);
+            var changed = signature != _lastDiagnosticState;
+            if (error != _lastManagementError)
+                _owner.AppendLog(_run, $"MikuN2N assistctl management_query monoMs={Environment.TickCount64} run={_run.SessionId} localNodeId={Local} result={(error is null ? "recovered" : "failed")} error={error ?? "none"}");
+            _lastManagementError = error;
+            if (!changed && Stopwatch.GetElapsedTime(_lastDiagnosticSnapshot).TotalSeconds < 10) return;
+            _lastDiagnosticSnapshot = Stopwatch.GetTimestamp();
+            _lastDiagnosticState = signature;
+
+            // Keep the full native row schema while leaving headroom below the
+            // diagnostic writer's 64 KiB record limit for identities and metadata.
+            var boundedRows = rows is null ? null : new List<JsonElement>();
+            var rowBytes = 0;
+            if (rows is not null)
+                foreach (var row in rows.Take(32))
+                {
+                    var size = Encoding.UTF8.GetByteCount(row.GetRawText());
+                    if (rowBytes + size > 32 * 1024) break;
+                    boundedRows!.Add(row);
+                    rowBytes += size;
+                }
+            _run.Diagnostics?.Write("management_peer_assists", new
+            {
+                monoMs = Environment.TickCount64,
+                run = _run.SessionId, localNodeId = Local, success = error is null, error,
+                reason = changed ? "state_changed" : "periodic",
+                circuitCount, circuits, circuitsTruncated = circuitCount > circuits.Length,
+                rowCount = rows?.Count, rows = boundedRows,
+                rowsTruncated = rows is not null && rows.Count > boundedRows!.Count
+            });
         }
 
         private sealed class AssistCircuit(string id, string requester, string target, string relay)
@@ -502,6 +630,7 @@ public sealed partial class EdgeController
             internal volatile string Phase = "requested";
             internal volatile bool NativeActive;
             internal string? NativeRole;
+            internal string? NativeInstallError;
             internal string? FirstMac;
             internal string? SecondMac;
             internal TaskCompletionSource<bool> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

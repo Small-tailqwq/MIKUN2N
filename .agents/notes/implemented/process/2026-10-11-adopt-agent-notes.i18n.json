@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "key": "(preamble)",
+      "en": "e3b0c44298fc1c14",
+      "zh": "e3b0c44298fc1c14"
+    },
+    {
+      "key": "# Agent Note: Adopt bilingual Agent Notes for MikuN2N",
+      "en": "e53dfe5377368abb",
+      "zh": "5fc3ae90355ce597"
+    },
+    {
+      "key": "## Problem",
+      "en": "d2467e5cb2c14293",
+      "zh": "6c4a9b8ed3b874df"
+    },
+    {
+      "key": "## Decision",
+      "en": "99cd62a8cfb9d898",
+      "zh": "df0605490b250d7d"
+    },
+    {
+      "key": "## Alternatives considered",
+      "en": "ff7f45c2454bcbc0",
+      "zh": "b628e9fe30dcc582"
+    },
+    {
+      "key": "## Consequences",
+      "en": "51d13a421945c3e3",
+      "zh": "ca1cec01ccad0631"
+    }
+  ]
+}

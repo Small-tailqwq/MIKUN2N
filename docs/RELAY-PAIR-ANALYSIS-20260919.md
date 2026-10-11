@@ -3,8 +3,7 @@
 > [English](RELAY-PAIR-ANALYSIS-20260919.md) | [简体中文](RELAY-PAIR-ANALYSIS-20260919.zh.md)
 
 This extends the [IPv4 punch investigation](IPV4-PUNCH-ANALYSIS-20260918.md)
-with server byte accounting and the available counterpart logs. Analysis only:
-no runtime code, clients, or server configuration were changed.
+with server byte accounting and the available counterpart logs.
 
 Aliases are consistent with that investigation: A is the initiating client,
 B the supplied archive's owner, and C the older IPv4-only peer. D is the peer
@@ -36,13 +35,13 @@ These four pairs account for 99.78% of unicast pSp. A-C accounts for only
 C's next largest pair after B is another peer at 0.011407 GB. Broadcast is excluded
 from these comparisons and must not be mistaken for failed direct connections.
 
-New read-only receiver analysis covers C's 0.5.8-1 upload from September 18
+The receiver logs cover C's 0.5.8-1 upload from September 18
 21:14:00-23:26:16 and E's 0.5.8-1 upload from 13:00:35-15:00:31. Both stop near
 64 MiB. B's native archive continues after its detailed recorder fills. Existing
 September 16 extracts provide earlier C/A/B comparisons. The receiver inventory
-contains no retained D-owned diagnostic session at this inspection; D's later
+contains no retained D-owned diagnostic session for this analysis; D's later
 behavior is reconstructed from B's logs, accounting identities, and operator
-confirmation, not a claimed analysis of an unavailable D-side trace.
+confirmation.
 
 ## B-C: direct connection lost, then bounded recovery fails
 
@@ -71,9 +70,8 @@ cross-host timestamps as network latency.
 
 Native `src/edge_utils.c:2652` deletes a known peer after no direct receipt for
 `timeout / 2`; this peer reports `timeout=20`, so the observed roughly ten-second
-cutoff matches the implementation. This is a real receive gap preceding expiry,
-not evidence that the UI alone invented a disconnection. No manual forced relay
-is set in the reviewed rows.
+cutoff matches the implementation. A receive gap precedes the expiry. No manual
+forced relay is set in the reviewed rows.
 
 The previously successful B endpoint is 2,336 ports away from the control endpoint
 used by C's replacement attempts. Both sides then select CONE. The three bank
@@ -120,9 +118,8 @@ the two behaviors:
 Consequently most B-D relay belongs to a period without the experimental IPv6
 path being offered, while the older IPv6 implementation also has genuine earlier
 fallback evidence. These must not be combined into one MTU-failure count. Native
-NAT4 coordination additionally needs support from both ends; do not assume the
-older n2n client implements the patched bank protocol. A socket/control candidate
-and successful server registration alone do not establish direct reachability.
+NAT4 coordination requires both ends to support the patched bank protocol;
+the older n2n client lacks that support.
 
 ## B-E: a second direct-then-relay pattern with a missing counterpart window
 
@@ -136,9 +133,8 @@ B-E unicast relay, almost all of this pair's 0.37946 GB in the wider window.
 
 The traffic and B-side failure sequence align, but E's recorder stopped before
 the important event. There is no fresh counterpart evidence to identify the
-original receive interruption. This is a concrete example for the requested
-new-peer diagnostic-window/allowance follow-up; missing uploads must not be
-treated as an offline client or as proof that the other endpoint caused failure.
+original receive interruption. Extending diagnostic coverage would help capture
+both ends of such failures.
 
 ## A-C and priorities for the next iteration
 
@@ -147,7 +143,7 @@ promoted after about five seconds. A's later new session around 23:21 produces
 three failed attempts instead. This pair can succeed and later fail under a new
 mapping; its accumulated relay bytes are nevertheless small compared with B-C.
 
-Prioritize recovery of established IPv4 paths in the next authorized iteration:
+Prioritize recovery of established IPv4 paths:
 capture the receive-gap cause, preserve previously working candidates for bounded
 revalidation, coordinate the pair's remaining attempts, and reject empty rounds.
 Revalidate port-model/coverage changes against actual worker mappings instead of
@@ -155,7 +151,6 @@ simply extending probing indefinitely. For D, distinguish updated-client IPv6
 acceptance from interoperability with the older n2n client. Continue improving
 paired diagnostic coverage under valid endpoint-specific consent.
 
-These are recorded findings and proposals, not implemented fixes. Details and
-source references are preserved in the ignored `heavy-pairs.local.md` report and
-its adjacent JSONL extracts under `artifacts/analysis-20260918-ipv4/`. Raw addresses,
+Details and source references are preserved in the ignored `heavy-pairs.local.md`
+report and its adjacent JSONL extracts under `artifacts/analysis-20260918-ipv4/`. Raw addresses,
 MACs, upload session identifiers, and private configuration are excluded here.

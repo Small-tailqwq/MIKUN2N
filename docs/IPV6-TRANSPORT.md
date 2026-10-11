@@ -3,9 +3,41 @@
 > [English](IPV6-TRANSPORT.md) | [简体中文](IPV6-TRANSPORT.zh.md)
 
 The 0.5.8-4 test build uses a bounded, two-level packetization-layer discovery
-profile using [RFC 8899](https://www.rfc-editor.org/rfc/rfc8899.html) principles. This is
-not a full general-purpose DPLPMTUD state machine. It separates each direction's
-confirmed UDP size from peer receive capacity, path liveness and larger probes.
+profile using [RFC 8899](https://www.rfc-editor.org/rfc/rfc8899.html) principles.
+It separates each direction's confirmed UDP size from peer receive capacity,
+path liveness and larger probes.
+
+## Local address selection and interface recovery
+
+The edge rescans local IPv6 addresses every ten seconds. Initial Windows selection
+uses an up interface with an IPv6 gateway, a preferred address with sufficient
+lifetime, address type and interface metric. A selected source is bound to one
+IPv6 socket; STUN and peer checks determine whether to retain the binding.
+
+The edge retains a still-eligible current binding unless existing connectivity
+checks keep failing. A validated STUN reply or matching peer PONG clears that
+failure window. Only unanswered/hard-failed STUN requests and eligible peers'
+base checks count against the binding; larger MTU probes, transient queue errors,
+absent observers, and known incompatible/offline peers do not. A new binding has
+30 seconds to settle. Retrying another interface requires at least three failures
+spanning 20 seconds, with a failure in the preceding 15 seconds.
+
+On retry, the whole failed interface is temporarily excluded for 60 seconds so
+its other temporary addresses cannot hide a usable Wi-Fi interface. A bounded
+history tracks up to 16 recently failed interfaces. A current address that leaves
+the eligible list can be replaced without waiting for the failure window. With
+no eligible alternative, an existing candidate remains available for recovery;
+if no local candidate remains, IPv4 continues. Enumeration failure preserves the
+existing binding. A replacement socket must be configured and bound successfully
+before the old socket is closed; failed replacements enter the same cooldown.
+
+Rebinding clears old local mapping transactions, peer path/readiness proof,
+outstanding probes and fragment assemblies, then refreshes peer candidates and
+checks them with a new local session token. IPv4 paths remain available while
+IPv6 is re-established. Ordinary logs record selection, interface and failure
+reasons. A working replacement is retained even if the failed interface later
+has a lower metric. Users manage network connections in Windows. Recovery selects
+one address on another interface and leaves system routing unchanged.
 
 ## Size discovery
 
@@ -65,8 +97,7 @@ unknown sessions, wrong endpoints and excess concurrent assemblies are rejected.
 Fragment loss drops the original UDP datagram; there is no reliability/retry layer.
 A partially sent datagram is never replayed simultaneously through IPv4. With
 independent fragment loss probability p, a datagram split into two fragments
-succeeds with probability (1-p)^2; correlated loss can differ. Fragmentation thus
-increases datagram loss, and this transport deliberately adds no retransmissions.
+succeeds with probability (1-p)^2; correlated loss can differ.
 
 Native summaries expose sent/received fragments, completed assemblies and transient
 drops. Individual events report path expiry and send errors. Obsolete `oversize_fallback_*` counters were
@@ -79,7 +110,6 @@ ceiling). The redundant `ipv6_tx_udp_bytes` alias and generation-derived
 of the reverse path. Obtain the reverse outbound limit from the other endpoint's
 row. These fields are intended for local API consumers and consented raw
 `management_edges` diagnostic records; the friend UI does not display them.
-They do not change a router's IPv6 MTU or the peer's TAP setting.
 
 ## Compatibility and validation
 
@@ -105,5 +135,8 @@ python tools/offline-tests/test_server.py artifacts/offline-server
 The 0.5.8-4 checks also cover 1200 unfragmented sends without ID consumption,
 an admitted assembly surviving an ID jump until its deadline, real 64 MiB log
 rotation, exact uploaded bytes/record/chunk sequences, retained chunks after 507,
-and manual resume/revocation during capacity backoff. They do not establish real public-IPv6/NAT66
-behavior, both WPF themes, sustained game traffic or a reduction in the cloud bill.
+and manual resume/revocation during capacity backoff.
+
+Live validation covers public IPv6/NAT66, Windows adapter selection during
+router failure or Wi-Fi switching, both WPF themes, and sustained
+game traffic. Record interruptions and recovery during interface switches.

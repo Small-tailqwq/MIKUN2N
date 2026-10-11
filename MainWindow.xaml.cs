@@ -76,6 +76,8 @@ public partial class MainWindow : Window
     private int _logLineCount;
     private DateTimeOffset? _uptimeOrigin;
     private TestDiagnosticsSession? _diagnostics;
+    // The node as connected; Settings may edit the active node while the connection runs.
+    private SupernodeNode? _connectionNode;
     private readonly ObservableCollection<PeerSnapshot> _displayPeers = [];
     private ContextMenu? _activePeerMenu;
     private string? _activePeerMenuNodeId;
@@ -481,6 +483,7 @@ public partial class MainWindow : Window
         {
             _connectionBusy = true;
             await FinishDiagnosticsAsync();
+            _connectionNode = CopyNode(node);
             var (receiver, certificateChanged) = TestBuildProfile.Current is { } profile
                 ? (profile, false)
                 : _settings.ExperimentalDiagnosticUpload
@@ -491,32 +494,8 @@ public partial class MainWindow : Window
             {
                 var consent = ResolveDiagnosticConsent(receiver, certificateChanged);
                 if (_closeInProgress) return;
-                try
-                {
-                    _diagnostics = new TestDiagnosticsSession(receiver, consent, KeyBox.Password,
-                        status => Dispatcher.InvokeAsync(() => UpdateDiagnosticStatus(status)));
-                    StopUploadButton.IsEnabled = consent;
-                    ResumeDiagnosticsButton.IsEnabled = true;
-                    if (receiver.IsNodeReceiver && receiver.CertificateSha256.Length == 0)
-                    {
-                        DiagnosticsStatusText.Text = "节点服务器没有开启日志接收，详细日志只保存在本机。";
-                        // An enabled preference with no receiver answer used to skip consent in
-                        // silence: no prompt, no upload, and one panel line as the only sign.
-                        // The player asked to upload, so name the unreachable receiver instead.
-                        if (_settings.DiagnosticUpload != DiagnosticUploadPreference.AlwaysDeny)
-                        {
-                            ThemedMessageDialog.Show(this,
-                                $"连接前检查了 {new Uri(receiver.UploadUrl).Authority} 的日志接收端，没有得到响应。" +
-                                "本次详细日志只保存在本机，不会上传。\n\n" +
-                                $"若这台服务器应当接收日志，请确认它的诊断接收端正在运行，并且已放行 TCP {TestBuildProfile.NodeReceiverPort}（主机防火墙和云安全组都要放行）。",
-                                "本次不上传诊断日志", MessageKind.Warning);
-                        }
-                    }
-                }
-                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-                {
-                    DiagnosticsStatusText.Text = "详细日志无法写入，本次不会上传日志。";
-                }
+                _diagnostics = CreateDiagnostics(receiver, consent, "连接前");
+                RefreshDiagnosticButtons();
             }
             await _edgeController.StartAsync(
                 node.Server,
@@ -655,6 +634,131 @@ public partial class MainWindow : Window
             await diagnostics.StopUploadAsync();
     }
 
+    private static SupernodeNode CopyNode(SupernodeNode node) =>
+        new() { Id = node.Id, Name = node.Name, Server = node.Server, Community = node.Community };
+
+    private static bool SameNode(SupernodeNode? a, SupernodeNode? b) =>
+        a is not null && b is not null && a.Id == b.Id && a.Name == b.Name &&
+        a.Server == b.Server && a.Community == b.Community;
+
+    /// <summary>Creates the recording for a connection; null when it cannot be written.</summary>
+    private TestDiagnosticsSession? CreateDiagnostics(TestBuildProfile receiver, bool consent, string checkedWhen)
+    {
+        try
+        {
+            TestDiagnosticsSession? diagnostics = null;
+            // A replaced recording keeps reporting while it closes; only the current one
+            // (or the last one, after disconnecting) may own the panel.
+            diagnostics = new TestDiagnosticsSession(receiver, consent, KeyBox.Password,
+                status => Dispatcher.InvokeAsync(() =>
+                {
+                    if (_diagnostics is null || ReferenceEquals(_diagnostics, diagnostics))
+                        UpdateDiagnosticStatus(status);
+                }));
+            if (receiver.IsNodeReceiver && receiver.CertificateSha256.Length == 0)
+                ReportUnreachableReceiver(receiver, checkedWhen);
+            return diagnostics;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            DiagnosticsStatusText.Text = "详细日志无法写入，本次不会上传日志。";
+            return null;
+        }
+    }
+
+    private void ReportUnreachableReceiver(TestBuildProfile receiver, string checkedWhen)
+    {
+        DiagnosticsStatusText.Text = "节点服务器没有开启日志接收，详细日志只保存在本机。";
+        // An enabled preference with no receiver answer used to skip consent in
+        // silence: no prompt, no upload, and one panel line as the only sign.
+        // The player asked to upload, so name the unreachable receiver instead.
+        if (_settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny) return;
+        ThemedMessageDialog.Show(this,
+            $"{checkedWhen}检查了 {new Uri(receiver.UploadUrl).Authority} 的日志接收端，没有得到响应。" +
+            "本次详细日志只保存在本机，不会上传。\n\n" +
+            $"若这台服务器应当接收日志，请确认它的诊断接收端正在运行，并且已放行 TCP {TestBuildProfile.NodeReceiverPort}（主机防火墙和云安全组都要放行）。" +
+            "之后可在主窗口点击“恢复日志”重新检查，不必断开联机。",
+            "本次不上传诊断日志", MessageKind.Warning);
+    }
+
+    /// <summary>
+    /// Applies a settings save to the running connection, through the same receiver check
+    /// and consent as connecting. Only records made after the decision are uploaded.
+    /// </summary>
+    private async Task ApplyDiagnosticSettingsAsync(DiagnosticUploadPreference previousUpload, string previousTarget,
+        bool previousNodeUpload)
+    {
+        var connectionId = _edgeController.ConnectionId;
+        if (connectionId == 0 || _starting) return;
+        var diagnostics = _diagnostics;
+        var change = DiagnosticUploadConsent.PlanSettingsChange(_settings, previousUpload, previousTarget,
+            previousNodeUpload, TestBuildProfile.Current is not null, diagnostics is not null,
+            diagnostics?.UploadAllowed == true, diagnostics?.Receiver.IsNodeReceiver == true);
+        if (change == ActiveDiagnosticsChange.StopUpload)
+        {
+            await diagnostics!.StopUploadAsync();
+            return;
+        }
+        if (change == ActiveDiagnosticsChange.None) return;
+        // Consent binds to the node; an edit to the connected node waits for the next connection.
+        if (TestBuildProfile.Current is null && !SameNode(_connectionNode, _settings.ActiveNode))
+        {
+            DiagnosticsStatusText.Text = "当前节点信息已修改，日志上传设置将在重新连接后生效。";
+            return;
+        }
+        await AuthorizeActiveDiagnosticsAsync(connectionId, diagnostics, "保存设置后");
+    }
+
+    /// <summary>
+    /// Runs the receiver check and consent for the running connection, re-checking a node
+    /// receiver that did not answer before, and attaches a new recording when one is needed.
+    /// </summary>
+    private async Task AuthorizeActiveDiagnosticsAsync(int connectionId, TestDiagnosticsSession? diagnostics,
+        string checkedWhen)
+    {
+        var receiver = diagnostics?.Receiver ?? TestBuildProfile.Current;
+        var certificateChanged = false;
+        if (receiver is null || (receiver.IsNodeReceiver && receiver.CertificateSha256.Length == 0))
+        {
+            if (_connectionNode is not { } node) return;
+            (receiver, certificateChanged) = await ResolveNodeReceiverAsync(node);
+            if (_closeInProgress || _edgeController.ConnectionId != connectionId ||
+                !ReferenceEquals(_diagnostics, diagnostics)) return;
+        }
+        var consent = ResolveDiagnosticConsent(receiver, certificateChanged);
+        if (_closeInProgress || _edgeController.ConnectionId != connectionId ||
+            !ReferenceEquals(_diagnostics, diagnostics)) return;
+        if (diagnostics is not null && ReferenceEquals(receiver, diagnostics.Receiver))
+        {
+            if (consent && !diagnostics.UploadAllowed)
+                await diagnostics.ResumeAsync(true);
+            RefreshDiagnosticButtons();
+            return;
+        }
+        if (diagnostics is not null && receiver.CertificateSha256.Length == 0)
+        {
+            // Still no receiver: keep the existing local recording rather than starting another.
+            ReportUnreachableReceiver(receiver, checkedWhen);
+            return;
+        }
+        if (diagnostics is not null && !consent)
+        {
+            // Replaces the "checking receiver" line left by the probe above.
+            DiagnosticsStatusText.Text = "未同意上传，详细日志只保存在本机。";
+            return;
+        }
+        if (CreateDiagnostics(receiver, consent, checkedWhen) is not { } replacement) return;
+        if (!_edgeController.AttachDiagnostics(connectionId, replacement, diagnostics))
+        {
+            await replacement.DisposeAsync();
+            return;
+        }
+        _diagnostics = replacement;
+        RefreshDiagnosticButtons();
+        if (diagnostics is not null)
+            await diagnostics.DisposeAsync();
+    }
+
     private async Task<(TestBuildProfile Receiver, bool CertificateChanged)> ResolveNodeReceiverAsync(SupernodeNode node)
     {
         var host = NodeServiceProbe.PrimaryHost(node.Server) ?? string.Empty;
@@ -709,9 +813,16 @@ public partial class MainWindow : Window
                     ? "当前节点已授权自动上传，可随时停止"
                     : "连接前会询问日志上传授权；更改节点后须重新授权";
         else if (_settings.ExperimentalDiagnosticUpload)
-            DiagnosticsStatusText.Text = _settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny
-                ? "已设为始终拒绝上传，日志仅保存在本机"
-                : "连接时检查节点服务器是否开启日志接收，上传前会征得你的同意";
+            DiagnosticsStatusText.Text = _settings.DiagnosticUpload switch
+            {
+                DiagnosticUploadPreference.AlwaysDeny => "已设为始终拒绝上传，日志仅保存在本机",
+                // The receiver certificate is only seen when connecting, so the first one
+                // still asks once; saying so keeps that prompt from looking like a fault.
+                DiagnosticUploadPreference.AlwaysAllow when _settings.DiagnosticUploadTarget.Length == 0 =>
+                    "已选始终允许：下次连接时核对节点服务器证书并确认一次，之后自动上传",
+                DiagnosticUploadPreference.AlwaysAllow => "当前节点已授权自动上传，连接时核对服务器证书，可随时停止",
+                _ => "连接时检查节点服务器是否开启日志接收，上传前会征得你的同意"
+            };
     }
 
     private void RefreshDiagnosticsPanel()
@@ -724,6 +835,11 @@ public partial class MainWindow : Window
     private void UpdateDiagnosticStatus(string status)
     {
         DiagnosticsStatusText.Text = status;
+        RefreshDiagnosticButtons();
+    }
+
+    private void RefreshDiagnosticButtons()
+    {
         StopUploadButton.IsEnabled = _diagnostics?.UploadAllowed == true;
         ResumeDiagnosticsButton.IsEnabled = _diagnostics is not null && !_closeInProgress;
     }
@@ -734,17 +850,35 @@ public partial class MainWindow : Window
         ResumeDiagnosticsButton.IsEnabled = false;
         try
         {
-            var consent = ResolveDiagnosticConsent(diagnostics.Receiver);
-            if (_closeInProgress) return;
-            await diagnostics.ResumeAsync(consent);
+            var receiver = diagnostics.Receiver;
+            var connectionId = _edgeController.ConnectionId;
+            if (receiver.IsNodeReceiver && !SameNode(_connectionNode, _settings.ActiveNode))
+            {
+                await diagnostics.ResumeAsync(false);
+                DiagnosticsStatusText.Text = "当前节点信息已修改，日志只在本机恢复记录；重新连接后才能上传。";
+            }
+            else if (receiver.IsNodeReceiver && receiver.CertificateSha256.Length == 0 && connectionId != 0 &&
+                     _settings.DiagnosticUpload != DiagnosticUploadPreference.AlwaysDeny)
+            {
+                // The receiver did not answer when connecting. Resuming that recording could
+                // never upload, so check the receiver again and switch recordings if it answers.
+                await AuthorizeActiveDiagnosticsAsync(connectionId, diagnostics, "恢复日志时");
+                if (ReferenceEquals(_diagnostics, diagnostics) && !_closeInProgress)
+                    await diagnostics.ResumeAsync(false);
+            }
+            else
+            {
+                var consent = ResolveDiagnosticConsent(receiver);
+                if (_closeInProgress) return;
+                await diagnostics.ResumeAsync(consent);
+            }
         }
         catch (Exception exception)
         {
             CrashLogService.Record("恢复诊断日志", exception, fatal: false);
             ThemedMessageDialog.Show(this, $"暂时无法恢复日志：{exception.Message}", "恢复日志失败", MessageKind.Warning);
         }
-        ResumeDiagnosticsButton.IsEnabled = ReferenceEquals(_diagnostics, diagnostics);
-        StopUploadButton.IsEnabled = diagnostics.UploadAllowed;
+        RefreshDiagnosticButtons();
     }
 
     private async Task FinishDiagnosticsAsync()
@@ -1352,6 +1486,7 @@ public partial class MainWindow : Window
         _settings.CloseBehavior = window.SelectedCloseBehavior;
         _settings.LogRetentionDays = window.SelectedLogRetentionDays;
         _settings.ExperimentalIpv6P2p = window.SelectedExperimentalIpv6P2p;
+        var previousNodeUpload = _settings.ExperimentalDiagnosticUpload;
         _settings.ExperimentalDiagnosticUpload = window.SelectedExperimentalDiagnosticUpload;
         _settings.AutoCheckUpdates = window.SelectedAutoCheckUpdates;
         var previousUpload = _settings.DiagnosticUpload;
@@ -1366,18 +1501,18 @@ public partial class MainWindow : Window
         ((App)Application.Current).LogCleanup.Configure(_settings.LogRetentionDays);
         RefreshNodeBox();
         SaveSettings();
-        if (_diagnostics is { } diagnostics)
-        {
-            if (_settings.DiagnosticUpload == DiagnosticUploadPreference.AlwaysDeny ||
-                (_settings.DiagnosticUpload == DiagnosticUploadPreference.Ask && previousUpload != _settings.DiagnosticUpload))
-                await diagnostics.StopUploadAsync();
-            else if (diagnostics.Receiver.IsNodeReceiver && !_settings.ExperimentalDiagnosticUpload)
-                await diagnostics.StopUploadAsync();
-            else if (DiagnosticUploadConsent.IsAllowed(_settings, diagnostics.Receiver) &&
-                     (previousUpload != _settings.DiagnosticUpload || previousTarget != _settings.DiagnosticUploadTarget))
-                await diagnostics.ResumeAsync(true);
-        }
         RefreshDiagnosticsPanel();
+        try
+        {
+            await ApplyDiagnosticSettingsAsync(previousUpload, previousTarget, previousNodeUpload);
+        }
+        catch (Exception exception)
+        {
+            CrashLogService.Record("应用日志上传设置", exception, fatal: false);
+            ThemedMessageDialog.Show(this, $"设置已保存，但暂时无法应用到当前连接：{exception.Message}",
+                "日志上传设置", MessageKind.Warning);
+        }
+        RefreshDiagnosticButtons();
         if (window.InstallUpdateRequested)
         {
             if (!_edgeController.IsRunning || ThemedMessageDialog.Confirm(this,

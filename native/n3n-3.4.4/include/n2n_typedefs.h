@@ -623,17 +623,78 @@ typedef struct mikun2n_nat_state {
     uint8_t eim_samples;
     uint8_t eim_matches;
     uint8_t eim_uncertain;
+    uint8_t samples_done;
+    uint8_t partial;
+    uint8_t filter_state;
+    uint8_t filter_open;
+    uint8_t filter_sends;
+    uint16_t filter_port;
+    char filter_ip[64];
+    uint16_t sn_port;         /* main socket's public port as reported by the supernode */
+    uint32_t sn_ip;            /* network order; 0 until a REGISTER_SUPER_ACK names it */
+    SOCKET filter_sock;        /* valid only while filter_open */
     time_t started_at;
     time_t last_probe_at;
     uint64_t started_ms;
     uint64_t next_probe_ms;
     uint64_t cross_probe_ms;
+    uint64_t b_first_ms;
+    uint64_t filter_next_ms;
+    uint64_t filter_started_ms;
     uint32_t probe_round;
 } mikun2n_nat_state_t;
 
 #define MIKUN2N_FORCED_RELAY_MAX 64
 #define MIKUN2N_PUNCH_HISTORY_MAX 64
 #define MIKUN2N_ASSIST_MAX 32
+
+typedef enum mikun2n_assist_rejection {
+    MIKUN2N_ASSIST_DROP_HEADER,
+    MIKUN2N_ASSIST_DROP_DIRECTION,
+    MIKUN2N_ASSIST_DROP_HOP,
+    MIKUN2N_ASSIST_DROP_SOURCE,
+    MIKUN2N_ASSIST_DROP_NOT_READY,
+    MIKUN2N_ASSIST_DROP_FORCED_RELAY,
+    MIKUN2N_ASSIST_DROP_DUPLICATE,
+    MIKUN2N_ASSIST_DROP_WINDOW,
+    MIKUN2N_ASSIST_DROP_INVALID_SEQUENCE,
+    MIKUN2N_ASSIST_DROP_INNER_HEADER,
+    MIKUN2N_ASSIST_DROP_COMMON,
+    MIKUN2N_ASSIST_DROP_TYPE,
+    MIKUN2N_ASSIST_DROP_COMMUNITY,
+    MIKUN2N_ASSIST_DROP_PACKET,
+    MIKUN2N_ASSIST_DROP_MAC,
+    MIKUN2N_ASSIST_DROP_TIMESTAMP,
+    MIKUN2N_ASSIST_DROP_UNREGISTERED,
+    MIKUN2N_ASSIST_DROP_TRANSFORM,
+    MIKUN2N_ASSIST_DROP_PAYLOAD,
+    MIKUN2N_ASSIST_DROP_FILTER,
+    MIKUN2N_ASSIST_DROP_TAP,
+    MIKUN2N_ASSIST_DROP_COUNT
+} mikun2n_assist_rejection_t;
+
+typedef struct mikun2n_assist_direction {
+    n2n_mac_t source_mac;
+    n2n_mac_t destination_mac;
+    /* DATA byte counters exclude the assistance envelope. TAP counters use
+     * the decoded Ethernet frame size. Sequence highs do not measure loss. */
+    uint64_t tx_attempts, tx_attempt_bytes;
+    uint64_t tx_submitted, tx_submitted_bytes;
+    uint64_t tx_failed, tx_failed_bytes;
+    uint64_t tx_consumed_drop, tx_consumed_drop_bytes;
+    uint64_t rx_packets, rx_bytes;
+    uint64_t rx_validated, rx_validated_bytes;
+    uint64_t inner_accepted, inner_accepted_bytes;
+    uint64_t tap_attempts, tap_attempt_bytes;
+    uint64_t tap_submitted, tap_submitted_bytes;
+    uint64_t tx_sequence_high, rx_sequence_high, rx_valid_sequence_high;
+    uint64_t rejected[MIKUN2N_ASSIST_DROP_COUNT];
+    /* Index 0 is PING, index 1 is PONG; these never enter DATA counters. */
+    uint64_t heartbeat_rx[2], heartbeat_validated[2];
+    uint64_t heartbeat_tx[2], heartbeat_tx_submitted[2];
+    uint64_t heartbeat_tx_failed[2], heartbeat_tx_consumed_drop[2];
+    uint64_t heartbeat_rejected;
+} mikun2n_assist_direction_t;
 
 typedef struct mikun2n_assist {
     uint8_t circuit[16];
@@ -651,6 +712,16 @@ typedef struct mikun2n_assist {
     uint64_t rx_window[2];
     uint64_t tx_packets;
     uint64_t rx_packets;
+    uint64_t created_ms;
+    uint64_t last_changed_ms;
+    uint64_t diagnostic_revision;
+    uint64_t last_logged_revision;
+    uint64_t last_log_ms;
+    /* Sorted endpoint MACs give all three nodes the same direction indices. */
+    mikun2n_assist_direction_t directions[2];
+    uint64_t unassigned_data, unassigned_data_bytes, unassigned_control;
+    uint64_t unassigned_rejected[MIKUN2N_ASSIST_DROP_COUNT];
+    uint64_t unassigned_control_rejected[MIKUN2N_ASSIST_DROP_COUNT];
 } mikun2n_assist_t;
 
 typedef struct mikun2n_punch_history {
@@ -659,6 +730,12 @@ typedef struct mikun2n_punch_history {
     uint8_t abandoned;
     time_t retry_at;
 } mikun2n_punch_history_t;
+
+#define MIKUN2N_IPV6_RECENT_INTERFACES 16
+typedef struct mikun2n_ipv6_interface_retry {
+    uint32_t if_index;
+    uint64_t retry_after_ms;
+} mikun2n_ipv6_interface_retry_t;
 
 struct n3n_runtime_data {
     n2n_edge_conf_t conf;
@@ -684,6 +761,13 @@ struct n3n_runtime_data {
     int sock;
     SOCKET mikun2n_ipv6_socket;
     n2n_sock_t mikun2n_ipv6_address;
+    uint32_t mikun2n_ipv6_if_index;
+    uint64_t mikun2n_ipv6_bound_ms;
+    uint64_t mikun2n_ipv6_local_ok_ms;
+    uint64_t mikun2n_ipv6_local_fail_ms;
+    uint64_t mikun2n_ipv6_local_last_fail_ms;
+    uint32_t mikun2n_ipv6_local_failures;
+    mikun2n_ipv6_interface_retry_t mikun2n_ipv6_interface_retry[MIKUN2N_IPV6_RECENT_INTERFACES];
     uint64_t mikun2n_ipv6_token;
     uint64_t mikun2n_ipv6_datagram_id; /* Session-wide: peer expiry must not reuse IDs. */
     uint64_t mikun2n_ipv6_refresh_ms;

@@ -51,6 +51,7 @@
 #include "mikun2n_build_version.h"
 #include "n2n.h"                     // for n3n_runtime_data, n2n_edge_...
 #include "n2n_wire.h"                // for fill_sockaddr, decod...
+#include "mikun2n_nat_policy.h"      // for mikun2n_bank_round_for, mikun2n_nat_...
 #include "pearson.h"                 // for pearson_hash_128, pearson_hash_64
 #include "peer_info.h"               // for peer_info, clear_peer_list, ...
 #include "portable_endian.h"         // for be16toh, htobe16
@@ -105,6 +106,12 @@ static void check_known_peer_sock_change (struct n3n_runtime_data *eee,
 #define MIKUN2N_NAT_PROBE_INTERVAL_MS 250
 #define MIKUN2N_NAT_CROSS_WAIT_MS 750
 #define MIKUN2N_NAT_PROBE_TIMEOUT_MS 10000
+#define MIKUN2N_NAT_B_SILENT_MS 4000
+#define MIKUN2N_NAT_FILTER_MAP_SENDS 8
+#define MIKUN2N_NAT_FILTER_IDLE 0
+#define MIKUN2N_NAT_FILTER_MAP 1
+#define MIKUN2N_NAT_FILTER_REPLY 2
+#define MIKUN2N_NAT_FILTER_DONE 3
 #define MIKUN2N_COORD_QUERY_MS 750
 #define MIKUN2N_COORD_FALLBACK_MS 4000
 #define MIKUN2N_PUNCH_RETRY_SECS 30
@@ -1629,37 +1636,15 @@ static int mikun2n_probe_source (const struct n3n_runtime_data *eee,
     return mikun2n_ip_is_supernode(eee, sender);
 }
 
-static void mikun2n_finish_nat_probe (struct n3n_runtime_data *eee) {
-    mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
-    int endpoint_independent;
-
-    if(nat->probe_mask != 3 || nat->complete)
-        return;
-
-    /* One A/B pair cannot type a CGNAT. A single transient re-binding used to
-     * pin the whole session to NAT4 with no re-probe, which then selected the
-     * NAT4 punch strategy against a peer that was really NAT3. Sample several
-     * rounds and decide on the majority; only the first round can measure
-     * filtering, because afterwards the mapping is primed. */
-    if(nat->observed_port_a == nat->observed_port_b)
-        nat->eim_matches++;
-    nat->eim_samples++;
-
-    if(nat->eim_samples < MIKUN2N_NAT_SAMPLE_ROUNDS) {
-        nat->probe_mask = 0;
-        nat->observed_port_a = 0;
-        nat->observed_port_b = 0;
-        return;
+static void mikun2n_close_filter_probe (mikun2n_nat_state_t *nat) {
+    if(nat->filter_open) {
+        closesocket(nat->filter_sock);
+        nat->filter_open = 0;
     }
+}
 
-    /* A split verdict means the NAT is genuinely unstable rather than plainly
-     * symmetric. Report the majority for display but flag it, so the punch
-     * scheduler prefers the layered sweep, which covers its range in fewer
-     * ticks and does not depend on a correct NAT4 role split. */
-    nat->eim_uncertain = (nat->eim_matches * 5 < nat->eim_samples * 4) &&
-                         (nat->eim_matches * 5 > nat->eim_samples);
-    endpoint_independent = nat->eim_matches * 2 > nat->eim_samples;
-
+static void mikun2n_set_nat_verdict (mikun2n_nat_state_t *nat,
+                                     int endpoint_independent) {
     if(!nat->multi_public_ip && endpoint_independent) {
         snprintf(nat->mapping, sizeof(nat->mapping), "endpoint-independent");
         if(nat->cross_reply) {
@@ -1677,29 +1662,80 @@ static void mikun2n_finish_nat_probe (struct n3n_runtime_data *eee) {
     }
     nat->complete = 1;
     nat->unavailable = 0;
+}
+
+/* Decides once every A/B sample and the filtering test are in. */
+static void mikun2n_decide_nat (struct n3n_runtime_data *eee) {
+    mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
+
+    if(nat->complete || !nat->samples_done ||
+       nat->filter_state != MIKUN2N_NAT_FILTER_DONE)
+        return;
+
+    /* A split verdict means the NAT is genuinely unstable rather than plainly
+     * symmetric. Report the majority for display but flag it, so the punch
+     * scheduler prefers the layered sweep, which covers its range in fewer
+     * ticks and does not depend on a correct NAT4 role split. */
+    nat->eim_uncertain = mikun2n_nat_split_verdict(nat->eim_matches, nat->eim_samples);
+    mikun2n_set_nat_verdict(nat, mikun2n_nat_majority_eim(nat->eim_matches, nat->eim_samples));
 
     traceEvent(TRACE_NORMAL,
-               "MikuN2N NAT probe: type=%s mapping=%s filtering=%s external=%s:%u/%u eim=%u/%u%s",
+               "MikuN2N NAT probe: type=%s mapping=%s filtering=%s external=%s:%u/%u eim=%u/%u%s supernode_port=%u",
                nat->type, nat->mapping, nat->filtering, nat->public_ip,
                nat->observed_port_a, nat->observed_port_b,
                nat->eim_matches, nat->eim_samples,
-               nat->eim_uncertain ? " (uncertain)" : "");
+               nat->eim_uncertain ? " (uncertain)" : "", nat->sn_port);
 }
 
-static void mikun2n_send_cross_probe (struct n3n_runtime_data *eee) {
+/* Observer B never answered. Without a verdict the edge sends no NAT summary,
+ * so the supernode plans nothing and both peers fall back to uncoordinated
+ * local roles. The supernode's own view of this socket is a second sample of
+ * the same mapping, which is all the A/B pair ever was. */
+static int mikun2n_decide_partial_nat (struct n3n_runtime_data *eee) {
     mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
-    n2n_sock_t endpoint;
-    char request[128];
 
-    if(!eee->curr_sn || !nat->public_ip[0] || !nat->public_port)
+    if(nat->complete || !nat->sn_port || !nat->observed_port_a ||
+       !nat->public_ip[0] || nat->filter_state != MIKUN2N_NAT_FILTER_DONE)
+        return 0;
+    if(inet_addr(nat->public_ip) != nat->sn_ip)
+        nat->multi_public_ip = 1;
+    nat->partial = 1;
+    nat->eim_uncertain = 0;
+    /* Reported as the one sample it is; supernodes reject summaries without one. */
+    nat->eim_samples = 1;
+    nat->eim_matches = mikun2n_nat_partial_eim(nat->observed_port_a, nat->sn_port);
+    mikun2n_set_nat_verdict(nat, nat->eim_matches);
+    traceEvent(TRACE_NORMAL,
+               "MikuN2N NAT probe: type=%s mapping=%s filtering=%s external=%s:%u eim=%u/%u supernode_port=%u "
+               "(partial: observer B silent after %u probes)",
+               nat->type, nat->mapping, nat->filtering, nat->public_ip,
+               nat->observed_port_a, nat->eim_matches, nat->eim_samples,
+               nat->sn_port, nat->probe_round);
+    return 1;
+}
+
+static void mikun2n_finish_nat_probe (struct n3n_runtime_data *eee) {
+    mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
+
+    if(nat->probe_mask != 3 || nat->complete || nat->samples_done)
         return;
 
-    endpoint = eee->curr_sn->sock;
-    endpoint.port = MIKUN2N_PROBE_PORT_A;
-    snprintf(request, sizeof(request), "XPROBE %s %u",
-             nat->public_ip, nat->public_port);
-    sendto_sock(eee, request, strlen(request), &endpoint);
-    nat->cross_probe_attempts++;
+    /* One A/B pair cannot type a CGNAT. A single transient re-binding used to
+     * pin the whole session to NAT4 with no re-probe, which then selected the
+     * NAT4 punch strategy against a peer that was really NAT3. Sample several
+     * rounds and decide on the majority. */
+    if(nat->observed_port_a == nat->observed_port_b)
+        nat->eim_matches++;
+    nat->eim_samples++;
+
+    if(nat->eim_samples < MIKUN2N_NAT_SAMPLE_ROUNDS) {
+        nat->probe_mask = 0;
+        nat->observed_port_a = 0;
+        nat->observed_port_b = 0;
+        return;
+    }
+    nat->samples_done = 1;
+    mikun2n_decide_nat(eee);
 }
 
 static int mikun2n_handle_nat_probe (struct n3n_runtime_data *eee,
@@ -1720,13 +1756,9 @@ static int mikun2n_handle_nat_probe (struct n3n_runtime_data *eee,
     memcpy(response, udp_buf, udp_size);
     response[udp_size] = '\0';
 
-    if(!strcmp(response, "XREPLY")) {
-        /* A reply received only after we contacted B no longer proves that B
-         * could enter an unprimed mapping, so ignore such a late packet. */
-        if(!(nat->probe_mask & 2))
-            nat->cross_reply = 1;
+    /* The filtering test runs on its own socket; a stray reply here proves nothing. */
+    if(!strcmp(response, "XREPLY"))
         return 1;
-    }
 
     if(sscanf(response, "PROBED %63s %d %15s", ip, &port, label) != 3 ||
        port < 1 || port > 65535)
@@ -1740,10 +1772,6 @@ static int mikun2n_handle_nat_probe (struct n3n_runtime_data *eee,
     if(sender->port == MIKUN2N_PROBE_PORT_A) {
         nat->observed_port_a = (uint16_t)port;
         nat->probe_mask |= 1;
-        if(!nat->cross_probe_ms) {
-            nat->cross_probe_ms = mikun2n_now_ms();
-            mikun2n_send_cross_probe(eee);
-        }
     } else {
         if(nat->public_ip[0] && strcmp(nat->public_ip, ip))
             nat->multi_public_ip = 1;
@@ -1758,13 +1786,138 @@ static int mikun2n_handle_nat_probe (struct n3n_runtime_data *eee,
 }
 
 static void mikun2n_reset_nat_probe (struct n3n_runtime_data *eee, time_t now) {
-    memset(&eee->mikun2n_nat, 0, sizeof(eee->mikun2n_nat));
-    snprintf(eee->mikun2n_nat.type, sizeof(eee->mikun2n_nat.type), "detecting");
-    snprintf(eee->mikun2n_nat.mapping, sizeof(eee->mikun2n_nat.mapping), "unknown");
-    snprintf(eee->mikun2n_nat.filtering, sizeof(eee->mikun2n_nat.filtering), "unknown");
-    eee->mikun2n_nat.started_at = now;
-    eee->mikun2n_nat.started_ms = mikun2n_now_ms();
-    eee->mikun2n_nat.next_probe_ms = eee->mikun2n_nat.started_ms;
+    mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
+    /* Learned from REGISTER_SUPER_ACK, which may well precede the first probe. */
+    uint32_t sn_ip = nat->sn_ip;
+    uint16_t sn_port = nat->sn_port;
+
+    if(nat->started_at)
+        mikun2n_close_filter_probe(nat);
+    memset(nat, 0, sizeof(*nat));
+    snprintf(nat->type, sizeof(nat->type), "detecting");
+    snprintf(nat->mapping, sizeof(nat->mapping), "unknown");
+    snprintf(nat->filtering, sizeof(nat->filtering), "unknown");
+    nat->sn_ip = sn_ip;
+    nat->sn_port = sn_port;
+    nat->started_at = now;
+    nat->started_ms = mikun2n_now_ms();
+    nat->next_probe_ms = nat->started_ms;
+}
+
+/* Filtering is tested from a throwaway socket. The probe server answers XPROBE
+ * from port B, and when that unsolicited packet reached the data socket's
+ * mapping first, routers that keep state for rejected packets gave the data
+ * socket's later B flow a new public port. Cone NATs behind such routers then
+ * classified as NAT4 (eim 0/5) while their worker sockets, which never see
+ * XREPLY, calibrated as CONE; one of them also never received B's replies. */
+static void mikun2n_update_filter_probe (struct n3n_runtime_data *eee,
+                                         uint64_t now_ms) {
+    mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
+    n2n_sock_t endpoint;
+    n2n_sock_t sender;
+    struct sockaddr_in from;
+    socklen_t from_len;
+    char buf[256];
+    char ip[64];
+    char label[16];
+    char request[128];
+    int port;
+    ssize_t got;
+
+    if(nat->filter_state == MIKUN2N_NAT_FILTER_DONE)
+        return;
+    if(nat->filter_state == MIKUN2N_NAT_FILTER_IDLE) {
+        struct sockaddr_in local;
+        SOCKET fd;
+#ifdef _WIN32
+        u_long non_blocking = 1;
+#endif
+
+        memset(&local, 0, sizeof(local));
+        local.sin_family = AF_INET;
+        local.sin_addr.s_addr = htonl(INADDR_ANY);
+        local.sin_port = 0;
+        fd = open_socket((struct sockaddr *)&local, sizeof(local), 0);
+        if(fd == MIKUN2N_INVALID_SOCKET) {
+            /* Unknown filtering stays reported as port-dependent, the safe side. */
+            nat->filter_state = MIKUN2N_NAT_FILTER_DONE;
+            return;
+        }
+#ifdef _WIN32
+        ioctlsocket(fd, FIONBIO, &non_blocking);
+#else
+        fcntl(fd, F_SETFL, O_NONBLOCK);
+#endif
+        nat->filter_sock = fd;
+        nat->filter_open = 1;
+        nat->filter_state = MIKUN2N_NAT_FILTER_MAP;
+        nat->filter_sends = 0;
+        nat->filter_started_ms = now_ms;
+        nat->filter_next_ms = now_ms;
+    }
+
+    for(;;) {
+        from_len = sizeof(from);
+        got = recvfrom(nat->filter_sock, buf, sizeof(buf) - 1, 0,
+                       (struct sockaddr *)&from, &from_len);
+        if(got <= 0)
+            break;
+        buf[got] = '\0';
+        memset(&sender, 0, sizeof(sender));
+        fill_n2nsock(&sender, (struct sockaddr *)&from);
+        if(!mikun2n_probe_source(eee, &sender))
+            continue;
+        if(!strcmp(buf, "XREPLY")) {
+            if(nat->filter_state == MIKUN2N_NAT_FILTER_REPLY)
+                nat->cross_reply = 1;
+            nat->filter_state = MIKUN2N_NAT_FILTER_DONE;
+            mikun2n_close_filter_probe(nat);
+            return;
+        }
+        if(nat->filter_state == MIKUN2N_NAT_FILTER_MAP &&
+           sender.port == MIKUN2N_PROBE_PORT_A &&
+           sscanf(buf, "PROBED %63s %d %15s", ip, &port, label) == 3 &&
+           port >= 1 && port <= 65535) {
+            snprintf(nat->filter_ip, sizeof(nat->filter_ip), "%s", ip);
+            nat->filter_port = (uint16_t)port;
+            nat->filter_state = MIKUN2N_NAT_FILTER_REPLY;
+            nat->filter_sends = 0;
+            nat->filter_next_ms = now_ms;
+            nat->cross_probe_ms = now_ms;
+        }
+    }
+
+    if(now_ms < nat->filter_next_ms)
+        return;
+    endpoint = eee->curr_sn->sock;
+    endpoint.port = MIKUN2N_PROBE_PORT_A;
+    if(nat->filter_state == MIKUN2N_NAT_FILTER_MAP) {
+        static const char probe[] = "PROBE";
+
+        if(nat->filter_sends >= MIKUN2N_NAT_FILTER_MAP_SENDS) {
+            nat->filter_state = MIKUN2N_NAT_FILTER_DONE;
+            mikun2n_close_filter_probe(nat);
+            return;
+        }
+        mikun2n_sendto_socket(nat->filter_sock, probe, sizeof(probe) - 1, &endpoint);
+        nat->filter_sends++;
+        nat->filter_next_ms = now_ms + MIKUN2N_NAT_PROBE_INTERVAL_MS;
+        return;
+    }
+    if(now_ms - nat->cross_probe_ms >= MIKUN2N_NAT_CROSS_WAIT_MS) {
+        /* No reply from B to an endpoint that only ever talked to A. */
+        nat->filter_state = MIKUN2N_NAT_FILTER_DONE;
+        mikun2n_close_filter_probe(nat);
+        return;
+    }
+    if(nat->filter_sends < 3) {
+        snprintf(request, sizeof(request), "XPROBE %s %u",
+                 nat->filter_ip, nat->filter_port);
+        mikun2n_sendto_socket(nat->filter_sock, request, strlen(request), &endpoint);
+        nat->filter_sends++;
+        nat->cross_probe_attempts++;
+    }
+    nat->filter_next_ms = now_ms + MIKUN2N_NAT_PROBE_INTERVAL_MS;
 }
 
 static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now,
@@ -1788,16 +1941,46 @@ static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now,
         mikun2n_reset_nat_probe(eee, now);
     }
 
+    mikun2n_update_filter_probe(eee, now_ms);
+
+    if(nat->samples_done) {
+        mikun2n_decide_nat(eee);
+        return;
+    }
+
     if(nat->probe_mask == 3) {
         mikun2n_finish_nat_probe(eee);
         return;
     }
 
+    if((nat->probe_mask & 1) && nat->eim_samples == 0 && nat->b_first_ms &&
+       now_ms - nat->b_first_ms >= MIKUN2N_NAT_B_SILENT_MS &&
+       mikun2n_decide_partial_nat(eee))
+        return;
+
     if(now_ms - nat->started_ms >= MIKUN2N_NAT_PROBE_TIMEOUT_MS) {
+        if(nat->filter_state != MIKUN2N_NAT_FILTER_DONE) {
+            nat->filter_state = MIKUN2N_NAT_FILTER_DONE;
+            mikun2n_close_filter_probe(nat);
+        }
+        if(nat->eim_samples) {
+            /* B answered for a while and then fell silent: decide on what arrived. */
+            nat->samples_done = 1;
+            mikun2n_decide_nat(eee);
+            return;
+        }
+        if(mikun2n_decide_partial_nat(eee))
+            return;
         snprintf(nat->type, sizeof(nat->type), "unknown");
         nat->unavailable = 1;
         nat->last_probe_at = now;
-        traceEvent(TRACE_INFO, "MikuN2N NAT probe unavailable; will retry later");
+        traceEvent(TRACE_NORMAL,
+                   "MikuN2N NAT probe unavailable after %u probes (answered=%s%s supernode_port=%u); "
+                   "will retry later",
+                   nat->probe_round,
+                   (nat->probe_mask & 1) ? "A" : "-",
+                   (nat->probe_mask & 2) ? "B" : "",
+                   nat->sn_port);
         return;
     }
 
@@ -1805,21 +1988,9 @@ static void mikun2n_update_nat_probe (struct n3n_runtime_data *eee, time_t now,
         return;
 
     endpoint = eee->curr_sn->sock;
-    if(!(nat->probe_mask & 1)) {
-        endpoint.port = MIKUN2N_PROBE_PORT_A;
-    } else {
-        /* Do not contact B until its unprimed cross-port reply either arrived
-         * or timed out, otherwise an APDF NAT would be misreported as open. */
-        if(nat->eim_samples == 0 && !nat->cross_reply &&
-           now_ms - nat->cross_probe_ms < MIKUN2N_NAT_CROSS_WAIT_MS) {
-            if(nat->cross_probe_attempts < 3) {
-                mikun2n_send_cross_probe(eee);
-            }
-            nat->next_probe_ms = now_ms + MIKUN2N_NAT_PROBE_INTERVAL_MS;
-            return;
-        }
-        endpoint.port = MIKUN2N_PROBE_PORT_B;
-    }
+    endpoint.port = (nat->probe_mask & 1) ? MIKUN2N_PROBE_PORT_B : MIKUN2N_PROBE_PORT_A;
+    if(endpoint.port == MIKUN2N_PROBE_PORT_B && !nat->b_first_ms)
+        nat->b_first_ms = now_ms;
     sendto_sock(eee, request, sizeof(request) - 1, &endpoint);
     nat->probe_round++;
     nat->last_probe_at = now;
@@ -2396,7 +2567,8 @@ static int handle_PACKET (struct n3n_runtime_data * eee,
                           const n2n_PACKET_t * pkt,
                           const n2n_sock_t * orig_sender,
                           uint8_t * payload,
-                          size_t psize) {
+                          size_t psize,
+                          const mikun2n_assist_rx_context_t *assist_context) {
 
     ssize_t data_sent_len;
     uint8_t *                 eth_payload = NULL;
@@ -2441,6 +2613,7 @@ static int handle_PACKET (struct n3n_runtime_data * eee,
             macaddr_str(mac_buf, pkt->srcMac),
             sock_to_cstr(sockbuf, orig_sender)
         );
+        mikun2n_assist_delivery(eee, assist_context, MIKUN2N_ASSIST_REJECT_TRANSFORM, psize, mikun2n_now_ms());
         return -1;
     }
 
@@ -2478,6 +2651,7 @@ static int handle_PACKET (struct n3n_runtime_data * eee,
                 "decompression: failed: unsupported %i",
                 rx_compression_id
             );
+            mikun2n_assist_delivery(eee, assist_context, MIKUN2N_ASSIST_REJECT_PAYLOAD, psize, mikun2n_now_ms());
             return(-1); // cannot handle it
     }
 
@@ -2500,6 +2674,7 @@ static int handle_PACKET (struct n3n_runtime_data * eee,
     if(!eee->conf.allow_multicast && is_multicast) {
         traceEvent(TRACE_INFO, "dropping RX multicast");
         eee->stats.rx_multicast_drop++;
+        mikun2n_assist_delivery(eee, assist_context, MIKUN2N_ASSIST_REJECT_FILTER, psize, mikun2n_now_ms());
         return(-1);
     }
 
@@ -2519,6 +2694,7 @@ static int handle_PACKET (struct n3n_runtime_data * eee,
                 /* This is a packet that needs to be routed */
                 traceEvent(TRACE_INFO, "discarding routed packet destined to [%s]",
                            intoa(ntohl(*dst), ip_buf, sizeof(ip_buf)));
+                mikun2n_assist_delivery(eee, assist_context, MIKUN2N_ASSIST_REJECT_FILTER, psize, mikun2n_now_ms());
                 return(-1);
             }
 
@@ -2547,6 +2723,7 @@ static int handle_PACKET (struct n3n_runtime_data * eee,
     if(eee->network_traffic_filter->filter_packet_from_peer(eee->network_traffic_filter, eee, orig_sender,
                                                             eth_payload, eth_size) == N2N_DROP) {
         traceEvent(TRACE_DEBUG, "filtered packet of size %u", (unsigned int)eth_size);
+        mikun2n_assist_delivery(eee, assist_context, MIKUN2N_ASSIST_REJECT_FILTER, psize, mikun2n_now_ms());
         return(0);
     }
 
@@ -2554,6 +2731,7 @@ static int handle_PACKET (struct n3n_runtime_data * eee,
         uint16_t tmp_eth_size = eth_size;
         if(eee->cb.packet_from_peer(eee, orig_sender, eth_payload, &tmp_eth_size) == N2N_DROP) {
             traceEvent(TRACE_DEBUG, "DROP packet of size %u", (unsigned int)eth_size);
+            mikun2n_assist_delivery(eee, assist_context, MIKUN2N_ASSIST_REJECT_FILTER, psize, mikun2n_now_ms());
             return(0);
         }
         eth_size = tmp_eth_size;
@@ -2561,12 +2739,15 @@ static int handle_PACKET (struct n3n_runtime_data * eee,
 
     /* Write ethernet packet to tap device. */
     traceEvent(TRACE_DEBUG, "sending data of size %u to TAP", (unsigned int)eth_size);
+    mikun2n_assist_delivery(eee, assist_context, MIKUN2N_ASSIST_TAP_ATTEMPT, eth_size, mikun2n_now_ms());
     data_sent_len = tuntap_write(&(eee->device), eth_payload, eth_size);
 
     if(data_sent_len == eth_size) {
+        mikun2n_assist_delivery(eee, assist_context, MIKUN2N_ASSIST_TAP_SUBMITTED, eth_size, mikun2n_now_ms());
         return 0;
     }
 
+    mikun2n_assist_delivery(eee, assist_context, MIKUN2N_ASSIST_REJECT_TAP, eth_size, mikun2n_now_ms());
     return -1;
 }
 
@@ -2758,7 +2939,9 @@ int mikun2n_assist_direct_send (struct n3n_runtime_data *eee, const n2n_mac_t ma
                                const uint8_t *data, size_t size, uint64_t now_ms) {
     if(!mikun2n_assist_direct_ready(eee, mac, now_ms)) return 0;
     struct peer_info *peer = mikun2n_assist_peer(eee, mac);
-    if(peer && mikun2n_ipv6_send(eee, peer, data, size, now_ms)) return 1;
+    int fully_sent = 0;
+    if(peer && mikun2n_ipv6_send_ex(eee, peer, data, size, now_ms, &fully_sent))
+        return fully_sent ? 1 : 2;
     peer = mikun2n_assist_ipv4_peer(eee, mac);
     if(!peer) return 0;
     SOCKET fd = peer->punch_data_sock != MIKUN2N_INVALID_SOCKET ? peer->punch_data_sock : eee->sock;
@@ -3106,6 +3289,7 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
     uint64_t stamp = 0;
     int skip_add = 0;
     n2n_mac_t assist_source;
+    mikun2n_assist_rx_context_t assist_context = {0};
     int via_assist = 0;
 
     /* REVISIT: when UDP/IPv6 is supported we will need a flag to indicate which
@@ -3138,7 +3322,7 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
         return;
 
     via_assist = mikun2n_assist_receive(eee, &sender, in_sock, udp_buf, &udp_size,
-                                       assist_source, mikun2n_now_ms());
+                                       assist_source, &assist_context, mikun2n_now_ms());
     if(via_assist < 0) return;
 
     if(eee->conf.header_encryption == HEADER_ENCRYPTION_ENABLED) {
@@ -3163,6 +3347,7 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
         }
         if(!header_enc) {
             traceEvent(TRACE_DEBUG, "failed to decrypt header");
+            mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_REJECT_HEADER, udp_size, mikun2n_now_ms());
             return;
         }
         // time stamp verification follows in the packet specific section as it requires to determine the
@@ -3179,16 +3364,21 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
         } else {
             traceEvent(TRACE_INFO, "failed to decode common section in N2N_UDP");
         }
+        mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_REJECT_COMMON, udp_size, mikun2n_now_ms());
         return; /* failed to decode packet */
     }
 
     msg_type = cmn.pc; /* packet code */
-    if(via_assist && (msg_type != MSG_TYPE_PACKET || (cmn.flags & N2N_FLAGS_FROM_SUPERNODE)))
+    if(via_assist && (msg_type != MSG_TYPE_PACKET || (cmn.flags & N2N_FLAGS_FROM_SUPERNODE))) {
+        mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_REJECT_TYPE, udp_size, mikun2n_now_ms());
         return;
+    }
     if(sender.family == AF_INET6 &&
        (in_sock != eee->mikun2n_ipv6_socket || msg_type != MSG_TYPE_PACKET ||
-        (cmn.flags & N2N_FLAGS_FROM_SUPERNODE)))
+        (cmn.flags & N2N_FLAGS_FROM_SUPERNODE))) {
+        mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_REJECT_TYPE, udp_size, mikun2n_now_ms());
         return;
+    }
 
     // special case for user/pw auth
     // community's auth scheme and message type need to match the used key (dynamic)
@@ -3197,6 +3387,7 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
        && (msg_type != MSG_TYPE_REGISTER_SUPER_NAK)) {
         if(header_enc != 2) {
             traceEvent(TRACE_INFO, "dropped packet encrypted with static key where dynamic key expected");
+            mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_REJECT_HEADER, udp_size, mikun2n_now_ms());
             return;
         }
     }
@@ -3225,6 +3416,7 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
             // stats.errors.community.other ++;
         }
 
+        mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_REJECT_COMMUNITY, udp_size, mikun2n_now_ms());
         return;
     }
 
@@ -3233,9 +3425,15 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
             /* process PACKET - most frequent so first in list. */
             n2n_PACKET_t pkt;
 
-            if(decode_PACKET(&pkt, &cmn, udp_buf, &rem, &idx) < 0) return;
+            if(decode_PACKET(&pkt, &cmn, udp_buf, &rem, &idx) < 0) {
+                mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_REJECT_PACKET, udp_size, mikun2n_now_ms());
+                return;
+            }
             if(via_assist && (memcmp(pkt.srcMac, assist_source, N2N_MAC_SIZE) ||
-                              memcmp(pkt.dstMac, eee->device.mac_addr, N2N_MAC_SIZE))) return;
+                              memcmp(pkt.dstMac, eee->device.mac_addr, N2N_MAC_SIZE))) {
+                mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_REJECT_MAC, udp_size, mikun2n_now_ms());
+                return;
+            }
 
             if(eee->conf.header_encryption == HEADER_ENCRYPTION_ENABLED) {
                 if(!find_peer_time_stamp_and_verify(
@@ -3246,6 +3444,7 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
                        stamp,
                        TIME_STAMP_ALLOW_JITTER)) {
                     traceEvent(TRACE_DEBUG, "dropped PACKET due to time stamp error");
+                    mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_REJECT_TIMESTAMP, udp_size, mikun2n_now_ms());
                     return;
                 }
             }
@@ -3253,13 +3452,15 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
             if(!eee->last_sup) {
                 // drop packets received before first registration with supernode
                 traceEvent(TRACE_DEBUG, "dropped PACKET recevied before first registration with supernode");
+                mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_REJECT_UNREGISTERED, udp_size, mikun2n_now_ms());
                 return;
             }
 
             if(via_assist) {
                 /* The last hop belongs to R, never to pkt.srcMac. Preserve the
                  * existing peer endpoint and the original payload identity. */
-                handle_PACKET(eee, 0, &pkt, &sender, udp_buf + idx, udp_size - idx);
+                mikun2n_assist_delivery(eee, &assist_context, MIKUN2N_ASSIST_INNER_ACCEPTED, udp_size, mikun2n_now_ms());
+                handle_PACKET(eee, 0, &pkt, &sender, udp_buf + idx, udp_size - idx, &assist_context);
                 break;
             }
 
@@ -3267,7 +3468,7 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
                 if(!mikun2n_ipv6_accept(eee, pkt.srcMac, &sender, mikun2n_now_ms()) ||
                    (memcmp(pkt.dstMac, eee->device.mac_addr, N2N_MAC_SIZE) && !is_multi_broadcast(pkt.dstMac)))
                     return;
-                handle_PACKET(eee, 0, &pkt, &sender, udp_buf + idx, udp_size - idx);
+                handle_PACKET(eee, 0, &pkt, &sender, udp_buf + idx, udp_size - idx, NULL);
                 break;
             }
 
@@ -3298,7 +3499,7 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
                                            from_supernode ? N2N_FORWARDED_REG_COOKIE : N2N_REGULAR_REG_COOKIE,
                                            NULL, NULL, orig_sender);
 
-            handle_PACKET(eee, from_supernode, &pkt, orig_sender, udp_buf + idx, udp_size - idx);
+            handle_PACKET(eee, from_supernode, &pkt, orig_sender, udp_buf + idx, udp_size - idx, NULL);
             break;
         }
 
@@ -3448,6 +3649,11 @@ void process_udp (struct n3n_runtime_data *eee, const struct sockaddr *sender_so
 
             if(is_valid_peer_sock(&ra.sock))
                 orig_sender = &(ra.sock);
+            if(ra.sock.family == AF_INET && is_valid_peer_sock(&ra.sock)) {
+                /* A third, long-lived sample of the data socket's mapping. */
+                memcpy(&eee->mikun2n_nat.sn_ip, ra.sock.addr.v4, IPV4_SIZE);
+                eee->mikun2n_nat.sn_port = ra.sock.port;
+            }
 
             traceEvent(TRACE_INFO, "Rx REGISTER_SUPER_ACK from %s [%s] (external %s) with %u attempts left",
                        macaddr_str(mac_buf1, ra.srcMac),
@@ -4659,7 +4865,12 @@ static int mikun2n_bank_update (struct n3n_runtime_data *eee,
              * peer's only worker pool serving another peer, or a late
              * calibration - costs no scan traffic, so recalibrate after a short
              * pause before spending this round on legacy. */
-            if(pp->punch_coord_misses < MIKUN2N_BANK_COORD_RETRIES) {
+            /* A missed NAT4 pair usually meets a busy pool and gets another
+             * chance. A cone pair has the layered sweep to fall back on, and a
+             * supernode without cone bank plans would otherwise cost 40 s here. */
+            if(pp->punch_coord_misses < MIKUN2N_BANK_COORD_RETRIES &&
+               mikun2n_nat_kind(&eee->mikun2n_nat) == MIKUN2N_NAT_KIND_APDM &&
+               pp->mikun2n_nat_kind == MIKUN2N_NAT_KIND_APDM) {
                 pp->punch_coord_misses++;
                 pp->punch_bank_state = MIKUN2N_BANK_STATE_NONE;
                 pp->punch_bank_nonce = 0;
@@ -4940,6 +5151,13 @@ static int mikun2n_scan_slot_busy (const struct n3n_runtime_data *eee,
     return 0;
 }
 
+static int mikun2n_bank_round (const struct n3n_runtime_data *eee,
+                               const struct peer_info *pp) {
+    return eee->mikun2n_nat.complete &&
+           mikun2n_bank_round_for(mikun2n_nat_kind(&eee->mikun2n_nat),
+                                  pp->mikun2n_nat_kind, pp->punch_rounds);
+}
+
 /* MikuN2N Tier 1 fallback. n3n's ordinary REGISTER exchange remains Tier 0.
  * A peer that stays pSp is then scanned in 250 ms ticks. Both NAT4 roles run
  * the cone escape above; the anchor additionally refreshes a small fixed
@@ -5045,12 +5263,7 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
     if(pp->punch_abandoned)
         return;
 
-    /* NAT3<->NAT4 deliberately remains on the proven layered path. The
-     * calibrated worker/bank accelerator is entered only when both ends'
-     * current summaries say address-and-port-dependent mapping. */
-    if(eee->mikun2n_nat.complete &&
-       mikun2n_nat_kind(&eee->mikun2n_nat) == MIKUN2N_NAT_KIND_APDM &&
-       pp->mikun2n_nat_kind == MIKUN2N_NAT_KIND_APDM) {
+    if(mikun2n_bank_round(eee, pp)) {
         /* Give native unicast/multicast registration the full grace interval
          * before allocating NAT4 calibration sockets. Keep coordination for
          * the already-proven NAT3/layered path running during that grace. */
@@ -5108,7 +5321,12 @@ static void mikun2n_punch_peer (struct n3n_runtime_data *eee,
                    macaddr_str(mac, pp->mac_addr));
     }
 
-    required_attempts = pp->punch_role == MIKUN2N_PUNCH_ROLE_LAYERED
+    /* An anchor facing a layered cone peer stops with that peer's sweep. Ending
+     * 2-3 s later than it shifted every 30 s retry, so a pair that started
+     * together no longer overlapped by the third round. */
+    required_attempts = pp->punch_role == MIKUN2N_PUNCH_ROLE_LAYERED ||
+                        (pp->punch_role == MIKUN2N_PUNCH_ROLE_ANCHOR &&
+                         pp->mikun2n_nat_kind == MIKUN2N_NAT_KIND_EIM)
                         ? MIKUN2N_LAYERED_ESCAPE_TICKS
                         : MIKUN2N_CONE_ESCAPE_TICKS * 22;
     if(pp->punch_exhausted ||
@@ -5664,7 +5882,9 @@ void edge_term (struct n3n_runtime_data * eee) {
 
 static int edge_init_sockets (struct n3n_runtime_data *eee) {
 
-    eee->mgmt_slots = slots_malloc(5, 5000, 500);
+    /* Replies share the request buffer. Reserve bounded growth for directional
+     * diagnostics on every circuit; 5000 bytes cannot hold multiple full rows. */
+    eee->mgmt_slots = slots_malloc(5, 5000 + MIKUN2N_ASSIST_MAX * 8192, 500);
     if(!eee->mgmt_slots) {
         abort();
     }

@@ -29,7 +29,7 @@ The build script extracts the source into a temporary directory, regenerates the
 - `n3n-3.4.4-source.zip`: its corresponding patched source.
 - `SHA256SUMS`: checksums using portable filenames.
 
-`--source-archive FILE` and `--output DIRECTORY` select another release archive or output directory. Keep the source archive with any server binary you redistribute. Windows builds of the native sources do not verify a Linux build or deployment.
+`--source-archive FILE` and `--output DIRECTORY` select another release archive or output directory. Keep the source archive with any server binary you redistribute.
 
 ## Required ports
 
@@ -45,11 +45,13 @@ Allow all of the following in both the host firewall and the provider security g
 
 The two observation endpoints **must use the same public IPv4 address as the supernode**. NAT classification compares replies from that host's different ports. The installer starts the existing Python observation service alongside n3n; it requires Python 3 and uses fixed ports 21001/21002. Deploy one such pair per host/address. Changing the service name does not create another independent pair of observation ports.
 
-An IPv6 address is not required on the server for this IPv6 peer experiment. Both clients still need working IPv4 connectivity to the supernode for registration and rendezvous; a native IPv6-only client without an IPv4 path cannot connect. IPv6 supports global and routed-ULA/NAT66 candidates. An edge behind NAT66 learns the public mapping of its peer socket from a STUN observer on UDP 3478 and exchanges it through the supernode. Since 0.5.8-7 clients first ask the supernode host for its own observer (see "IPv6 mapping observer" below) and fall back to Cloudflare's public STUN service; private test profiles can still name their own observer. This enables both peers to initiate checks, including when a public peer filters unsolicited inbound UDP. Without an observer, a ULA peer still depends on its first outbound probe reaching the public peer. A reported mapping alone never establishes a data path; peer challenge/response validation remains required. Endpoint-dependent mappings, blocked UDP and unavailable observers can still prevent IPv6 P2P. NAT66-to-NAT66 is not field-validated. Smaller paths use a 1232-byte UDP probe budget after a size error or probe timeout; data above the checked budget falls back individually to IPv4. The existing client firewall rule allows inbound UDP 50001 on all profiles but does not configure routers.
+An IPv6 address is not required on the server for this IPv6 peer experiment. Both clients still need working IPv4 connectivity to the supernode for registration and rendezvous; a native IPv6-only client without an IPv4 path cannot connect. IPv6 supports global and routed-ULA/NAT66 candidates. An edge behind NAT66 learns the public mapping of its peer socket from a STUN observer on UDP 3478 and exchanges it through the supernode. Since 0.5.8-7 clients first ask the supernode host for its own observer (see "IPv6 mapping observer" below) and fall back to Cloudflare's public STUN service; private test profiles can still name their own observer. This enables both peers to initiate checks, including when a public peer filters unsolicited inbound UDP. Without an observer, a ULA peer still depends on its first outbound probe reaching the public peer. Peers validate the discovered mapping with a challenge/response exchange before using it. Endpoint-dependent mappings, blocked UDP and unavailable observers can still prevent IPv6 P2P. NAT66-to-NAT66 is not field-validated. Smaller paths use a 1232-byte UDP probe budget after a size error or probe timeout; data above the checked budget falls back individually to IPv4. The existing client firewall rule allows inbound UDP 50001 on all profiles but does not configure routers.
 
 IPv6 wire version 2 also requires the peer to advertise a still-valid receive path before DATA switches to IPv6. Older client wire versions retain IPv4 connectivity. Upgrade every client for IPv6 tests; this handshake update does not require another supernode deployment. A smaller incoming probe triggers a matching size check immediately. Stable IPv6 pauses extra IPv4 scans after five seconds, preserving existing IPv4 destinations and relay fallback.
 
 The current server also accepts optional native build/wire identity reports from registered clients and returns them to capable peers. New clients show this information in the friend list and explain IPv6 protocol mismatches. Existing clients and servers keep their prior packet layouts and IPv4 connectivity; metadata requires this server update, while direct discovery between new desktop clients can still exchange version information independently.
+
+From 0.5.8-9 a cone peer and a NAT4 peer also try coordinated worker-port banks (alternating with the layered sweep), and the server must plan those rounds. Rebuild and reinstall the supernode from the 0.5.8-9 source to get them; an older server still connects such pairs through the layered sweep, after one coordination timeout per bank round. The NAT observation service (UDP 21001/21002) is unchanged.
 
 ## Install
 
@@ -61,7 +63,7 @@ sudo bash supernode/install-supernode.sh \
   --community mygroup --cidr 10.42.0.0/24
 ```
 
-`mygroup` and `10.42.0.0/24` are examples, not a supplied deployment. Choose a virtual subnet that does not overlap participants' physical networks. Omit `--cidr` to use automatic address allocation. Without `--community`, the generated configuration accepts arbitrary community names; edit the allowlist if you want to limit this.
+`mygroup` and `10.42.0.0/24` are examples. Set your community name and choose a virtual subnet that does not overlap participants' physical networks. Omit `--cidr` to use automatic address allocation. Without `--community`, the generated configuration accepts arbitrary community names; edit the allowlist if you want to limit this.
 
 The installer copies the binary and probe script under `/opt/mikun2n/n3n`, writes configuration under `/etc/n3n`, installs two systemd units and starts them. Use `--port PORT`, `--service-name NAME` or `--prefix /opt/another-directory` when needed. Keep the prefix outside home directories because the services use `ProtectHome=true`.
 

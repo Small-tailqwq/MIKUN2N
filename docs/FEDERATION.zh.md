@@ -71,7 +71,7 @@ supernode**，而客户端默认锚定的节点与对端可能相隔很远。联
   skew ≈ 时钟差 + 查询相位差（平均约 400ms），损失约 7s 窗口的 6%；
   attempt 驱动扫描可容忍。修复需协议字段（破坏新旧兼容），暂不实施。
 - **模型新鲜度**：联邦转发路径上对端 bank 模型依赖 QUERY_PEER 携带，上报 TTL
-  已收紧至 6s，edge 侧 5s 年龄自动重校准（见 Runtime/README.txt #37）。
+  已收紧至 6s，edge 侧 5s 年龄自动重校准（见[第 37 项](../Runtime/changes/unversioned.zh.md#patch-37)）。
 - **信任模型**：跨节点打洞计划信任来源 supernode 已校验的 NAT 摘要——联邦内
   supernode 之间互信是前提，不应跨不可信管理员部署。
 - **兼容性**：patch #34 的 edge/supernode 需配套部署；旧 edge 连接多端点时只取

@@ -251,9 +251,13 @@ public sealed partial class UpdateService
     {
         try
         {
-            // Packages only hold files at the root and in Runtime/. Never recurse: the
-            // program may sit in a large folder such as Downloads.
-            foreach (var directory in new[] { installDirectory, Path.Combine(installDirectory, "Runtime") })
+            // Only inspect known package directories: the program may sit in Downloads.
+            foreach (var directory in new[]
+            {
+                installDirectory,
+                Path.Combine(installDirectory, "Runtime"),
+                Path.Combine(installDirectory, "Runtime", "changes")
+            })
             {
                 if (!Directory.Exists(directory))
                 {

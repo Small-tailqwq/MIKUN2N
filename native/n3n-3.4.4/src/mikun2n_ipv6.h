@@ -16,6 +16,8 @@ n2n_sock_t mikun2n_ipv6_advertised (const struct n3n_runtime_data *eee, uint64_t
 void mikun2n_ipv6_update_peer (struct peer_info *peer, const n2n_PEER_INFO_t *info, uint64_t now_ms);
 int mikun2n_ipv6_active (const struct n3n_runtime_data *eee, const struct peer_info *peer, uint64_t now_ms);
 int mikun2n_ipv6_send (struct n3n_runtime_data *eee, struct peer_info *peer, const uint8_t *data, size_t size, uint64_t now_ms);
+/* The return value still means consumed. fully_sent means every UDP send completed locally. */
+int mikun2n_ipv6_send_ex (struct n3n_runtime_data *eee, struct peer_info *peer, const uint8_t *data, size_t size, uint64_t now_ms, int *fully_sent);
 size_t mikun2n_ipv6_unwrap (struct n3n_runtime_data *eee, const n2n_sock_t *sender, uint8_t *data, size_t size, uint64_t now_ms);
 int mikun2n_ipv6_accept (struct n3n_runtime_data *eee, const n2n_mac_t mac, const n2n_sock_t *sender, uint64_t now_ms);
 

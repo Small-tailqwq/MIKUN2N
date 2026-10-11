@@ -510,6 +510,60 @@ public sealed partial class EdgeController : IAsyncDisposable
         }
     }
 
+    /// <summary>Identifies the requested connection, including its automatic restarts; 0 when disconnected.</summary>
+    public int ConnectionId
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _wantConnected ? _sessionId : 0;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Hands a recording authorized after the connection started to it and to every later
+    /// restart. Nothing recorded before this point is replayed. Fails when the connection
+    /// changed or another recording took over meanwhile.
+    /// </summary>
+    public bool AttachDiagnostics(int connectionId, TestDiagnosticsSession diagnostics, TestDiagnosticsSession? replacing)
+    {
+        ConnectionParameters parameters;
+        EdgeRun? run;
+        lock (_stateGate)
+        {
+            if (!_wantConnected || _sessionId != connectionId || _parameters is null ||
+                !ReferenceEquals(_parameters.Diagnostics, replacing))
+                return false;
+            // Secrets first: the run's poller may write through the session as soon as it is visible.
+            diagnostics.AddSecret(_parameters.EncryptionKey);
+            run = _currentRun;
+            if (run is not null)
+            {
+                diagnostics.AddSecret(run.ManagementPassword);
+                run.Diagnostics = diagnostics;
+                run.NativeIdentityRead = false;
+            }
+            _parameters = parameters = _parameters with { Diagnostics = diagnostics };
+        }
+        diagnostics.Write("connection_requested", new
+        {
+            parameters.Server, parameters.Community, parameters.Nickname, parameters.NodeId,
+            engine = parameters.Engine.ToString(), parameters.ExperimentalIpv6P2p,
+            encryptionEnabled = !string.IsNullOrEmpty(parameters.EncryptionKey), edgePort = EdgeUdpPort
+        });
+        // The edge reads its IPv6 trace switch only at start, so native v6diag lines begin
+        // with the next restart; management rows and peer latency traces begin now.
+        diagnostics.Write("diagnostics_attached", new
+        {
+            run = run?.SessionId, replacedRecording = replacing is not null, nativeIpv6Trace = false
+        });
+        diagnostics.CaptureNetwork();
+        run?.PeerDiscovery?.EnableLatencyTrace();
+        return true;
+    }
+
     public async Task StartAsync(
         string server,
         string community,
@@ -963,6 +1017,12 @@ public sealed partial class EdgeController : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        // A restart captured its parameters before waiting; pick up a recording attached since.
+        lock (_stateGate)
+        {
+            if (_sessionId == sessionId && _parameters is { } latest)
+                parameters = latest;
+        }
 
         var managementPort = parameters.Engine == EdgeEngine.N3n
             ? FindAvailableTcpPort()
@@ -1104,7 +1164,8 @@ public sealed partial class EdgeController : IAsyncDisposable
             SupernodeHosts = ResolveSupernodeHosts(parameters.Server),
             ActiveNodeName = parameters.NodeName,
             ExperimentalIpv6P2p = parameters.ExperimentalIpv6P2p,
-            Diagnostics = parameters.Diagnostics
+            Diagnostics = parameters.Diagnostics,
+            ManagementPassword = managementPassword
         };
 
         if (run.Diagnostics is { } diagnostics)
@@ -1140,6 +1201,12 @@ public sealed partial class EdgeController : IAsyncDisposable
                 process.Dispose();
                 cancellationToken.ThrowIfCancellationRequested();
                 throw new OperationCanceledException();
+            }
+            // Attached while this run was being prepared, before it became current.
+            if (_parameters?.Diagnostics is { } attached && !ReferenceEquals(run.Diagnostics, attached))
+            {
+                attached.AddSecret(managementPassword);
+                run.Diagnostics = attached;
             }
             _currentRun = run;
         }
@@ -1719,19 +1786,19 @@ public sealed partial class EdgeController : IAsyncDisposable
     {
         if (line.Contains("MikuN2N NAT4 bank calibration started", StringComparison.OrdinalIgnoreCase))
         {
-            return "P2P 打洞：检测到双 NAT4，正在用独立 UDP 端口组采样两端映射规律。";
+            return "P2P 打洞：正在用一组独立 UDP 端口采样两端的端口分配规律。";
         }
         if (line.Contains("MikuN2N NAT4 bank punch started", StringComparison.OrdinalIgnoreCase))
         {
-            return "P2P 打洞：双 NAT4 端口组已同步，正在并行命中对端映射窗口。";
+            return "P2P 打洞：两端端口组已同步，正在同时尝试命中对方的端口。";
         }
         if (line.Contains("MikuN2N bank punch promoted", StringComparison.OrdinalIgnoreCase))
         {
-            return "P2P 打洞：双 NAT4 端口组已命中，连接已切换为 P2P 直连。";
+            return "P2P 打洞：端口组已命中，连接已切换为 P2P 直连。";
         }
         if (line.Contains("MikuN2N NAT4 bank punch exhausted", StringComparison.OrdinalIgnoreCase))
         {
-            return "P2P 打洞：本轮双 NAT4 端口组未命中，将在冷却后重新采样；当前继续使用 pSp 中继。";
+            return "P2P 打洞：本轮端口组未命中，冷却后会再试；当前继续使用 pSp 中继。";
         }
         if (line.Contains("MikuN2N NAT4 bank punch abandoned", StringComparison.OrdinalIgnoreCase))
         {
@@ -2839,7 +2906,9 @@ public sealed partial class EdgeController : IAsyncDisposable
         public DateTimeOffset NextNatPollAt { get; set; }
         public bool NatPollWarningLogged { get; set; }
         public bool ExperimentalIpv6P2p { get; init; }
-        public TestDiagnosticsSession? Diagnostics { get; init; }
+        // Replaced by AttachDiagnostics under _stateGate; readers take one snapshot per write.
+        public TestDiagnosticsSession? Diagnostics { get; set; }
+        public string ManagementPassword { get; init; } = string.Empty;
         public DateTimeOffset NextDiagnosticsAt { get; set; }
         public bool Ipv6StatusReported { get; set; }
         /// <summary>Sockaddr of the supernode the edge is currently anchored to (get_supernodes current=1).</summary>

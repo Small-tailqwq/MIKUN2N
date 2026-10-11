@@ -996,6 +996,8 @@ static void jsonrpc_get_nat (char *id, struct n3n_runtime_data *eee, conn_t *con
         "\"public_port\":%u,"
         "\"observed_port_a\":%u,"
         "\"observed_port_b\":%u,"
+        "\"observed_port_sn\":%u,"
+        "\"partial\":%s,"
         "\"available\":%s,"
         "\"complete\":%s,"
         "\"probe_mask\":%u,"
@@ -1011,6 +1013,8 @@ static void jsonrpc_get_nat (char *id, struct n3n_runtime_data *eee, conn_t *con
         nat->public_port,
         nat->observed_port_a,
         nat->observed_port_b,
+        nat->sn_port,
+        nat->partial ? "true" : "false",
         nat->unavailable ? "false" : "true",
         nat->complete ? "true" : "false",
         nat->probe_mask,
@@ -1380,15 +1384,71 @@ static void jsonrpc_get_peer_assists (char *id, struct n3n_runtime_data *eee, co
         const mikun2n_assist_t *assist = &snapshot;
         if(!assist->role || now_ms >= assist->expires_ms) continue;
         char circuit[33];
-        macstr_t first, second;
+        macstr_t first, second, local;
         for(int j = 0; j < 16; j++) snprintf(circuit + j * 2, 3, "%02x", assist->circuit[j]);
         sb_reprintf(&conn->request,
-                    "%s{\"circuit\":\"%s\",\"role\":\"%s\",\"first_mac\":\"%s\",\"second_mac\":\"%s\",\"active\":%s,\"tx_packets\":%llu,\"rx_packets\":%llu}",
+                    "%s{\"circuit\":\"%s\",\"role\":\"%s\",\"first_mac\":\"%s\",\"second_mac\":\"%s\",\"active\":%s,\"tx_packets\":%llu,\"rx_packets\":%llu,\"diagnostics_version\":1,\"local_mac\":\"%s\",\"mono_ms\":%llu,\"created_ms\":%llu,\"lease_remaining_ms\":%llu,\"sample\":%llu,\"directions\":[",
                     count ? "," : "", circuit,
                     assist->role == MIKUN2N_ASSIST_RELAY ? "relay" : assist->role == MIKUN2N_ASSIST_STANDBY ? "standby" : "endpoint",
                     macaddr_str(first, assist->first_mac), macaddr_str(second, assist->second_mac),
                     mikun2n_assist_active(eee, assist, now_ms) ? "true" : "false",
-                    (unsigned long long)assist->tx_packets, (unsigned long long)assist->rx_packets);
+                    (unsigned long long)assist->tx_packets, (unsigned long long)assist->rx_packets,
+                    macaddr_str(local, eee->device.mac_addr), (unsigned long long)now_ms,
+                    (unsigned long long)assist->created_ms, (unsigned long long)(assist->expires_ms - now_ms),
+                    (unsigned long long)assist->diagnostic_revision);
+        for(unsigned direction = 0; direction < 2; direction++) {
+            const mikun2n_assist_direction_t *diag = &assist->directions[direction];
+            macstr_t src, dst;
+            sb_reprintf(&conn->request, "%s{\"src_mac\":\"%s\",\"dst_mac\":\"%s\"",
+                        direction ? "," : "", macaddr_str(src, diag->source_mac), macaddr_str(dst, diag->destination_mac));
+#define ASSIST_JSON_COUNTER(field) sb_reprintf(&conn->request, ",\"" #field "\":%llu", (unsigned long long)diag->field)
+            ASSIST_JSON_COUNTER(tx_attempts);
+            ASSIST_JSON_COUNTER(tx_attempt_bytes);
+            ASSIST_JSON_COUNTER(tx_submitted);
+            ASSIST_JSON_COUNTER(tx_submitted_bytes);
+            ASSIST_JSON_COUNTER(tx_failed);
+            ASSIST_JSON_COUNTER(tx_failed_bytes);
+            ASSIST_JSON_COUNTER(tx_consumed_drop);
+            ASSIST_JSON_COUNTER(tx_consumed_drop_bytes);
+            ASSIST_JSON_COUNTER(rx_packets);
+            ASSIST_JSON_COUNTER(rx_bytes);
+            ASSIST_JSON_COUNTER(rx_validated);
+            ASSIST_JSON_COUNTER(rx_validated_bytes);
+            ASSIST_JSON_COUNTER(inner_accepted);
+            ASSIST_JSON_COUNTER(inner_accepted_bytes);
+            ASSIST_JSON_COUNTER(tap_attempts);
+            ASSIST_JSON_COUNTER(tap_attempt_bytes);
+            ASSIST_JSON_COUNTER(tap_submitted);
+            ASSIST_JSON_COUNTER(tap_submitted_bytes);
+            ASSIST_JSON_COUNTER(tx_sequence_high);
+            ASSIST_JSON_COUNTER(rx_sequence_high);
+            ASSIST_JSON_COUNTER(rx_valid_sequence_high);
+#undef ASSIST_JSON_COUNTER
+            sb_reprintf(&conn->request, ",\"rejected\":{");
+            for(unsigned reason = 0; reason < MIKUN2N_ASSIST_DROP_COUNT; reason++)
+                sb_reprintf(&conn->request, "%s\"%s\":%llu", reason ? "," : "",
+                            mikun2n_assist_rejection_name(reason), (unsigned long long)diag->rejected[reason]);
+            sb_reprintf(&conn->request, "},\"heartbeat\":{\"rejected\":%llu", (unsigned long long)diag->heartbeat_rejected);
+            for(unsigned control = 0; control < 2; control++)
+                sb_reprintf(&conn->request,
+                            ",\"%s\":{\"rx\":%llu,\"validated\":%llu,\"tx\":%llu,\"submitted\":%llu,\"failed\":%llu,\"consumed_drop\":%llu}",
+                            control ? "pong" : "ping", (unsigned long long)diag->heartbeat_rx[control],
+                            (unsigned long long)diag->heartbeat_validated[control], (unsigned long long)diag->heartbeat_tx[control],
+                            (unsigned long long)diag->heartbeat_tx_submitted[control], (unsigned long long)diag->heartbeat_tx_failed[control],
+                            (unsigned long long)diag->heartbeat_tx_consumed_drop[control]);
+            sb_reprintf(&conn->request, "}}");
+        }
+        sb_reprintf(&conn->request, "],\"unassigned\":{\"data\":%llu,\"data_bytes\":%llu,\"control\":%llu,\"rejected\":{",
+                    (unsigned long long)assist->unassigned_data, (unsigned long long)assist->unassigned_data_bytes,
+                    (unsigned long long)assist->unassigned_control);
+        for(unsigned reason = 0; reason < MIKUN2N_ASSIST_DROP_COUNT; reason++)
+            sb_reprintf(&conn->request, "%s\"%s\":%llu", reason ? "," : "",
+                        mikun2n_assist_rejection_name(reason), (unsigned long long)assist->unassigned_rejected[reason]);
+        sb_reprintf(&conn->request, "},\"control_rejected\":{");
+        for(unsigned reason = 0; reason < MIKUN2N_ASSIST_DROP_COUNT; reason++)
+            sb_reprintf(&conn->request, "%s\"%s\":%llu", reason ? "," : "",
+                        mikun2n_assist_rejection_name(reason), (unsigned long long)assist->unassigned_control_rejected[reason]);
+        sb_reprintf(&conn->request, "}}}");
         if(jsonrpc_error_overflow(id, conn, ++count)) return;
     }
     sb_reprintf(&conn->request, "]");

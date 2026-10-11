@@ -8,7 +8,12 @@ logs/
 *.user
 *.suo
 .vs/
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/agent-notes/
+.claude/skills/agent-notes/*
+!.claude/skills/agent-notes/SKILL.md
 *.zip
 
 # Local tooling build outputs; rebuild the natpunch tools with the commands in the

@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "key": "(preamble)",
+      "en": "e3b0c44298fc1c14",
+      "zh": "e3b0c44298fc1c14"
+    },
+    {
+      "key": "# Agent Note: Disclose runtime changes through bilingual version records",
+      "en": "6806b2d926785dfc",
+      "zh": "9585e2576f3c8604"
+    },
+    {
+      "key": "## Problem",
+      "en": "9ec9980dba2efc68",
+      "zh": "72c46702958b00e1"
+    },
+    {
+      "key": "## Decision",
+      "en": "cd88e248ba7f9114",
+      "zh": "a2634f09c5b093dd"
+    },
+    {
+      "key": "## Alternatives considered",
+      "en": "81af74e23fc7d179",
+      "zh": "0d5833bb47b565b6"
+    },
+    {
+      "key": "## Consequences",
+      "en": "5a271e17d1d8e91a",
+      "zh": "540547114c59b2f9"
+    }
+  ]
+}

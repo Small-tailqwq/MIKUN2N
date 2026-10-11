@@ -53,7 +53,7 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 | `EasterEggManager.cs` + `EasterEggVisualController.cs` | 自包含的彩蛋（设置里的老虎机 → 飞虫/蜘蛛追逐动画 → 彩虹 jackpot），与连通性逻辑无关，推理核心行为时可直接跳过 |
 | `TestBuildProfile.cs` | 私有测试包内嵌的配置（批次、节点、上传地址、证书指纹、STUN 观察者）；读不到该资源时返回 null，普通构建因此不创建任何诊断会话 |
 | `TestDiagnosticsSession.cs` | 诊断会话：按 64 MiB 滚动分段记录与脱敏，按 128 KiB 分块上传；不重连即可继续记录或恢复上传，状态经 `IsRecording`/`UploadAllowed` 暴露给界面 |
-| `UpdateService.cs` | 在线更新：查 `UpdateRepository`（csproj 属性，写进程序集元数据）的 GitHub latest release，后台下载 `MikuN2N-<版本>-win-x64.zip`，按资产 digest 或 `SHA256SUMS` 校验、解包并核对 exe 版本后才询问；安装在 edge 停止后原地换文件（运行中的文件先改名 `.update-old`，失败整体回滚），以 `--after-update <pid>` 重启；新进程在单实例检查前等旧进程退出，拿到互斥体后才清理残留（只查根目录与 `Runtime/`，不递归） |
+| `UpdateService.cs` | 在线更新：查 `UpdateRepository`（csproj 属性，写进程序集元数据）的 GitHub latest release，后台下载 `MikuN2N-<版本>-win-x64.zip`，按资产 digest 或 `SHA256SUMS` 校验、解包并核对 exe 版本后才询问；安装在 edge 停止后原地换文件（运行中的文件先改名 `.update-old`，失败整体回滚），以 `--after-update <pid>` 重启；新进程在单实例检查前等旧进程退出，拿到互斥体后才清理残留（只查根目录、`Runtime/` 与 `Runtime/changes/`，不递归） |
 | `DiagnosticUploadConsent.cs` | 把「始终允许」绑定成「当前节点 + 接收地址 + 证书指纹」的 SHA256；节点编辑、删除、切换都会使其失效 |
 
 ### EdgeController 不变量
@@ -80,7 +80,7 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 - WPF 与 WinForms 类型会重名（`Brush`、`Color`、`Point` 等），现有文件用显式 `using X = ...` 别名解决（如 `MediaColor`、`WpfBrush`、`Forms.NotifyIcon`），照这个写法做，不要在行内写全限定名。
 - 应用版本由 `MikuN2N.csproj` 的 `<BaseVersion>` 和 `<BuildNumber>` 组成，格式为 `0.5.8-1`、`0.5.8-2`，不再追加时间戳。每次交付新的测试包或发布包前将构建序号加一；同一交付的编译重试不加号。`BaseVersion` 变化时序号重置为 `1`。显示处一律经 `Services/BuildIdentity.cs` 读取。重建原生 edge 前运行 `tools/sync-native-version.ps1`（默认作用于 `native/n3n-3.4.4`），使原生构建标识与本次版本一致；单独替换 edge 时仍显示实际运行二进制报告的标识，不用客户端版本冒充。IPv6 兼容性按握手协议代次判断，不按构建号是否相同判断。
 - 本仓库按开源发布对待：节点地址、小组名称、联机密钥与个人机器路径只允许出现在 `*.local.md`（已被 gitignore）里，不要写进代码、默认值、测试脚本或受版本控制的文档。
-- `Runtime/` 分发第三方二进制（n3n edge、TAP-Windows 安装器）及其许可证（`LICENSE-n2n.txt`、`LICENSE-tap-windows.txt`、`LICENSE-dotnet.txt`）与源码归档 `n3n-3.4.4-source.zip`；本体 `LICENSE` 以 `LICENSE.txt` 随包。改动打包内容时保持许可证与源码可得性义务完整，汇总见 `Runtime/THIRD-PARTY-NOTICES.txt`，规则见 `Runtime/README.txt`。换 edge 或源码包后同步更新声明里的 SHA-256；`native/n3n-3.4.4/MIKUN2N-MODIFICATIONS.md` 是 GPLv3 §5(a) 的修改声明，每次原生改动更新其中的版本与日期。
+- `Runtime/` 分发第三方二进制（n3n edge、TAP-Windows 安装器）及其许可证（`LICENSE-n2n.txt`、`LICENSE-tap-windows.txt`、`LICENSE-dotnet.txt`）与源码归档 `n3n-3.4.4-source.zip`；本体 `LICENSE` 以 `LICENSE.txt` 随包。改动打包内容时保持许可证与源码可得性义务完整，汇总见 `Runtime/THIRD-PARTY-NOTICES.txt`，规则见 `Runtime/README.md` 与 `Runtime/BUILD.md`。换 edge 或源码包后同步更新声明里的 SHA-256；`native/n3n-3.4.4/MIKUN2N-MODIFICATIONS.md` 是 GPLv3 §5(a) 的修改声明，每次原生改动更新其中的版本与日期。
 - 公开发布包一律用 `tools/package-release.ps1` 生成（它检查许可证、本机账户路径，并逐字节核对源码归档与 `native/` 一致），产物与 `SHA256SUMS` 挂到同名 tag 的 GitHub Release 上，客户端的在线更新只认这两个文件；推 tag 会由 `.github/workflows/release.yml` 建草稿 Release，核对说明后再发布。私有测试包（`TestProfilePath`）不走这个流程。
 - 每交付一版就打一个提交，标题为 `0.5.8-2: <本版做了什么>`，正文写改动与理由，并用同名 tag 标记该提交（`0.5.8-1`、`0.5.8-2`）。审阅某一版改了什么，直接 `git diff <上一版>..<这一版>`，不要靠解压发布包逐文件比对。原生改动（`native/`）与客户端改动进同一个版本提交；只看原生侧用 `git diff <上一版>..<这一版> -- native/`。
 - 每轮的发布包、离线测试日志、验证 JSON 与改动前快照留在 `artifacts/<版本>/`（不进版本控制）。审阅、发布核对或追查历史版本时先看那里的 `*-validation.json` 与 `*-tests*.log`；要对照上一版源码就看 `before/`。
@@ -89,14 +89,18 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 
 `Runtime/n3n-edge.exe` 是本地修改版而非上游原版，这份补丁是本项目的核心工程贡献，也是合规的连接/互操作工程（面向自有 P2P 会话的 RFC 对齐 NAT 行为发现与打洞调度），不是安全绕过或逆向工具。
 
-**补丁清单的唯一权威来源是 `Runtime/README.txt`**（随发布包分发、按版本编号）。不要在本文件或其他地方再抄一份——历史上那份副本长期落后于 README，并与它关于冷却策略的表述互相矛盾。要看当前实际生效的行为读那份清单，不要依赖任何摘要。
+**原生改动记录只维护在 `Runtime/changes/` 的分版本双语日志中**，随发布包分发；从 [Runtime 概览](Runtime/README.zh.md)按需进入[主题入口](Runtime/changes/README.zh.md)及具体日志。README 不追加补丁正文，其他指引不复制清单。历史编号保留为 `patch-N` 锚点；判断当前行为须结合最新相关日志、技术契约与源码，不能把旧日志中的参数当作当前默认值。
 
 改动补丁、重建 `n3n-edge.exe` 或调试打洞失败时，加载 skill `mikun2n-edge-patch`，其中记录了构建工具链位置、n3n 与 natpunch 两侧的重建步骤，以及打洞算法的参考实现（`tools/natpunch/`）。
+
+## Agent Notes
+
+当改动包含代码、测试和现有文档尚未解释的持久决策理由时，在同一次改动中记录到 `.agents/notes/`，遵循[契约](.agents/notes/README.zh.md)和 [agent-notes 技能](.agents/skills/agent-notes/SKILL.md)。笔记采用英文主文、中文 `.zh.md` 对照及 `.i18n.json` 一致性记录，同步两种语言后用 `python tools/agent_notes.py pair --write <相对笔记目录的英文文件路径>` 更新记录。每条新笔记都要检查取代关系；`.agents/notes/archived/` 是冻结历史，不能作为当前行为的权威。修改笔记目录后，从仓库根目录运行 `python tools/agent_notes.py check`（Python 3.9+）和 `python tools/agent_notes.py lint`；lint 只列文风候选、不会失败，每条命中都要按 [prose.md](.agents/skills/agent-notes/references/prose.md) 改掉或给出保留理由，并在汇报里逐条列出。
 
 ## 文档索引
 
 - 对外文档为双语：英文是规范名（`README.md`），中文版本加 `.zh.md` 后缀（`README.zh.md`），两版顶部互留语言跳转链接。下列路径均为英文版，中文版把 `.md` 换成 `.zh.md`。
-- 有意保持单语、不要补译：`Runtime/README.txt`（补丁清单的唯一权威来源，另抄一份必然与它漂移）、逐轮实测日志（`docs/V7*.md`、`docs/第*测试.md`、`docs/打洞测试*.md`、`docs/第二次测试.md`，除开头几行外都是需逐字保留的原始输出）、`AGENTS.md`/`CLAUDE.md`/`TODO.md` 与 `.agents/skills/**`（代理与维护者文档）、`Runtime/LICENSE*.txt` 与第三方声明（法律文本）；`supernode/*.template` 与 systemd 单元由安装脚本按文件名加载，注释按运维习惯保持中文。
+- 有意保持单语、不要补译：逐轮实测日志（`docs/V7*.md`、`docs/第*测试.md`、`docs/打洞测试*.md`、`docs/第二次测试.md`，除开头几行外都是需逐字保留的原始输出）、`AGENTS.md`/`CLAUDE.md`/`TODO.md` 与 `.agents/skills/**`（代理与维护者文档）、`Runtime/LICENSE*.txt` 与第三方声明（法律文本）；`supernode/*.template` 与 systemd 单元由安装脚本按文件名加载，注释按运维习惯保持中文。
 - `native/n3n-3.4.4/` 里的上游文档只翻译了面向使用者和自建者的部分（`README.zh.md`、`MIKUN2N-MODIFICATIONS.zh.md` 与 `doc/` 下 10 份 `*.zh.md`），其余保持英文。上游英文原文一律不改（包括不加语言跳转行），译文单向链回原文，避免补丁集里混进文档噪声、跟进上游时产生冲突；新增或修改译文会改变源码归档，需按上文重新生成 `Runtime/n3n-3.4.4-source.zip` 并更新其 SHA-256。
 - `supernode/README.md`：自建 supernode 的完整步骤（装 n3n、跑安装脚本、填进客户端、联邦、排查）。
 - `docs/FEDERATION.md`：多 supernode 联邦的设计、测试部署与已知边界（当前暂缓推进）。

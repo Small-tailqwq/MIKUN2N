@@ -228,7 +228,7 @@
                   <ComboBoxItem Content="始终拒绝" Tag="AlwaysDeny" />
                 </ComboBox>
                 <TextBlock Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
-                           Text="上传昵称、IP / MAC、网卡及连接诊断，不含游戏内容、密钥或其他文件。服务器最多保留 24 小时。选择始终拒绝会停止当前上传；主窗口也可随时停止或恢复。" />
+                           Text="上传昵称、IP / MAC、网卡及连接诊断，不含游戏内容、密钥或其他文件。服务器最多保留 24 小时。联机中改为始终允许或开启上传，保存后会立即确认，并只上传此后的新日志；选择始终拒绝会停止当前上传。主窗口也可随时停止或恢复。" />
               </StackPanel>
             </Border>
           </StackPanel>

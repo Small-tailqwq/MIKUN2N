@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "classes": [
+    "feature",
+    "bug-fix",
+    "simplification",
+    "architecture",
+    "process",
+    "testing"
+  ],
+  "headings": {
+    "problem": "Problem",
+    "proposal": "Proposal",
+    "decision": "Decision",
+    "alternatives": "Alternatives considered",
+    "acceptance": "Acceptance criteria",
+    "risks": "Risks",
+    "consequences": "Consequences",
+    "bannedInImplemented": [
+      "Proposal",
+      "Plan",
+      "Migration plan",
+      "Acceptance criteria"
+    ]
+  },
+  "primaryLanguage": "en",
+  "counterpartLanguages": [
+    "zh"
+  ],
+  "formatAdopted": "2026-10-11",
+  "forbiddenRoots": [],
+  "proseLint": true
+}
