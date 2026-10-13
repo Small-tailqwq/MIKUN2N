@@ -63,27 +63,15 @@
               <RectangleGeometry Rect="8,8,240,240" RadiusX="62" RadiusY="62" />
             </GeometryDrawing.Geometry>
           </GeometryDrawing>
-          <GeometryDrawing Geometry="M70,180 V84 L128,148 L186,84 V180">
+          <GeometryDrawing Brush="White"
+                           Geometry="M70,90 C34,120 20,176 30,214 C34,228 44,236 56,238 C46,222 46,206 54,190 C70,158 96,130 96,90 Z M186,90 C222,120 236,176 226,214 C222,228 212,236 200,238 C210,222 210,206 202,190 C186,158 160,130 160,90 Z" />
+          <GeometryDrawing Geometry="M82,84 L128,138 L174,84">
             <GeometryDrawing.Pen>
-              <Pen Brush="White" Thickness="28" StartLineCap="Round" EndLineCap="Round" LineJoin="Round" />
+              <Pen Brush="White" Thickness="26" StartLineCap="Round" EndLineCap="Round" LineJoin="Round" />
             </GeometryDrawing.Pen>
           </GeometryDrawing>
-          <GeometryDrawing Brush="White">
-            <GeometryDrawing.Geometry>
-              <GeometryGroup>
-                <EllipseGeometry Center="70,184" RadiusX="25" RadiusY="25" />
-                <EllipseGeometry Center="186,184" RadiusX="25" RadiusY="25" />
-              </GeometryGroup>
-            </GeometryDrawing.Geometry>
-          </GeometryDrawing>
-          <GeometryDrawing Brush="#1CAEA4">
-            <GeometryDrawing.Geometry>
-              <GeometryGroup>
-                <EllipseGeometry Center="70,184" RadiusX="10" RadiusY="10" />
-                <EllipseGeometry Center="186,184" RadiusX="10" RadiusY="10" />
-              </GeometryGroup>
-            </GeometryDrawing.Geometry>
-          </GeometryDrawing>
+          <GeometryDrawing Brush="White" Geometry="M82,56 L106,80 L82,104 L58,80 Z M174,56 L198,80 L174,104 L150,80 Z" />
+          <GeometryDrawing Brush="#1CAEA4" Geometry="M82,69 L93,80 L82,91 L71,80 Z M174,69 L185,80 L174,91 L163,80 Z" />
         </DrawingGroup>
       </DrawingImage.Drawing>
     </DrawingImage>
