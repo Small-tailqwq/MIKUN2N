@@ -6,8 +6,6 @@ using System.Windows.Interop;
 using Microsoft.Win32;
 using MikuN2N.Models;
 using Application = System.Windows.Application;
-using Color = System.Windows.Media.Color;
-using ColorConverter = System.Windows.Media.ColorConverter;
 
 namespace MikuN2N.Services;
 
@@ -86,74 +84,36 @@ public sealed class ThemeManager : IDisposable
         }
     }
 
+    private static readonly Uri LightPalette = new("pack://application:,,,/Themes/Light.xaml");
+    private static readonly Uri DarkPalette = new("pack://application:,,,/Themes/Dark.xaml");
+
     private void ApplyPalette(bool light)
     {
-        var colors = light
-            ? new Dictionary<string, string>
-            {
-                ["WindowBackground"] = "#F3F6FA",
-                ["Surface"] = "#FFFFFFFF",
-                ["SurfaceAlt"] = "#F8FAFD",
-                ["SurfaceElevated"] = "#FFFFFFFF",
-                ["Border"] = "#DFE5EE",
-                ["TextPrimary"] = "#172033",
-                ["TextSecondary"] = "#697489",
-                ["TextMuted"] = "#929CAF",
-                ["Accent"] = "#1CAEA4",
-                ["AccentHover"] = "#17968D",
-                ["AccentSoft"] = "#DFF6F4",
-                ["AccentText"] = "#0B6F68",
-                ["ButtonHover"] = "#E9EEF5",
-                ["ButtonPressed"] = "#DCE4F0",
-                ["RowHover"] = "#F0FAF8",
-                ["Success"] = "#2CB47D",
-                ["SuccessSoft"] = "#E5F7EF",
-                ["SuccessText"] = "#1B7A53",
-                ["Warning"] = "#D99728",
-                ["WarningSoft"] = "#FFF4D9",
-                ["Danger"] = "#E25259",
-                ["InputBackground"] = "#FFFFFFFF",
-                ["LogBackground"] = "#151B29",
-                ["LogText"] = "#D7DEEF",
-                ["Overlay"] = "#12000000",
-                ["ScrollTrack"] = "#0F697489",
-                ["ScrollThumb"] = "#78929CAF"
-            }
-            : new Dictionary<string, string>
-            {
-                ["WindowBackground"] = "#10151F",
-                ["Surface"] = "#181F2C",
-                ["SurfaceAlt"] = "#202837",
-                ["SurfaceElevated"] = "#242D3D",
-                ["Border"] = "#303B4D",
-                ["TextPrimary"] = "#F1F5FB",
-                ["TextSecondary"] = "#A7B1C3",
-                ["TextMuted"] = "#778399",
-                ["Accent"] = "#45D5CB",
-                ["AccentHover"] = "#63E2D9",
-                ["AccentSoft"] = "#14403D",
-                ["AccentText"] = "#45D5CB",
-                ["ButtonHover"] = "#28323F",
-                ["ButtonPressed"] = "#303B4B",
-                ["RowHover"] = "#1B2733",
-                ["Success"] = "#45C993",
-                ["SuccessSoft"] = "#173A31",
-                ["SuccessText"] = "#45C993",
-                ["Warning"] = "#F0B34E",
-                ["WarningSoft"] = "#3B3020",
-                ["Danger"] = "#F06B72",
-                ["InputBackground"] = "#141B27",
-                ["LogBackground"] = "#0B1018",
-                ["LogText"] = "#D7DEEF",
-                ["Overlay"] = "#30000000",
-                ["ScrollTrack"] = "#26303B4D",
-                ["ScrollThumb"] = "#A0778399"
-            };
-
-        foreach (var color in colors)
+        var merged = Application.Current.Resources.MergedDictionaries;
+        var source = light ? LightPalette : DarkPalette;
+        var index = -1;
+        for (var i = 0; i < merged.Count; i++)
         {
-            Application.Current.Resources[color.Key] = new SolidColorBrush(
-                (Color)ColorConverter.ConvertFromString(color.Value));
+            var current = merged[i].Source?.OriginalString;
+            if (current is not null && current.Contains("Themes/", StringComparison.OrdinalIgnoreCase))
+            {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0 || merged[index].Source != source)
+        {
+            // Replacing the merged entry in place re-resolves every DynamicResource at once;
+            // writing keys into Application.Resources would shadow the palette for good.
+            var palette = new ResourceDictionary { Source = source };
+            if (index < 0)
+            {
+                merged.Insert(0, palette);
+            }
+            else
+            {
+                merged[index] = palette;
+            }
         }
         UpdateWindowChrome(light);
     }

@@ -5,52 +5,30 @@
              StartupUri="MainWindow.xaml"
              ShutdownMode="OnExplicitShutdown">
   <Application.Resources>
-    <SolidColorBrush x:Key="WindowBackground" Color="#F3F6FA" />
-    <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="SurfaceAlt" Color="#F8FAFD" />
-    <SolidColorBrush x:Key="SurfaceElevated" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="Border" Color="#DFE5EE" />
-    <SolidColorBrush x:Key="TextPrimary" Color="#172033" />
-    <SolidColorBrush x:Key="TextSecondary" Color="#697489" />
-    <SolidColorBrush x:Key="TextMuted" Color="#929CAF" />
-    <SolidColorBrush x:Key="Accent" Color="#1CAEA4" />
-    <SolidColorBrush x:Key="AccentHover" Color="#17968D" />
-    <SolidColorBrush x:Key="AccentSoft" Color="#DFF6F4" />
-    <!-- Text on AccentSoft/SuccessSoft badges; the plain accent is too light to read there. -->
-    <SolidColorBrush x:Key="AccentText" Color="#0B6F68" />
-    <SolidColorBrush x:Key="ButtonHover" Color="#E9EEF5" />
-    <SolidColorBrush x:Key="ButtonPressed" Color="#DCE4F0" />
-    <SolidColorBrush x:Key="RowHover" Color="#F0FAF8" />
-    <SolidColorBrush x:Key="Success" Color="#2CB47D" />
-    <SolidColorBrush x:Key="SuccessSoft" Color="#E5F7EF" />
-    <SolidColorBrush x:Key="SuccessText" Color="#1B7A53" />
-    <SolidColorBrush x:Key="Warning" Color="#D99728" />
-    <SolidColorBrush x:Key="WarningSoft" Color="#FFF4D9" />
-    <SolidColorBrush x:Key="Danger" Color="#E25259" />
-    <SolidColorBrush x:Key="InputBackground" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="LogBackground" Color="#151B29" />
-    <SolidColorBrush x:Key="LogText" Color="#D7DEEF" />
-    <SolidColorBrush x:Key="Overlay" Color="#12000000" />
-    <SolidColorBrush x:Key="ScrollTrack" Color="#0F697489" />
-    <SolidColorBrush x:Key="ScrollThumb" Color="#78929CAF" />
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Themes/Light.xaml" />
+      </ResourceDictionary.MergedDictionaries>
 
-    <!-- Miku 主题色渐变：品牌色，亮暗主题共用 -->
-    <LinearGradientBrush x:Key="AccentGradient" StartPoint="0,0" EndPoint="0,1">
-      <GradientStop Color="#41CFC5" Offset="0" />
-      <GradientStop Color="#2BAEA4" Offset="1" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="AccentGradientHover" StartPoint="0,0" EndPoint="0,1">
-      <GradientStop Color="#4FDAD0" Offset="0" />
-      <GradientStop Color="#33BCB1" Offset="1" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="AccentGradientPressed" StartPoint="0,0" EndPoint="0,1">
-      <GradientStop Color="#2FA89F" Offset="0" />
-      <GradientStop Color="#21958C" Offset="1" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="LogoGradient" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Color="#53DCD2" Offset="0" />
-      <GradientStop Color="#23A39A" Offset="1" />
-    </LinearGradientBrush>
+    <!-- Vector geometry from Assets/Brand/mikun2n-mark-color.svg. -->
+    <DrawingImage x:Key="MikuN2NLogo">
+      <DrawingImage.Drawing>
+        <DrawingGroup>
+          <GeometryDrawing Brush="Transparent" Geometry="M0,0 H800 V800 H0 Z" />
+          <GeometryDrawing Brush="#16B6B9" Geometry="F0 M178 150.5 L304 176.5 L400 350.5 L496 176.5 L622 150.5 L768 649.5 L606 552.5 L550 322.5 L400 594.5 L250 322.5 L194 552.5 L32 649.5 Z" />
+          <GeometryDrawing Brush="#099DA2" Geometry="F0 M248 290.5 L194 552.5 L250 322.5 Z" />
+          <GeometryDrawing Brush="#099DA2" Geometry="F0 M550 322.5 L606 552.5 L552 290.5 Z" />
+          <GeometryDrawing Brush="#38CEC6" Geometry="F0 M304 176.5 L248 290.5 L250 322.5 L334 474.5 L400 350.5 Z" />
+          <GeometryDrawing Brush="#38CEC6" Geometry="F0 M552 290.5 L496 176.5 L400 350.5 L466 474.5 L550 322.5 Z" />
+          <GeometryDrawing Brush="#1DBABE" Geometry="F0 M466 474.5 L400 350.5 L334 474.5 L400 594.5 Z" />
+          <GeometryDrawing Brush="#FF5146" Geometry="F0 M248 290.5 L178 150.5 L155.308 228.055 Z" />
+          <GeometryDrawing Brush="#FF5146" Geometry="F0 M552 290.5 L644.692 228.055 L622 150.5 Z" />
+          <GeometryDrawing Brush="#38D5F5" Geometry="F0 M640 450.5 L690 514.5 L717.383 476.5 L704.125 431.188 L691.05 386.5 Z" />
+          <GeometryDrawing Brush="#FFE24C" Geometry="F0 M647 577.049 L690 514.5 L640 450.5 L596.261 512.5 L606 552.5 Z" />
+          <GeometryDrawing Brush="#FF863B" Geometry="F0 M647 577.049 L704 611.179 L744.008 567.5 L690 514.5 Z" />
+        </DrawingGroup>
+      </DrawingImage.Drawing>
+    </DrawingImage>
 
     <Style TargetType="Window">
       <Setter Property="Background" Value="{DynamicResource WindowBackground}" />
@@ -268,14 +246,18 @@
                     Background="{TemplateBinding Background}"
                     CornerRadius="7" Padding="{TemplateBinding Padding}">
               <ContentPresenter VerticalAlignment="Center"
-                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}">
+                <ContentPresenter.Resources>
+                  <Style TargetType="TextBlock" />
+                </ContentPresenter.Resources>
+              </ContentPresenter>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsHighlighted" Value="True">
                 <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource ButtonHover}" />
               </Trigger>
               <Trigger Property="IsSelected" Value="True">
-                <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+                <Setter Property="Foreground" Value="{DynamicResource AccentText}" />
                 <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource AccentSoft}" />
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
@@ -369,7 +351,7 @@
                       BorderBrush="{DynamicResource Border}"
                       Background="{DynamicResource InputBackground}">
                 <Path x:Name="CheckGlyph" Data="M 3.5 8 L 7 11.5 L 12.5 4.5"
-                      Stroke="White" StrokeThickness="2"
+                      Stroke="{DynamicResource OnAccent}" StrokeThickness="2"
                       StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                       Visibility="Collapsed" />
               </Border>
@@ -380,7 +362,7 @@
                 <Setter TargetName="CheckBorder" Property="BorderBrush" Value="{DynamicResource Accent}" />
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="CheckBorder" Property="Background" Value="{StaticResource AccentGradient}" />
+                <Setter TargetName="CheckBorder" Property="Background" Value="{DynamicResource AccentGradient}" />
                 <Setter TargetName="CheckBorder" Property="BorderBrush" Value="{DynamicResource Accent}" />
                 <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible" />
               </Trigger>
@@ -555,15 +537,13 @@
         </Setter.Value>
       </Setter>
     </Style>
-    <!-- The brand gradient is the same in both themes, so its text colour is fixed too:
-         white or the dark theme's near-white text reads at about 2.3:1 on it. -->
     <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="Foreground" Value="#102A2E" />
+      <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
             <Border x:Name="ButtonBorder" CornerRadius="10"
-                    Background="{StaticResource AccentGradient}"
+                    Background="{DynamicResource AccentGradient}"
                     Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}">
@@ -576,10 +556,10 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="ButtonBorder" Property="Background" Value="{StaticResource AccentGradientHover}" />
+                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource AccentGradientHover}" />
               </Trigger>
               <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="ButtonBorder" Property="Background" Value="{StaticResource AccentGradientPressed}" />
+                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource AccentGradientPressed}" />
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.5" />
@@ -807,5 +787,6 @@
         </Setter.Value>
       </Setter>
     </Style>
+    </ResourceDictionary>
   </Application.Resources>
 </Application>

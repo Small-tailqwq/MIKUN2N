@@ -34,6 +34,7 @@
 
 #define SOCKET_TIMEOUT_INTERVAL_SECS     10
 #define REGISTER_SUPER_INTERVAL_DFL      20 /* sec, usually UDP NAT entries in a firewall expire after 30 seconds */
+#define N2N_TCP_FRAME_TIMEOUT            15
 #define SWEEP_TIME                       30 /* sec, indicates the value after which we have to sort the hash list of supernodes in edges
                                              * and when we send out packets to query selection-relevant informations from supernodes. */
 #ifdef HAVE_BRIDGING_SUPPORT

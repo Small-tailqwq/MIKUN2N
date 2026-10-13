@@ -465,6 +465,12 @@ int decode_REGISTER_SUPER (n2n_REGISTER_SUPER_t *reg,
     retval += decode_buf(reg->dev_desc, N2N_DESC_SIZE, base, rem, idx);
     retval += decode_uint16(&(reg->auth.scheme), base, rem, idx);
     retval += decode_uint16(&(reg->auth.token_size), base, rem, idx);
+    /* token_size is wire-supplied: it must never exceed the fixed-size field.
+     * Clearing it also keeps a later re-encode from reading past the array. */
+    if(reg->auth.token_size > N2N_AUTH_MAX_TOKEN_SIZE) {
+        reg->auth.token_size = 0;
+        return -1;
+    }
     retval += decode_buf(reg->auth.token, reg->auth.token_size, base, rem, idx);
     retval += decode_uint32(&(reg->key_time), base, rem, idx);
 
@@ -500,6 +506,12 @@ int decode_UNREGISTER_SUPER (n2n_UNREGISTER_SUPER_t *unreg,
 
     retval += decode_uint16(&(unreg->auth.scheme), base, rem, idx);
     retval += decode_uint16(&(unreg->auth.token_size), base, rem, idx);
+    /* token_size is wire-supplied: it must never exceed the fixed-size field.
+     * Clearing it also keeps a later re-encode from reading past the array. */
+    if(unreg->auth.token_size > N2N_AUTH_MAX_TOKEN_SIZE) {
+        unreg->auth.token_size = 0;
+        return -1;
+    }
     retval += decode_buf(unreg->auth.token, unreg->auth.token_size, base, rem, idx);
     retval += decode_mac(unreg->srcMac, base, rem, idx);
 
@@ -609,6 +621,10 @@ int decode_REGISTER_SUPER_ACK (n2n_REGISTER_SUPER_ACK_t *reg,
 
     /* Following the edge socket are an array of backup supernodes. */
     retval += decode_uint8(&(reg->num_sn), base, rem, idx);
+    if(((size_t)reg->num_sn * REG_SUPER_ACK_PAYLOAD_ENTRY_SIZE) > REG_SUPER_ACK_PAYLOAD_SPACE) {
+        reg->num_sn = 0;
+        return -1;
+    }
     retval += decode_buf(tmpbuf, (reg->num_sn * REG_SUPER_ACK_PAYLOAD_ENTRY_SIZE), base, rem, idx);
 
     retval += decode_uint32(&(reg->key_time), base, rem, idx);
@@ -650,6 +666,12 @@ int decode_REGISTER_SUPER_NAK (n2n_REGISTER_SUPER_NAK_t *nak,
 
     retval += decode_uint16(&(nak->auth.scheme), base, rem, idx);
     retval += decode_uint16(&(nak->auth.token_size), base, rem, idx);
+    /* token_size is wire-supplied: it must never exceed the fixed-size field.
+     * Clearing it also keeps a later re-encode from reading past the array. */
+    if(nak->auth.token_size > N2N_AUTH_MAX_TOKEN_SIZE) {
+        nak->auth.token_size = 0;
+        return -1;
+    }
     retval += decode_buf(nak->auth.token, nak->auth.token_size, base, rem, idx);
 
     return retval;

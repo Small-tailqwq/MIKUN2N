@@ -53,6 +53,8 @@ The current server also accepts optional native build/wire identity reports from
 
 From 0.5.8-9 a cone peer and a NAT4 peer also try coordinated worker-port banks (alternating with the layered sweep), and the server must plan those rounds. Rebuild and reinstall the supernode from the 0.5.8-9 source to get them; an older server still connects such pairs through the layered sweep, after one coordination timeout per bank round. The NAT observation service (UDP 21001/21002) is unchanged.
 
+The observation unit now passes `--observer-only`, so the production service ignores experimental room coordination commands while retaining PROBE, PROBE7 and XPROBE. Updating the local files does not change a running server: rebuild the Linux supernode and manually reinstall the matching binary, observer script and unit. Experimental reference clients need a separately operated full coordinator.
+
 ## Install
 
 From the same source checkout:
@@ -133,6 +135,8 @@ against your own traffic before relying on them.
 ## Federation
 
 Multiple server endpoints can be stored in one client node. Federation requires matching configuration on the servers; see [the federation notes](../docs/FEDERATION.md) for the current limits. The installer preserves an existing federation environment file. Each public server address still needs its own observation endpoints.
+
+Since 0.5.8-10, configure `peer=` mutually on the participating servers: only the configured IP/UDP-port pairs may send federation traffic. DNS peers use their resolved addresses. No configured peers means no federation admission; ordinary client registration remains available. Announced members are not added automatically.
 
 ## Remove
 

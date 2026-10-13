@@ -14,7 +14,7 @@ The [runtime overview](../../../../Runtime/README.md) lists components and links
 
 Implementation history lives in `Runtime/changes/<version>.md` with a `.zh.md` counterpart. Each record describes the problem and changes, keeping test results beside the relevant implementation. These logs ship with the runtime and describe behavior at that version. Agent Notes under `.agents/notes/` carry lasting decisions and follow their own lifecycle and gate.
 
-The records contain 55 numbered changes in 22 bilingual groups. Entries with explicit versions are grouped by those labels; entries 1–5 and 34–37 have unknown versions and are collected in `unversioned.md`. The `patch-N` anchors stay stable for citations. Each numbered entry describes its implementation and evidence in both languages. The topic guide provides links by mechanism; individual versions are found by filename.
+The records contain 57 numbered changes in 22 bilingual groups. Entries with explicit versions are grouped by those labels; entries 1–5 and 34–37 have unknown versions and are collected in `unversioned.md`. The `patch-N` anchors stay stable for citations. Each numbered entry describes its implementation and evidence in both languages. The topic guide provides links by mechanism; individual versions are found by filename.
 
 The [project content list](../../../../MikuN2N.csproj) copies both language overviews, build instructions and all change-record Markdown files into build and publish output. The [release packaging script](../../../../tools/package-release.ps1) checks that they are present. The [updater](../../../../Services/UpdateService.cs) installs subdirectories and includes `Runtime/changes/` in its nonrecursive cleanup of replaced `.update-old` files.
 

@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import os
+import secrets
 import socket
 import threading
 import time
@@ -27,6 +28,7 @@ class Member:
     addr: tuple[str, int]
     seen: float
     report: tuple[int, list[str]] | None = None
+    owner_token: str = field(default_factory=lambda: secrets.token_hex(32), repr=False)
 
 
 @dataclass
@@ -38,12 +40,13 @@ class Room:
 
 
 class Coordinator:
-    def __init__(self, event_log: str | None = None):
+    def __init__(self, event_log: str | None = None, observer_only: bool = False):
         self.rooms: dict[str, Room] = {}
         self.legacy_rooms: dict[str, list[tuple[tuple[str, int], float]]] = {}
         self.legacy_banks: dict[str, dict[tuple[str, int], tuple[int, int, int]]] = {}
         self.lock = threading.Lock()
         self.event_log = event_log
+        self.observer_only = observer_only
         self.rates: dict[str, tuple[float, float]] = {}
 
     def allowed(self, source_ip: str, now: float) -> bool:
@@ -116,7 +119,8 @@ class Coordinator:
                 pass
             return
         if cmd in {"JOIN", "BANKS"}:
-            self.handle_legacy(parts, addr, now, send_a)
+            if not self.observer_only:
+                self.handle_legacy(parts, addr, now, send_a)
             return
         if cmd == "PROBE7" and len(parts) == 3:
             cid, seq = parts[1], parts[2]
@@ -127,7 +131,9 @@ class Coordinator:
                     addr,
                 )
             return
-        if cmd == "JOIN7" and len(parts) == 3:
+        if self.observer_only:
+            return
+        if cmd == "JOIN7" and len(parts) in {3, 4}:
             room_name, cid = parts[1], parts[2]
             if not self.valid_token(room_name, MAX_ROOM) or not self.valid_token(cid, MAX_CLIENT_ID):
                 send_a("ERR7 invalid-token", addr)
@@ -135,12 +141,23 @@ class Coordinator:
             with self.lock:
                 self.cleanup(now)
                 room = self.rooms.setdefault(room_name, Room())
-                room.members[cid] = Member(cid, addr, now, room.members.get(cid, Member(cid, addr, now)).report)
-                send_a(f"JOIN7ACK {cid} {addr[0]} {addr[1]}", addr)
+                member = room.members.get(cid)
+                if member is None:
+                    member = Member(cid, addr, now)
+                    room.members[cid] = member
+                elif member.addr != addr and not (
+                    len(parts) == 4 and parts[3].isascii()
+                    and secrets.compare_digest(member.owner_token, parts[3])
+                ):
+                    send_a("ERR7 identity-in-use", addr)
+                    return
+                member.addr = addr
+                member.seen = now
+                send_a(f"JOIN7ACK {cid} {addr[0]} {addr[1]} {member.owner_token}", addr)
                 self.send_peer_info(room, cid, send_a)
                 self.event("join7", room=room_name, client=cid, source=f"{addr[0]}:{addr[1]}")
             return
-        if cmd == "REPORT7" and len(parts) == 13:
+        if cmd == "REPORT7" and len(parts) in {13, 14}:
             self.handle_report7(parts, addr, now, send_a)
 
     def send_peer_info(self, room: Room, cid: str, send: Callable[[str, tuple[str, int]], None]) -> None:
@@ -173,11 +190,19 @@ class Coordinator:
             return
         with self.lock:
             self.cleanup(now)
-            room = self.rooms.setdefault(room_name, Room())
+            room = self.rooms.get(room_name)
+            if room is None:
+                return
             member = room.members.get(cid)
             if member is None:
-                member = Member(cid, addr, now)
-                room.members[cid] = member
+                return
+            if member.addr != addr and not (
+                len(parts) == 14 and parts[13].isascii()
+                and secrets.compare_digest(member.owner_token, parts[13])
+            ):
+                return
+            if member.report is not None and generation < member.report[0]:
+                return
             member.addr = addr
             member.seen = now
             member.report = (generation, parts[4:13])
@@ -262,9 +287,9 @@ class Coordinator:
                         send("GO", member)
 
 
-def run_server(bind: str, port_a: int, port_b: int, event_log: str | None) -> None:
+def run_server(bind: str, port_a: int, port_b: int, event_log: str | None, observer_only: bool = False) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    coordinator = Coordinator(event_log)
+    coordinator = Coordinator(event_log, observer_only)
     sock_a = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_b = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_a.bind((bind, port_a))
@@ -303,8 +328,9 @@ def main() -> None:
     parser.add_argument("--port-a", type=int, default=DEFAULT_PORT_A)
     parser.add_argument("--port-b", type=int, default=DEFAULT_PORT_B)
     parser.add_argument("--event-log", default=os.environ.get("NATPUNCH_EVENT_LOG"))
+    parser.add_argument("--observer-only", action="store_true")
     args = parser.parse_args()
-    run_server(args.bind, args.port_a, args.port_b, args.event_log)
+    run_server(args.bind, args.port_a, args.port_b, args.event_log, args.observer_only)
 
 
 if __name__ == "__main__":

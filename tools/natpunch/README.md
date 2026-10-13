@@ -1,10 +1,31 @@
-# natpunch v7.3.1
+# natpunch v7.3.2
 
 > [English](README.md) | [简体中文](README.zh.md)
 
 A UDP NAT4 (address- and port-dependent mapping) punching experiment tool for
 Windows. The source is kept permanently in the MikuN2N repository so it is not
 again left behind as only a temporary directory or binary.
+
+## v7.3.2 coordinator identity binding
+
+JOIN7 binds a client ID to its observed endpoint and returns a random ownership
+token in JOIN7ACK. Rejoins from that endpoint remain compatible with older clients;
+changing endpoints requires the token as the final JOIN7 or REPORT7 field.
+REPORT7 requires an existing member and rejects older report generations.
+The token is kept in client memory and is never sent to peers or written to logs.
+The updated client accepts coordination replies only from the configured server.
+Upgrade the server first; an old server does not enforce these checks.
+
+This protects an active ID from another participant who only knows that ID. It
+does not make an open room private or protect plaintext tokens from an on-path
+observer. Ownership expires with the 120-second member lease or server restart;
+start a new client session after losing the lease. The legacy JOIN/BANKS protocol
+still identifies members by endpoint and has no authenticated rebinding.
+
+Production observation units use `--observer-only`: PROBE, PROBE7 and XPROBE
+remain available, while JOIN, BANKS, JOIN7 and REPORT7 are ignored. Run the full
+coordinator explicitly for the reference-client experiments below. The previous
+client/server sources are retained in `legacy/v7.3.1/`.
 
 ## v7.3.1 minimal fix
 
@@ -104,13 +125,13 @@ SHA-256 of the recovered v6 original file:
 
 ```powershell
 $env:Path = "$env:USERPROFILE\mingw64\mingw64\bin;$env:Path"
-gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.1.exe natpunch.c -lws2_32
+gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.2.exe natpunch.c -lws2_32
 ```
 
 Model self-test:
 
 ```powershell
-.\natpunch-v7.3.1.exe --self-test
+.\natpunch-v7.3.2.exe --self-test
 ```
 
 ## Run
@@ -125,7 +146,7 @@ Both ends use the same room number; set the server address to the machine
 running the server above:
 
 ```powershell
-.\natpunch-v7.3.1.exe client vps.example.com 房间号
+.\natpunch-v7.3.2.exe client vps.example.com 房间号
 .\打洞测试.bat vps.example.com 房间号
 ```
 

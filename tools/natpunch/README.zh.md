@@ -1,9 +1,26 @@
-# natpunch v7.3.1
+# natpunch v7.3.2
 
 > [English](README.md) | [简体中文](README.zh.md)
 
 面向 Windows 的 UDP NAT4（地址和端口相关映射）打洞实验工具。源码固定保存在
 MikuN2N 仓库中，避免再次只留下临时目录或二进制。
+
+## v7.3.2 协调器身份绑定
+
+JOIN7 将客户端 ID 绑定到实际来源端点，并在 JOIN7ACK 中返回随机所有权令牌。
+同端点重复加入仍兼容旧客户端；更换端点必须在 JOIN7 或 REPORT7 的末尾附带令牌。
+REPORT7 要求成员已存在，并拒绝倒退的报告代次。令牌仅保存在客户端内存中，
+不发送给对端、不写入日志。新版客户端只接受配置服务器发来的协调回复。
+应先升级服务端；旧服务端不会执行这些检查。
+
+这防止其他参与者仅凭已知 ID 接管活跃成员，不会把开放房间变为私有房间，
+也不能防止链路上的观察者读取明文令牌。成员的 120 秒租约过期或服务端重启后，
+所有权失效，需要开始新的客户端会话。旧 JOIN/BANKS 协议仍以端点标识成员，
+不支持经身份验证的地址切换。
+
+生产观察服务使用 `--observer-only`：保留 PROBE、PROBE7、XPROBE，忽略 JOIN、
+BANKS、JOIN7、REPORT7。运行下述参考客户端实验时，显式启动完整协调器。
+上一版客户端和服务端源码保存在 `legacy/v7.3.1/`。
 
 ## v7.3.1 最小修复
 
@@ -78,13 +95,13 @@ v7.2 保留 v7.1 已验证的规律 NAT 分层扫描，并为手机流量常见�
 
 ```powershell
 $env:Path = "$env:USERPROFILE\mingw64\mingw64\bin;$env:Path"
-gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.1.exe natpunch.c -lws2_32
+gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.2.exe natpunch.c -lws2_32
 ```
 
 模型自测：
 
 ```powershell
-.\natpunch-v7.3.1.exe --self-test
+.\natpunch-v7.3.2.exe --self-test
 ```
 
 ## 运行
@@ -98,7 +115,7 @@ python3 natpunch-server.py server --bind 0.0.0.0 --port-a 21001 --port-b 21002
 两端使用相同房间号，服务器地址填运行上面服务端的机器：
 
 ```powershell
-.\natpunch-v7.3.1.exe client vps.example.com 房间号
+.\natpunch-v7.3.2.exe client vps.example.com 房间号
 .\打洞测试.bat vps.example.com 房间号
 ```
 

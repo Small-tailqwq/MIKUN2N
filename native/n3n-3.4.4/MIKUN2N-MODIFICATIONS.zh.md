@@ -4,7 +4,7 @@
 >
 > 本文是英文声明的中文翻译；GPLv3 第 5(a) 条所要求的修改声明以英文原文为准。
 
-本源码树是 n3n 3.4.4（https://github.com/n42n/n3n，tag `3.4.4`）的修改版。修改由 MikuN2N 项目在 2026 年 7 月至 10 月间完成；最近一次修改属于 MikuN2N 0.5.8-9 版本（2026-10-11）。它是该版本随附的 `n3n-edge.exe` 的对应源码，并按与 n3n 相同的许可证 GPL-3.0-only 分发（见 `LICENSES/preferred/GPL-3.0`）。上游的版权声明均原样保留。
+本源码树是 n3n 3.4.4（https://github.com/n42n/n3n，tag `3.4.4`）的修改版。修改由 MikuN2N 项目在 2026 年 7 月至 10 月间完成；最近一次修改属于 MikuN2N 0.5.8-10 版本（2026-10-13）。它是该版本随附的 `n3n-edge.exe` 的对应源码，并按与 n3n 相同的许可证 GPL-3.0-only 分发（见 `LICENSES/preferred/GPL-3.0`）。上游的版权声明均原样保留。
 
 相对上游改动的部分：
 
@@ -13,6 +13,8 @@
 - 经同意的单跳玩家协助：带租约的协助会话、待命准备、仅使用 IPv4/IPv6 直连的转发、端到端路径探测，以及保留原始 n3n 载荷与对端身份的端点绑定接收处理；有界的双向生命周期、提交、拒绝和 TAP 交付诊断（`src/mikun2n_assist.[ch]`、`src/edge_utils.c`、`src/management.c`）。
 - Windows TAP 网卡在 MAC 设置、接口跃点数和媒体状态方面的修复（`src/win32/wintap.c`）。
 - 实验性的 IPv6 传输（含源路径持续失败后的网卡切换恢复、尺寸发现、有上限的隧道内分片，以及按对端记录提交、重组、槽耗尽和过期的诊断，`src/mikun2n_ipv6.*`、`src/mikun2n_ipv6_frag.h`、`src/mikun2n_stun.h`）、中继限速（`src/mikun2n_relay*.h`）、配置选项（`src/conffile_defs.c`）以及构建标识（`src/mikun2n_build_version.h`）。
+- supernode 的 TCP 帧边界和连接超时、绑定注册的中继来源，以及配置指定的联邦成员（`src/sn_utils.c`、`include/n2n_typedefs.h`）。
+- wire 解码器对来自链路的认证令牌长度与备份 supernode 数组条目数的边界校验（`src/wire.c`）。
 - 构建和测试工具（`Makefile`、`tools/Makefile`、`tools/tests-*.c`、`scripts/build-mikun2n-windows.sh`）。
 - README、本声明以及 `doc/` 下部分文档的简体中文译文（`*.zh.md`，2026-09-28 新增）。英文原文未作改动，内容以英文原文为准。
 

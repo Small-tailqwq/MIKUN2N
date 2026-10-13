@@ -13,38 +13,20 @@ using System.Windows.Threading;
 using MikuN2N.Models;
 using MikuN2N.Services;
 using Application = System.Windows.Application;
-using Brush = System.Windows.Media.Brush;
-using Brushes = System.Windows.Media.Brushes;
 using Clipboard = System.Windows.Clipboard;
-using Color = System.Windows.Media.Color;
 using Control = System.Windows.Controls.Control;
 using Cursors = System.Windows.Input.Cursors;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 
 namespace MikuN2N;
 
 public partial class MainWindow : Window
 {
-    private static readonly Brush Gray = new SolidColorBrush(Color.FromRgb(170, 177, 192));
-    private static readonly Brush Blue = new SolidColorBrush(Color.FromRgb(67, 132, 235));
-    private static readonly Brush Amber = new SolidColorBrush(Color.FromRgb(230, 158, 52));
-    private static readonly Brush Green = new SolidColorBrush(Color.FromRgb(44, 180, 125));
-    private static readonly Brush Red = new SolidColorBrush(Color.FromRgb(226, 82, 89));
-    private static readonly Brush Nat1 = new SolidColorBrush(Color.FromRgb(44, 180, 125));
-    private static readonly Brush Nat2 = new SolidColorBrush(Color.FromRgb(53, 184, 197));
-    private static readonly Brush Nat12 = new SolidColorBrush(Color.FromRgb(42, 177, 158));
-    private static readonly Brush Nat3 = new SolidColorBrush(Color.FromRgb(230, 158, 52));
-    private static readonly Brush Nat4 = new SolidColorBrush(Color.FromRgb(226, 82, 89));
-    private static readonly Brush Nat1Soft = new SolidColorBrush(Color.FromArgb(42, 44, 180, 125));
-    private static readonly Brush Nat2Soft = new SolidColorBrush(Color.FromArgb(42, 53, 184, 197));
-    private static readonly Brush Nat12Soft = new SolidColorBrush(Color.FromArgb(42, 42, 177, 158));
-    private static readonly Brush Nat3Soft = new SolidColorBrush(Color.FromArgb(42, 230, 158, 52));
-    private static readonly Brush Nat4Soft = new SolidColorBrush(Color.FromArgb(42, 226, 82, 89));
-
     /// <summary>Lines kept in the on-screen log; the full log is on disk.</summary>
     private const int MaxLogLines = 1500;
-    private const string DefaultStatusDetail = "填写昵称后点击连接，即可加入朋友们的虚拟局域网。";
-    private const string NoNodeStatusDetail = "还差一步：先在下方添加一个节点。";
+    private const string DefaultStatusDetail = "填写昵称，连接朋友分享的节点。";
+    private const string NoNodeStatusDetail = "先添加朋友分享的节点，再填写昵称开始联机。";
 
     private readonly SettingsStore _settingsStore = new();
     private readonly EdgeController _edgeController = new();
@@ -83,6 +65,7 @@ public partial class MainWindow : Window
     private string? _activePeerMenuNodeId;
     private PeerConnectionMode _activePeerMenuMode;
     private PeerAssistWindow? _peerAssistWindow;
+    private bool _showPeerAssistRequests;
 
     public MainWindow()
     {
@@ -134,7 +117,18 @@ public partial class MainWindow : Window
         _edgeController.PeerAssistRequested += EdgeController_PeerAssistRequested;
         Closed += (_, _) => _edgeController.PeerAssistRequested -= EdgeController_PeerAssistRequested;
         _trayIcon = new TrayIconService();
+        if (!NotificationRegistration.TryRegister())
+            AppendLogLine("Windows 通知身份注册未完成；仍可在主界面查看协助申请。");
         _trayIcon.ShowRequested += (_, _) => Dispatcher.InvokeAsync(ShowFromTray);
+        _trayIcon.PeerAssistRequestsRequested += (_, _) => Dispatcher.InvokeAsync(() =>
+        {
+            _showPeerAssistRequests = true;
+            if (!FocusOpenDialog())
+            {
+                ShowFromTray();
+                TryOpenPeerAssistRequests();
+            }
+        });
         _trayIcon.SettingsRequested += (_, _) => Dispatcher.InvokeAsync(() =>
         {
             if (!FocusOpenDialog())
@@ -171,9 +165,15 @@ public partial class MainWindow : Window
                 _ = _updates.CheckAndPrepareAsync();
             }
         }, Dispatcher);
-        Activated += (_, _) => Dispatcher.BeginInvoke(TryPromptUpdate, DispatcherPriority.Background);
+        Activated += (_, _) => Dispatcher.BeginInvoke(() =>
+        {
+            TryOpenPeerAssistRequests();
+            TryPromptUpdate();
+        }, DispatcherPriority.Background);
+        Deactivated += (_, _) => NatHelpPopup.IsOpen = false;
         Closing += MainWindow_Closing;
         Loaded += (_, _) => SetInitialFocus();
+        InitializeStatusAnimation();
         UpdateTapAvailability();
         UpdateConnectButton();
         UpdateNicknameHint();
@@ -194,9 +194,17 @@ public partial class MainWindow : Window
 
     private void SetInitialFocus()
     {
-        if (_settings.Nodes.Count == 0)
+        if (TapWarningBorder.Visibility == Visibility.Visible)
+        {
+            InstallTapButton.Focus();
+        }
+        else if (_settings.Nodes.Count == 0)
         {
             AddFirstNodeButton.Focus();
+        }
+        else if (NodeBox.SelectedItem is null)
+        {
+            NodeBox.Focus();
         }
         else if (string.IsNullOrWhiteSpace(NicknameBox.Text))
         {
@@ -313,7 +321,7 @@ public partial class MainWindow : Window
         {
             StatusDetail.Text = DefaultStatusDetail;
         }
-        ConnectButton.Focus();
+        SetInitialFocus();
         return true;
     }
 
@@ -342,12 +350,15 @@ public partial class MainWindow : Window
 
         var node = NodeBox.SelectedItem as SupernodeNode;
         var hasNodes = _settings.Nodes.Count > 0;
-        NodeAddressText.Text = node?.Server ?? (hasNodes ? "请选择一个节点" : "尚未添加节点");
+        NodeAddressText.Text = node is null ? "请选择一个节点" : $"地址：{node.Server}";
         NodeAddressText.ToolTip = node?.Server;
-        NodeCommunityText.Text = node is null ? "—" : node.Community;
+        NodeCommunityText.Text = node is null ? "小组：—" : $"小组：{node.Community}";
         NodeCommunityText.ToolTip = node?.Community;
         RoomNameText.Text = $"小组：{(string.IsNullOrWhiteSpace(node?.Community) ? "—" : node.Community)}";
         NoNodeBorder.Visibility = hasNodes ? Visibility.Collapsed : Visibility.Visible;
+        NodeBox.Visibility = hasNodes ? Visibility.Visible : Visibility.Collapsed;
+        ManageNodesButton.Visibility = hasNodes ? Visibility.Visible : Visibility.Collapsed;
+        NodeDetailsPanel.Visibility = hasNodes ? Visibility.Visible : Visibility.Collapsed;
         if (!hasNodes && _lastSnapshot.State is ConnectionState.Disconnected && !_edgeController.IsRunning)
         {
             StatusDetail.Text = NoNodeStatusDetail;
@@ -424,7 +435,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                ShowConnectError("请先在下方“当前节点”里选择一个节点。", NodeBox);
+                ShowConnectError("请先在上方选择要连接的节点。", NodeBox);
                 return;
             }
         }
@@ -1092,7 +1103,7 @@ public partial class MainWindow : Window
         _lastSnapshot = snapshot;
         _connectedThisSession |= snapshot.State == ConnectionState.Connected;
         _trayIcon.Update(snapshot, _edgeController.IsRunning);
-        StatusTitle.Text = snapshot.Summary;
+        StatusTitle.Text = snapshot.State == ConnectionState.Connected ? "已连接" : snapshot.Summary;
         StatusDetail.Text = snapshot.State == ConnectionState.Disconnected && _settings.Nodes.Count == 0
             ? NoNodeStatusDetail
             : snapshot.Detail;
@@ -1141,14 +1152,7 @@ public partial class MainWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
 
-        (StatusIndicator.Background, StatusGlyph.Text) = snapshot.State switch
-        {
-            ConnectionState.Connecting => (Blue, "…"),
-            ConnectionState.Reconnecting => (Amber, "↻"),
-            ConnectionState.Connected => (Green, "✓"),
-            ConnectionState.Error => (Red, "!"),
-            _ => (Gray, "○")
-        };
+        UpdateStatusIndicator(snapshot.State);
 
         if (snapshot.State == ConnectionState.Reconnecting)
         {
@@ -1311,17 +1315,39 @@ public partial class MainWindow : Window
         {
             RefreshPeerAssistRequests();
             AppendLogLine($"{request.RequesterNickname} 请求协助与 {request.TargetNickname} 通信，可在「协助申请」中同意或拒绝。");
+            var pending = _edgeController.GetPeerAssistRequests();
+            if (pending.Any(item => item.CircuitId == request.CircuitId))
+            {
+                _trayIcon.ShowPeerAssistRequestTip(request, pending.Count);
+            }
         });
     }
 
     private void RefreshPeerAssistRequests()
     {
-        var count = _edgeController.GetPeerAssistRequests().Count;
+        var pending = _edgeController.GetPeerAssistRequests();
+        _trayIcon.UpdatePeerAssistRequests(pending);
+        var count = pending.Count;
         PeerAssistRequestsButton.Content = $"协助申请（{count}）";
         PeerAssistRequestsButton.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void PeerAssistRequests_Click(object sender, RoutedEventArgs e) => OpenPeerAssist(null);
+
+    private void TryOpenPeerAssistRequests()
+    {
+        if (!_showPeerAssistRequests ||
+            OwnedWindows.OfType<Window>().Any(window => window.IsVisible && window is not PeerAssistWindow))
+        {
+            return;
+        }
+        _showPeerAssistRequests = false;
+        RefreshPeerAssistRequests();
+        if (_edgeController.GetPeerAssistRequests().Count > 0)
+        {
+            OpenPeerAssist(null);
+        }
+    }
 
     private void OpenPeerAssist(PeerSnapshot? target)
     {
@@ -1400,15 +1426,24 @@ public partial class MainWindow : Window
         var natType = snapshot.State == ConnectionState.Connected
             ? snapshot.NatType
             : "—";
-        NatTypeText.Text = natType;
+        NatTypeText.Text = natType == "—" ? "待检测" : natType;
+        NatConditionText.Text = natType switch
+        {
+            "NAT1" or "NAT2" or "NAT1/2" => "直连条件较好",
+            "NAT3" => "直连需要双方配合",
+            "NAT4" => "直连条件受限",
+            "检测中" => "正在检测网络类型",
+            "检测不可用" or "未知" => "暂无检测结果",
+            _ => "连接后自动检测"
+        };
         NatExplainText.Text = natType switch
         {
-            "NAT1" or "NAT2" or "NAT1/2" => "网络很开放，和大多数朋友都能直连。",
-            "NAT3" => "网络较开放，多数朋友可以直连。",
-            "NAT4" => "网络限制较严，部分朋友会经服务器中转，延迟可能略高；程序会自动尝试直连。",
-            "检测中" => "正在检测你的网络类型…",
-            "检测不可用" or "未知" => "暂时无法检测网络类型，不影响联机。",
-            _ => "连接后会自动检测你的网络类型。"
+            "NAT1" or "NAT2" or "NAT1/2" => "网络限制较少，较容易建立直连。",
+            "NAT3" => "传入连接受限，程序会尝试打洞直连。",
+            "NAT4" => "端口映射随连接对象变化，直连较困难。",
+            "检测中" => "正在检测网络类型…",
+            "检测不可用" or "未知" => "暂未获取到 NAT 类型。",
+            _ => "连接后自动检测 NAT 类型。"
         };
         var hint = snapshot.State == ConnectionState.Connected ? snapshot.NetworkHint : null;
         NetworkHintText.Text = hint ?? string.Empty;
@@ -1426,43 +1461,62 @@ public partial class MainWindow : Window
         var selected = selectedRanks.ToHashSet();
         var legends = new[]
         {
-            (Rank: 1, Border: Nat1LegendBorder, Overlay: Nat1MutedOverlay),
-            (Rank: 2, Border: Nat2LegendBorder, Overlay: Nat2MutedOverlay),
-            (Rank: 3, Border: Nat3LegendBorder, Overlay: Nat3MutedOverlay),
-            (Rank: 4, Border: Nat4LegendBorder, Overlay: Nat4MutedOverlay)
+            (Rank: 1, Border: Nat1LegendBorder, Text: Nat1LegendText),
+            (Rank: 2, Border: Nat2LegendBorder, Text: Nat2LegendText),
+            (Rank: 3, Border: Nat3LegendBorder, Text: Nat3LegendText),
+            (Rank: 4, Border: Nat4LegendBorder, Text: Nat4LegendText)
         };
         foreach (var legend in legends)
         {
             var isCurrent = selected.Contains(legend.Rank);
-            legend.Overlay.Visibility = isCurrent ? Visibility.Collapsed : Visibility.Visible;
-            legend.Border.BorderThickness = new Thickness(isCurrent ? 2 : 1);
-            // The tooltip surface is white in the light theme, so a white ring was invisible.
-            if (isCurrent)
-            {
-                legend.Border.SetResourceReference(Border.BorderBrushProperty, "TextPrimary");
-            }
-            else
-            {
-                legend.Border.BorderBrush = Brushes.Transparent;
-            }
-            legend.Border.Opacity = selected.Count == 0 ? 0.62 : 1;
+            legend.Border.SetResourceReference(Border.BackgroundProperty, isCurrent ? "AccentSoft" : "SurfaceAlt");
+            legend.Border.SetResourceReference(Border.BorderBrushProperty, isCurrent ? "Accent" : "Border");
+            legend.Text.SetResourceReference(TextBlock.ForegroundProperty, isCurrent ? "AccentText" : "TextSecondary");
         }
 
-        (NatTypeBadge.Background, NatTypeBadge.BorderBrush, NatTypeText.Foreground, NatHealthDot.Foreground) =
-            natType switch
-            {
-                "NAT1" => (Nat1Soft, Nat1, Nat1, Nat1),
-                "NAT2" => (Nat2Soft, Nat2, Nat2, Nat2),
-                "NAT1/2" => (Nat12Soft, Nat12, Nat12, Nat12),
-                "NAT3" => (Nat3Soft, Nat3, Nat3, Nat3),
-                "NAT4" => (Nat4Soft, Nat4, Nat4, Nat4),
-                _ => (FindResource("SurfaceAlt") as Brush ?? Gray,
-                      FindResource("Border") as Brush ?? Gray,
-                      FindResource("TextMuted") as Brush ?? Gray,
-                      FindResource("TextMuted") as Brush ?? Gray)
-            };
-
+        var tone = natType switch
+        {
+            "NAT1" or "NAT2" or "NAT1/2" => "Success",
+            "NAT3" or "NAT4" => "Warning",
+            _ => "TextMuted"
+        };
+        NatHealthDot.SetResourceReference(TextBlock.ForegroundProperty, tone);
     }
+
+    private void NatHelp_Click(object sender, RoutedEventArgs e)
+    {
+        NatHelpPopup.StaysOpen = false;
+        NatHelpPopup.IsOpen = true;
+    }
+
+    private void NatHelp_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (!NatHelpPopup.IsOpen)
+        {
+            NatHelpPopup.StaysOpen = true;
+            NatHelpPopup.IsOpen = true;
+        }
+    }
+
+    private void NatHelp_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (NatHelpPopup.StaysOpen)
+        {
+            NatHelpPopup.IsOpen = false;
+        }
+    }
+
+    private void NatHelp_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            NatHelpPopup.IsOpen = false;
+            e.Handled = true;
+        }
+    }
+
+    private void NatHelp_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        NatHelpPopup.IsOpen = false;
 
     private void EasterEggs_JackpotActivated(string result) =>
         Dispatcher.InvokeAsync(() => ApplySnapshot(_lastSnapshot));
@@ -1534,7 +1588,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void TryPromptUpdate()
     {
-        if (_closeInProgress || _updates.Stage != UpdateStage.Ready || _updates.Available is not { } release ||
+        if (_closeInProgress || _showPeerAssistRequests || _updates.Stage != UpdateStage.Ready || _updates.Available is not { } release ||
             release.Version == _promptedUpdateVersion || release.Version == _settings.SkippedUpdateVersion)
         {
             return;

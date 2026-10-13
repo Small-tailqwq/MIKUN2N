@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "key": "(preamble)",
+      "en": "e3b0c44298fc1c14",
+      "zh": "e3b0c44298fc1c14"
+    },
+    {
+      "key": "# Agent Note: Bound wire-supplied lengths in the n3n wire decoders",
+      "en": "1fd90f234536aa67",
+      "zh": "b656fec9a5903ed4"
+    },
+    {
+      "key": "## Problem",
+      "en": "7eed7c6bde0b542c",
+      "zh": "318d8b5c2ebc5f27"
+    },
+    {
+      "key": "## Decision",
+      "en": "2602089a57c7cdea",
+      "zh": "0f5f015829617209"
+    },
+    {
+      "key": "## Alternatives considered",
+      "en": "f48bcf472984c6d8",
+      "zh": "6a0036f2d7cf945a"
+    },
+    {
+      "key": "## Consequences",
+      "en": "0ba4d11b8e46b9d5",
+      "zh": "a767e907057abb89"
+    }
+  ]
+}

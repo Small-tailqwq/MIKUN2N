@@ -6,6 +6,7 @@ Find a version by its `<version>.md` filename, or start with a topic below. Each
 
 | Topic | Starting record |
 |---|---|
+| Supernode input bounds, relay identity, federation allowlist and wire-decoder length checks | [0.5.8-10, patches 56–57](0.5.8-10.md#patch-56) |
 | NAT verdicts and cone/NAT4 coordination | [0.5.8-9, patch 53](0.5.8-9.md#patch-53) |
 | Assisted-path diagnostics and IPv6 interface recovery | [0.5.8-9, patches 54–55](0.5.8-9.md#patch-54) |
 | Peer assistance and per-pair consent | [0.5.8-8](0.5.8-8.md) |
@@ -18,7 +19,7 @@ Find a version by its `<version>.md` filename, or start with a topic below. Each
 
 The records describe behavior and test results for their named versions. For current behavior, consult the latest relevant record and technical documentation.
 
-Numbered changes 1–55 have stable `patch-N` anchors for citations. Entries 1–5 and 34–37 have unknown versions and are collected in [unversioned.md](unversioned.md). Each numbered entry describes its implementation and test results in both languages.
+Numbered changes 1–57 have stable `patch-N` anchors for citations. Entries 1–5 and 34–37 have unknown versions and are collected in [unversioned.md](unversioned.md). Each numbered entry describes its implementation and test results in both languages.
 
 ## Maintaining records
 

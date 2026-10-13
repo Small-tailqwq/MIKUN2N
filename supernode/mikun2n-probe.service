@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -u __PROBE_FILE__ server --bind 0.0.0.0 --port-a 21001 --port-b 21002
+ExecStart=/usr/bin/python3 -u __PROBE_FILE__ server --observer-only --bind 0.0.0.0 --port-a 21001 --port-b 21002
 Restart=on-failure
 RestartSec=3s
 DynamicUser=true

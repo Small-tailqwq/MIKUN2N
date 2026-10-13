@@ -1,8 +1,8 @@
 /*
- * natpunch v7.3.1 - adaptive UDP NAT4 hole-punch experiment for Windows.
+ * natpunch v7.3.2 - adaptive UDP NAT4 hole-punch experiment for Windows.
  *
  * Build:
- *   gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.1.exe natpunch.c -lws2_32
+ *   gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.2.exe natpunch.c -lws2_32
  */
 #define _WIN32_WINNT 0x0600
 #include <winsock2.h>
@@ -17,7 +17,7 @@
 #include <string.h>
 #include <time.h>
 
-#define VERSION "7.3.1"
+#define VERSION "7.3.2"
 #define PORT_A 21001
 #define PORT_B 21002
 #define DEFAULT_WORKERS 25
@@ -1148,24 +1148,32 @@ static int parse_peer_report(const char *line, PeerModel *peer) {
 }
 
 static int wait_pair(SOCKET control, const char *server_ip, const char *room,
-                     const char *client_id, char *peer_id, char *peer_ip,
+                     const char *client_id, char *owner_token, char *peer_id, char *peer_ip,
                      int *peer_control, int *my_control, ULONGLONG deadline) {
     ULONGLONG last_join = 0;
-    char line[MAX_LINE], message[160];
-    struct sockaddr_in from;
-    while (mono_ms() < deadline && !peer_ip[0]) {
+    char line[MAX_LINE], message[240];
+    struct sockaddr_in from, server;
+    if (!endpoint(&server, server_ip, PORT_A)) return 0;
+    while (mono_ms() < deadline && (!peer_ip[0] || *my_control < 0)) {
         int wi;
         if (mono_ms() - last_join >= 1500) {
-            snprintf(message, sizeof(message), "JOIN7 %s %s", room, client_id);
+            snprintf(message, sizeof(message), "JOIN7 %s %s%s%s", room, client_id,
+                     owner_token[0] ? " " : "", owner_token);
             send_text(control, message, server_ip, PORT_A, NULL);
             last_join = mono_ms();
         }
         if (recv_any(control, NULL, 0, 250, line, sizeof(line), &from, &wi) <= 0) continue;
+        if (from.sin_addr.s_addr != server.sin_addr.s_addr || from.sin_port != server.sin_port) continue;
         if (!strncmp(line, "JOIN7ACK ", 9)) {
-            char cid[64], ip[64];
+            char cid[64], ip[64], token[65] = "";
             int port;
-            if (sscanf(line, "JOIN7ACK %63s %63s %d", cid, ip, &port) == 3 &&
-                !strcmp(cid, client_id)) *my_control = port;
+            int fields = sscanf(line, "JOIN7ACK %63s %63s %d %64s", cid, ip, &port, token);
+            if (fields >= 3 && !strcmp(cid, client_id)) {
+                *my_control = port;
+                if (fields == 4 && strlen(token) == 64 &&
+                    strspn(token, "0123456789abcdef") == 64)
+                    memcpy(owner_token, token, sizeof(token));
+            }
         } else if (!strncmp(line, "PEER7 ", 6)) {
             if (sscanf(line, "PEER7 %63s %63s %d", peer_id, peer_ip, peer_control) == 3) {
                 say("[配对] peer=%s %s:%d，我方 control 映射=%d",
@@ -1177,22 +1185,23 @@ static int wait_pair(SOCKET control, const char *server_ip, const char *room,
             }
         }
     }
-    return peer_ip[0] != 0;
+    return peer_ip[0] != 0 && *my_control > 0;
 }
 
 static int wait_go(SOCKET control, const char *server_ip, const char *room,
-                   const char *client_id, int generation, const Model *model,
+                   const char *client_id, const char *owner_token, int generation, const Model *model,
                    int workers, PeerModel *peer) {
-    char report[320], line[MAX_LINE];
-    struct sockaddr_in from;
+    char report[400], line[MAX_LINE];
+    struct sockaddr_in from, server;
     ULONGLONG deadline = mono_ms() + 7000, last_report = 0;
     int have_report = 0, go_attempt = 0, go_delay = 0;
     int logged_attempt = -1, report_duplicates = 0;
+    if (!endpoint(&server, server_ip, PORT_A)) return 0;
     snprintf(report, sizeof(report),
-             "REPORT7 %s %s %d %s %d %d %d %d %d %d %d %d",
+             "REPORT7 %s %s %d %s %d %d %d %d %d %d %d %d%s%s",
              room, client_id, generation, model->mode, model->direction,
              model->confidence, model->rate, model->bank1, model->bank2,
-             model->spread, model->step, workers);
+             model->spread, model->step, workers, owner_token[0] ? " " : "", owner_token);
     while (mono_ms() < deadline) {
         int wi;
         if (mono_ms() - last_report >= 1000) {
@@ -1200,6 +1209,7 @@ static int wait_go(SOCKET control, const char *server_ip, const char *room,
             last_report = mono_ms();
         }
         if (recv_any(control, NULL, 0, 200, line, sizeof(line), &from, &wi) <= 0) continue;
+        if (from.sin_addr.s_addr != server.sin_addr.s_addr || from.sin_port != server.sin_port) continue;
         if (!strncmp(line, "PEERREPORT7 ", 12)) {
             have_report = parse_peer_report(line, peer);
             if (have_report) {
@@ -1251,6 +1261,7 @@ static int run_client(const char *server_ip, const char *room, int worker_count,
     Model previous, model;
     PeerModel peer;
     char client_id[32], peer_id[64] = "", peer_ip[64] = "", room_tag[16];
+    char owner_token[65] = "";
     int peer_control = -1, my_control = -1, generation = 0, success = 0;
     ULONGLONG overall_deadline;
     uint32_t room_hash = fnv1a(room);
@@ -1282,7 +1293,7 @@ static int run_client(const char *server_ip, const char *room, int worker_count,
                VERSION, client_id, room_tag, socket_local_port(control),
                worker_count, duration_sec, server_ip);
     overall_deadline = mono_ms() + (ULONGLONG)duration_sec * 1000;
-    if (!wait_pair(control, server_ip, room, client_id, peer_id, peer_ip,
+    if (!wait_pair(control, server_ip, room, client_id, owner_token, peer_id, peer_ip,
                    &peer_control, &my_control, overall_deadline)) {
         say("[失败] 在总时限内没有配对到对端");
         event_json("session_end", "\"result\":\"pair_timeout\"");
@@ -1335,7 +1346,7 @@ static int run_client(const char *server_ip, const char *room, int worker_count,
                    model.bank1, model.bank2,
                    model.step, model.spread, model.rate, model.median_rtt);
         memset(&peer, 0, sizeof(peer));
-        if (!wait_go(control, server_ip, room, client_id, generation, &model,
+        if (!wait_go(control, server_ip, room, client_id, owner_token, generation, &model,
                      worker_count, &peer)) {
             say("[校准#%d] 对端报告/GO 超时，重新校准", generation);
             event_json("attempt_failed",
@@ -1366,9 +1377,9 @@ static int run_client(const char *server_ip, const char *room, int worker_count,
 
 static void usage(void) {
     printf("natpunch v%s\n", VERSION);
-    printf("用法: natpunch-v7.3.1.exe client <server_ip> <room> "
+    printf("用法: natpunch-v7.3.2.exe client <server_ip> <room> "
            "[--sockets N] [--duration SEC] [--log-dir PATH] [--no-pause]\n");
-    printf("      natpunch-v7.3.1.exe --self-test\n");
+    printf("      natpunch-v7.3.2.exe --self-test\n");
 }
 
 int main(int argc, char **argv) {

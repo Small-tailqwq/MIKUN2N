@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800" role="img" aria-labelledby="title description">
+  <title id="title">MikuN2N</title>
+  <desc id="description">Light grayscale angular M for dark backgrounds. Solid gray tones preserve the colored artwork's shoulder folds, central facets, and complete lower-right diamond detail. Proportionally centered on a square canvas.</desc>
+  <path id="silhouette" fill="#D0D0D0" fill-rule="evenodd" d="M178 150.5 L304 176.5 L400 350.5 L496 176.5 L622 150.5 L768 649.5 L606 552.5 L550 322.5 L400 594.5 L250 322.5 L194 552.5 L32 649.5 Z"/>
+  <path id="left-fold" fill="#999999" fill-rule="evenodd" d="M248 290.5 L194 552.5 L250 322.5 Z"/>
+  <path id="right-fold" fill="#999999" fill-rule="evenodd" d="M550 322.5 L606 552.5 L552 290.5 Z"/>
+  <path id="left-diagonal" fill="#F0F0F0" fill-rule="evenodd" d="M304 176.5 L248 290.5 L250 322.5 L334 474.5 L400 350.5 Z"/>
+  <path id="right-diagonal" fill="#F0F0F0" fill-rule="evenodd" d="M552 290.5 L496 176.5 L400 350.5 L466 474.5 L550 322.5 Z"/>
+  <path id="central-fold" fill="#E0E0E0" fill-rule="evenodd" d="M466 474.5 L400 350.5 L334 474.5 L400 594.5 Z"/>
+  <path id="left-red-insert" fill="#A5A5A5" fill-rule="evenodd" d="M248 290.5 L178 150.5 L155.308 228.055 Z"/>
+  <path id="right-red-insert" fill="#A5A5A5" fill-rule="evenodd" d="M552 290.5 L644.692 228.055 L622 150.5 Z"/>
+  <path id="cyan-facet" fill="#E8E8E8" fill-rule="evenodd" d="M640 450.5 L690 514.5 L717.383 476.5 L704.125 431.188 L691.05 386.5 Z"/>
+  <path id="yellow-facet" fill="#FFFFFF" fill-rule="evenodd" d="M647 577.049 L690 514.5 L640 450.5 L596.261 512.5 L606 552.5 Z"/>
+  <path id="orange-facet" fill="#BABABA" fill-rule="evenodd" d="M647 577.049 L704 611.179 L744.008 567.5 L690 514.5 Z"/>
+</svg>

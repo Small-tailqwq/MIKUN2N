@@ -6,12 +6,12 @@ if (Test-Path -LiteralPath $mingwBin) {
 }
 
 & gcc -std=gnu17 -O2 -Wall -Wextra -Werror `
-    -o natpunch-v7.3.1.exe natpunch.c -lws2_32
+    -o natpunch-v7.3.2.exe natpunch.c -lws2_32
 if ($LASTEXITCODE -ne 0) {
-    throw "natpunch v7.3.1 编译失败"
+    throw "natpunch v7.3.2 编译失败"
 }
 
-& .\natpunch-v7.3.1.exe --self-test
+& .\natpunch-v7.3.2.exe --self-test
 if ($LASTEXITCODE -ne 0) {
-    throw "natpunch v7.3.1 模型自测失败"
+    throw "natpunch v7.3.2 模型自测失败"
 }

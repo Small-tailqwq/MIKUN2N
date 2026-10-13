@@ -11,7 +11,7 @@ its own license.
 
 - File: n3n-edge.exe
 - Version: patched n3n 3.4.4 (MikuN2N; see README.txt)
-- SHA-256: E2DC9300E1CF156C36E5A006615D7E3CD82EBE589DBFEC151FDE0EB67923E9FF
+- SHA-256: 0F20EC133725FEC5B11B790F8ACE03973F643617EA6FE9701B19CD4C6BB5387B
 - License: GPL-3.0-only
 - Upstream: https://github.com/n42n/n3n
 - Release: https://github.com/n42n/n3n/releases/tag/3.4.4
@@ -19,7 +19,7 @@ its own license.
 - Windows Authenticode: not signed
 - Bundled license: LICENSE-n2n.txt
 - Bundled corresponding source: n3n-3.4.4-source.zip
-- Source archive SHA-256: 9ED3B6EAC5B55D0810920ED69235F0B8B4B6214D457AD2ADBEB6003D503B4347
+- Source archive SHA-256: 2802DABB4A39762D44C3459ADB0C0F9E8C991324D57336C6FCE74740AAE41B88
 
 2. TAP-Windows
 

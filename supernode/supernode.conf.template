@@ -33,7 +33,9 @@ spoofing_protection=true
 #mikun2n_broadcast_pps=20
 
 # 多台 supernode 组成联邦（互相中继、就近选路）时，所有成员填写同一个联邦名，
-# 并用 peer 指向其他成员。单节点部署不需要这两项。
+# 并用 peer 互相加白其他成员的 IP 和监听端口；域名按解析结果匹配。
+# 只有明确配置的 peer 可以发送联邦报文，通告的新成员不会自动加入白名单。
+# 单节点不配置 peer 时拒绝联邦报文；这不影响普通客户端注册。
 #federation=myfederation
 #peer=other.example.com:3076
 

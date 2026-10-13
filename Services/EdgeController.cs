@@ -1955,25 +1955,30 @@ public sealed partial class EdgeController : IAsyncDisposable
         var failedCount = peers.Count(peer =>
             peer.ConnectionMode == PeerConnectionMode.PunchFailed);
         var assistedCount = peers.Count(peer => peer.ConnectionMode == PeerConnectionMode.PeerAssisted);
+        var routes = new List<string>();
+        if (directCount > 0) routes.Add($"{directCount} 位直连");
+        if (relayedCount > 0) routes.Add($"{relayedCount} 位服务器中转");
+        if (punchingCount > 0) routes.Add($"{punchingCount} 位正在尝试直连");
+        if (assistedCount > 0) routes.Add($"{assistedCount} 位好友协助");
+        var unknownCount = peers.Length - directCount - relayedCount - punchingCount - assistedCount;
+        if (unknownCount > 0) routes.Add($"{unknownCount} 位线路检测中");
         var detail = peers.Length == 0
-            ? "已连接，正在等待朋友上线。"
-            : punchingCount > 0
-                ? $"已连接；{directCount} 位朋友直连，{punchingCount} 位正在尝试直连，{relayedCount} 位经服务器中转。"
-                : failedCount > 0
-                    ? $"已连接；{directCount} 位朋友直连，{relayedCount} 位经服务器中转，其中 {failedCount} 位已停止自动尝试，可右键重试。"
-                : $"已连接；{directCount} 位朋友直连，{relayedCount} 位经服务器中转。";
-        if (assistedCount > 0)
-            detail += $" {assistedCount} 位经好友协助转发。";
+            ? "等待朋友上线，加入同一小组后会自动出现。"
+            : string.Join(" · ", routes);
+        if (punchingCount > 0)
+            detail += "\n正在尝试直连的朋友，期间仍通过服务器中转。";
+        if (failedCount > 0)
+            detail += $"\n{failedCount} 位朋友暂未直连，已停止自动尝试；可右键重新尝试或查看其他线路。";
         // Network hints (UPnP/CGNAT) now live beside the NAT type; the detail line keeps
         // only what the player has to act on, such as a key mismatch.
         if (!string.IsNullOrWhiteSpace(run.CompatibilityHint))
         {
-            detail = $"{detail} {run.CompatibilityHint}";
+            detail = $"{detail}\n{run.CompatibilityHint}";
         }
         var mismatched = peers.Count(peer => peer.Ipv6VersionMismatch);
         if (mismatched > 0)
         {
-            detail += $" {mismatched} 位好友的 IPv6 协议与本机不同，暂用 IPv4；请更新好友客户端。";
+            detail += $"\n{mismatched} 位好友的 IPv6 协议与本机不同，暂用 IPv4；请更新好友客户端。";
         }
         PublishIfCurrent(run, new ConnectionSnapshot(
             ConnectionState.Connected,

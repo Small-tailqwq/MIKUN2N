@@ -8,10 +8,11 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\Brand\MikuN2N.ico</ApplicationIcon>
     <AssemblyName>MikuN2N</AssemblyName>
     <RootNamespace>MikuN2N</RootNamespace>
     <BaseVersion>0.5.8</BaseVersion>
-    <BuildNumber>9</BuildNumber>
+    <BuildNumber>10</BuildNumber>
     <Version>$(BaseVersion)-$(BuildNumber)</Version>
     <AssemblyVersion>$(BaseVersion).0</AssemblyVersion>
     <FileVersion>$(BaseVersion).$(BuildNumber)</FileVersion>
@@ -25,6 +26,7 @@
 
   <ItemGroup>
     <AssemblyMetadata Include="UpdateRepository" Value="$(UpdateRepository)" />
+    <EmbeddedResource Include="Assets\Brand\MikuN2N.ico" LogicalName="MikuN2N.AppIcon" />
   </ItemGroup>
 
   <ItemGroup>

@@ -182,11 +182,38 @@ void close_tcp_connection (struct n3n_runtime_data *sss, n2n_tcp_connection_t *c
     }
 
 close_conn:
+    // Invalidate other registrations without deleting peers held by callers' iterators.
+    HASH_ITER(hh, sss->communities, comm, tmp_comm) {
+        HASH_ITER(hh, comm->edges, edge, tmp_edge) {
+            if(edge->socket_fd == conn->socket_fd) {
+                edge->socket_fd = -1;
+                edge->sock.family = AF_INVALID;
+            }
+        }
+    }
     // close the connection
     shutdown(conn->socket_fd, SHUT_RDWR);
     closesocket(conn->socket_fd);
     // forget about the connection, will be deleted later
     conn->inactive = 1;
+}
+
+
+/* *************************************************** */
+
+
+static struct peer_info *registered_edge_sender (struct sn_community *comm,
+                                                 const n2n_mac_t mac,
+                                                 const n2n_sock_t *sender,
+                                                 const SOCKET socket_fd) {
+    struct peer_info *edge = NULL;
+
+    HASH_FIND_PEER(comm->edges, mac, edge);
+    if(!edge)
+        return NULL;
+    if(edge->socket_fd != socket_fd)
+        return NULL;
+    return sock_equal(&edge->sock, sender) ? edge : NULL;
 }
 
 
@@ -1420,7 +1447,7 @@ static int update_edge (struct n3n_runtime_data *sss,
     } else {
         /* Known */
         if(auth_edge(&(scan->auth), &(reg->auth), answer_auth, comm) == 0) {
-            if(!sock_equal(sender_sock, &(scan->sock))) {
+            if(!sock_equal(sender_sock, &(scan->sock)) || scan->socket_fd != socket_fd) {
                 scan->dev_addr.net_addr = reg->dev_addr.net_addr;
                 scan->dev_addr.net_bitlen = reg->dev_addr.net_bitlen;
                 memcpy((char*)scan->dev_desc, reg->dev_desc, N2N_DESC_SIZE);
@@ -1950,12 +1977,12 @@ static int process_udp (struct n3n_runtime_data * sss,
     }
 
     from_supernode = cmn.flags & N2N_FLAGS_FROM_SUPERNODE;
-    if(from_supernode) {
+    if(from_supernode || (comm && comm->is_federation)) {
         skip_add = SN_ADD_SKIP;
         sn = add_sn_to_list_by_mac_or_sock(&(sss->federation->edges), &sender, null_mac, &skip_add);
-        // only REGISTER_SUPER allowed from unknown supernodes
-        if((!sn) && (msg_type != MSG_TYPE_REGISTER_SUPER)) {
-            traceEvent(TRACE_DEBUG, "dropped incoming data from unknown supernode");
+        // Only explicitly configured peers may cross the federation boundary.
+        if(!from_supernode || socket_fd != sss->sock || !sn || sn->purgeable) {
+            traceEvent(TRACE_DEBUG, "dropped incoming data from unconfigured supernode");
             return -1;
         }
     }
@@ -1987,6 +2014,14 @@ static int process_udp (struct n3n_runtime_data * sss,
 
             sss->last_sn_fwd = now;
             decode_PACKET(&pkt, &cmn, udp_buf, &rem, &idx);
+
+            if(!from_supernode &&
+               !registered_edge_sender(comm, pkt.srcMac, &sender,
+                                       socket_fd)) {
+                traceEvent(TRACE_WARNING,
+                           "dropped PACKET whose source is not bound to the sender");
+                return -1;
+            }
 
             // already checked for valid comm
             if(comm->header_encryption == HEADER_ENCRYPTION_ENABLED) {
@@ -2164,7 +2199,8 @@ static int process_udp (struct n3n_runtime_data * sss,
             /* Edge/supernode requesting registration with us.    */
             sss->last_sn_reg=now;
             ++(sss->stats.sn_reg);
-            decode_REGISTER_SUPER(&reg, &cmn, udp_buf, &rem, &idx);
+            if(decode_REGISTER_SUPER(&reg, &cmn, udp_buf, &rem, &idx) < 0)
+                return -1;
 
             if(comm) {
                 if(comm->header_encryption == HEADER_ENCRYPTION_ENABLED) {
@@ -2278,8 +2314,10 @@ static int process_udp (struct n3n_runtime_data * sss,
 
             /* Add sender's data to federation (or update it) */
             if(comm->is_federation) {
-                skip_add = SN_ADD;
+                skip_add = SN_ADD_SKIP;
                 p = add_sn_to_list_by_mac_or_sock(&(sss->federation->edges), &(ack.sock), reg.edgeMac, &skip_add);
+                if(p != sn)
+                    return -1;
                 p->last_seen = now;
                 // communication with other supernodes happens via standard udp port
                 p->socket_fd = sss->sock;
@@ -2355,6 +2393,17 @@ static int process_udp (struct n3n_runtime_data * sss,
 
                 return 0;
             }
+
+#ifdef N2N_HAVE_TCP
+            if(!comm->is_federation && !from_supernode &&
+               socket_fd != sss->sock &&
+               registered_edge_sender(comm, reg.edgeMac, &sender, socket_fd)) {
+                n2n_tcp_connection_t *registered_conn;
+                HASH_FIND_INT(sss->tcp_connections, &socket_fd, registered_conn);
+                if(registered_conn)
+                    registered_conn->registration_deadline_ms = 0;
+            }
+#endif
 
             // if this is not already from a supernode ...
             // and not from federation, ...
@@ -2466,7 +2515,8 @@ static int process_udp (struct n3n_runtime_data * sss,
                 return -1;
             }
 
-            decode_UNREGISTER_SUPER(&unreg, &cmn, udp_buf, &rem, &idx);
+            if(decode_UNREGISTER_SUPER(&unreg, &cmn, udp_buf, &rem, &idx) < 0)
+                return -1;
 
             if(comm->header_encryption == HEADER_ENCRYPTION_ENABLED) {
                 if(!find_peer_time_stamp_and_verify(
@@ -2502,14 +2552,11 @@ static int process_udp (struct n3n_runtime_data * sss,
 
         case MSG_TYPE_REGISTER_SUPER_ACK: {
             n2n_REGISTER_SUPER_ACK_t ack;
-            struct peer_info                 *scan, *tmp;
+            struct peer_info                 *scan;
             n2n_sock_str_t sockbuf1;
             n2n_sock_str_t sockbuf2;
             macstr_t mac_buf1;
-            int i;
             uint8_t dec_tmpbuf[REG_SUPER_ACK_PAYLOAD_SPACE];
-            n2n_REGISTER_SUPER_ACK_payload_t *payload;
-            n2n_sock_t payload_sock;
 
             memset(&ack, 0, sizeof(n2n_REGISTER_SUPER_ACK_t));
 
@@ -2544,53 +2591,31 @@ static int process_udp (struct n3n_runtime_data * sss,
                        sock_to_cstr(sockbuf1, &sender),
                        sock_to_cstr(sockbuf2, orig_sender));
 
+            if(ack.cookie != sn->last_cookie) {
+                traceEvent(TRACE_INFO, "Rx REGISTER_SUPER_ACK with wrong or old cookie");
+                return -1;
+            }
+
             skip_add = SN_ADD_SKIP;
             scan = add_sn_to_list_by_mac_or_sock(&(sss->federation->edges), &sender, ack.srcMac, &skip_add);
-            if(scan != NULL) {
+            if(scan == sn) {
                 scan->last_seen = now;
             } else {
                 traceEvent(TRACE_DEBUG, "dropped REGISTER_SUPER_ACK due to an unknown supernode");
                 return 0;
             }
 
-            if(ack.cookie == scan->last_cookie) {
-
-                payload = (n2n_REGISTER_SUPER_ACK_payload_t *)dec_tmpbuf;
-                for(i = 0; i < ack.num_sn; i++) {
-                    skip_add = SN_ADD;
-
-                    // bugfix for https://github.com/ntop/n2n/issues/1029
-                    // REVISIT: best to be removed with 4.0
-                    idx = 0;
-                    rem = sizeof(payload->sock);
-                    decode_sock_payload(&payload_sock, payload->sock, &rem, &idx);
-
-                    tmp = add_sn_to_list_by_mac_or_sock(&(sss->federation->edges), &(payload_sock), payload->mac, &skip_add);
-                    // other supernodes communicate via standard udp socket
-                    tmp->socket_fd = sss->sock;
-
-                    if(skip_add == SN_ADD_ADDED) {
-                        tmp->last_seen = now - LAST_SEEN_SN_NEW;
-                    }
-
-                    // shift to next payload entry
-                    payload++;
-                }
-
-                if(ack.key_time > sss->dynamic_key_time) {
-                    traceEvent(TRACE_DEBUG, "setting new key time");
-                    // have all edges re_register (using old dynamic key)
-                    send_re_register_super(sss);
-                    // set new key time
-                    sss->dynamic_key_time = ack.key_time;
-                    // calculate new dynamic keys for all communities
-                    calculate_dynamic_keys(sss);
-                    // force re-register with all supernodes
-                    re_register_and_purge_supernodes(sss, sss->federation, &any_time, now, 1 /* forced */);
-                }
-
-            } else {
-                traceEvent(TRACE_INFO, "Rx REGISTER_SUPER_ACK with wrong or old cookie");
+            // Advertised peers do not extend the operator's configured allowlist.
+            if(ack.key_time > sss->dynamic_key_time) {
+                traceEvent(TRACE_DEBUG, "setting new key time");
+                // have all edges re_register (using old dynamic key)
+                send_re_register_super(sss);
+                // set new key time
+                sss->dynamic_key_time = ack.key_time;
+                // calculate new dynamic keys for all communities
+                calculate_dynamic_keys(sss);
+                // force re-register with all supernodes
+                re_register_and_purge_supernodes(sss, sss->federation, &any_time, now, 1 /* forced */);
             }
             return 0;
         }
@@ -3191,9 +3216,20 @@ int run_sn_loop (struct n3n_runtime_data *sss) {
 #ifdef N2N_HAVE_TCP
         n2n_sock_str_t sockbuf;
         FD_SET(sss->tcp_sock, &readers);
+        max_sock = MAX(max_sock, sss->tcp_sock);
 
         // add the tcp connections' sockets
         HASH_ITER(hh, sss->tcp_connections, conn, tmp_conn) {
+            uint64_t current = mikun2n_sn_now_ms();
+            if(!conn->inactive &&
+               ((conn->registration_deadline_ms && current >= conn->registration_deadline_ms) ||
+                (conn->frame_deadline_ms && current >= conn->frame_deadline_ms)))
+                close_tcp_connection(sss, conn);
+            if(conn->inactive) {
+                HASH_DEL(sss->tcp_connections, conn);
+                free(conn);
+                continue;
+            }
             //socket descriptor
             FD_SET(conn->socket_fd, &readers);
             if(conn->socket_fd > max_sock) {
@@ -3302,6 +3338,13 @@ int run_sn_loop (struct n3n_runtime_data *sss) {
                     struct sockaddr *sender_sock = (struct sockaddr*)&sas;
                     socklen_t ss_size = sizeof(sas);
 
+                    if(conn->position >= conn->expected ||
+                       conn->expected > sizeof(conn->buffer) ||
+                       conn->expected > N2N_SN_PKTBUF_SIZE) {
+                        close_tcp_connection(sss, conn);
+                        continue;
+                    }
+
                     // TODO: this all looks like it could use a tcp buffer
                     // management layer - like the connslot abstraction
                     bread = recvfrom(
@@ -3322,18 +3365,23 @@ int run_sn_loop (struct n3n_runtime_data *sss) {
                         close_tcp_connection(sss, conn);
                         continue;
                     }
-                    conn->position += bread;
+                    if(conn->position == 0)
+                        conn->frame_deadline_ms = mikun2n_sn_now_ms() + N2N_TCP_FRAME_TIMEOUT * 1000ULL;
+                    conn->position += (size_t)bread;
 
                     if(conn->position == conn->expected) {
                         if(conn->position == sizeof(uint16_t)) {
                             // the prepended length has been read, preparing for the packet
-                            conn->expected += be16toh(*(uint16_t*)(conn->buffer));
-                            if(conn->expected > N2N_SN_PKTBUF_SIZE) {
+                            size_t body_size = ((size_t)conn->buffer[0] << 8) | conn->buffer[1];
+                            if(body_size < 24 ||
+                               body_size > N2N_SN_PKTBUF_SIZE - sizeof(uint16_t) ||
+                               body_size > sizeof(conn->buffer) - sizeof(uint16_t)) {
                                 traceEvent(TRACE_INFO, "closing tcp connection to [%s]", sock_to_cstr(sockbuf, (n2n_sock_t*)sender_sock));
-                                traceEvent(TRACE_DEBUG, "too many bytes in tcp packet expected");
+                                traceEvent(TRACE_DEBUG, "invalid tcp packet length");
                                 close_tcp_connection(sss, conn);
                                 continue;
                             }
+                            conn->expected = sizeof(uint16_t) + body_size;
                         } else {
                             // full packet read, handle it
                             process_udp(
@@ -3349,6 +3397,7 @@ int run_sn_loop (struct n3n_runtime_data *sss) {
                             // reset, await new prepended length
                             conn->expected = sizeof(uint16_t);
                             conn->position = 0;
+                            conn->frame_deadline_ms = 0;
                         }
                     }
                 }
@@ -3368,7 +3417,7 @@ int run_sn_loop (struct n3n_runtime_data *sss) {
                 struct sockaddr *sender_sock = (struct sockaddr*)&sas;
                 socklen_t ss_size = sizeof(sas);
 
-                if((HASH_COUNT(sss->tcp_connections) + 4) < FD_SETSIZE) {
+                {
                     SOCKET tmp_sock = accept(
                         sss->tcp_sock,
                         sender_sock,
@@ -3377,6 +3426,14 @@ int run_sn_loop (struct n3n_runtime_data *sss) {
                     // REVISIT: should we error out if ss_size returns bigger
                     // than before? can this ever happen?
                     if(tmp_sock >= 0) {
+                        if((HASH_COUNT(sss->tcp_connections) + 4) >= FD_SETSIZE
+#ifndef _WIN32
+                           || tmp_sock >= FD_SETSIZE
+#endif
+                          ) {
+                            closesocket(tmp_sock);
+                            continue;
+                        }
                         conn = (n2n_tcp_connection_t*)calloc(
                             1,
                             sizeof(n2n_tcp_connection_t)
@@ -3388,21 +3445,17 @@ int run_sn_loop (struct n3n_runtime_data *sss) {
                             conn->inactive = 0;
                             conn->expected = sizeof(uint16_t);
                             conn->position = 0;
+                            conn->registration_deadline_ms = mikun2n_sn_now_ms() + REGISTRATION_TIMEOUT * 1000ULL;
                             HASH_ADD_INT(sss->tcp_connections, socket_fd, conn);
                             traceEvent(
                                 TRACE_INFO,
                                 "accepted incoming TCP connection from [%s]",
                                 sock_to_cstr(sockbuf, (n2n_sock_t*)sender_sock)
                             );
+                        } else {
+                            closesocket(tmp_sock);
                         }
                     }
-                } else {
-                    // no space to store the socket for a new connection, close immediately
-                    traceEvent(
-                        TRACE_DEBUG,
-                        "denied incoming TCP connection from [%s] due to max connections limit hit",
-                        sock_to_cstr(sockbuf, (n2n_sock_t*)sender_sock)
-                    );
                 }
             }
 #endif /* N2N_HAVE_TCP */

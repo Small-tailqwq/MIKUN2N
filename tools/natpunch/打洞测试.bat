@@ -9,5 +9,5 @@ if "%~1"=="" (
 )
 set ROOM=%~2
 if "%ROOM%"=="" set ROOM=114514
-.\natpunch-v7.3.1.exe client %~1 %ROOM%
+.\natpunch-v7.3.2.exe client %~1 %ROOM%
 endlocal

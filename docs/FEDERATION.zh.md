@@ -50,7 +50,7 @@ supernode**，而客户端默认锚定的节点与对端可能相隔很远。联
 
 每个联邦成员 supernode 主机必须运行 natpunch 应答器（UDP 21001/21002）：
 
-- 参考实现：`tools/natpunch/natpunch-server.py`（v7 协议，`server --bind 0.0.0.0 --port-a 21001 --port-b 21002`）
+- 参考实现：`tools/natpunch/natpunch-server.py`（v7 协议，`server --observer-only --bind 0.0.0.0 --port-a 21001 --port-b 21002`）
 - 部署到 systemd 时自建一个最小单元指向该脚本即可，服务名与路径随部署环境而定
 
 测试联邦与生产节点分离部署：
@@ -72,8 +72,7 @@ supernode**，而客户端默认锚定的节点与对端可能相隔很远。联
   attempt 驱动扫描可容忍。修复需协议字段（破坏新旧兼容），暂不实施。
 - **模型新鲜度**：联邦转发路径上对端 bank 模型依赖 QUERY_PEER 携带，上报 TTL
   已收紧至 6s，edge 侧 5s 年龄自动重校准（见[第 37 项](../Runtime/changes/unversioned.zh.md#patch-37)）。
-- **信任模型**：跨节点打洞计划信任来源 supernode 已校验的 NAT 摘要——联邦内
-  supernode 之间互信是前提，不应跨不可信管理员部署。
+- **信任模型**：跨节点打洞计划信任来源 supernode 已校验的 NAT 摘要。从 0.5.8-10 起，每个成员必须用 `supernode.peer` 显式配置其他成员，每条联邦报文的来源 IP 和 UDP 端口都必须匹配配置中的端点。未配置 peer 的单节点拒绝联邦流量；通告的新成员不会扩展白名单。各节点应互相配置所有需要的链路，并使用稳定的服务端端点。这落实了管理员的信任名单，不是抵御源地址伪造或已授权服务器失陷的密码学认证。联邦名仍须一致。见[实现记录](../Runtime/changes/0.5.8-10.zh.md#patch-56)。
 - **兼容性**：patch #34 的 edge/supernode 需配套部署；旧 edge 连接多端点时只取
   第一个端点（`SplitServers().First()` 回退），等效于普通单节点行为。
 

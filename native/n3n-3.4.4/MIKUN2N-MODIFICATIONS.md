@@ -3,7 +3,7 @@
 This source tree is a modified version of n3n 3.4.4
 (https://github.com/n42n/n3n, tag `3.4.4`). It was modified by the MikuN2N project
 between July and October 2026; the latest modification belongs to MikuN2N release
-0.5.8-9 (2026-10-11). It is the corresponding source of the `n3n-edge.exe` shipped with
+0.5.8-10 (2026-10-13). It is the corresponding source of the `n3n-edge.exe` shipped with
 that release and is distributed under the same license as n3n: GPL-3.0-only (see
 `LICENSES/preferred/GPL-3.0`). The upstream copyright notices are retained unchanged.
 
@@ -29,6 +29,10 @@ Areas changed relative to upstream:
   (`src/mikun2n_ipv6.*`, `src/mikun2n_ipv6_frag.h`, `src/mikun2n_stun.h`), relay policing
   (`src/mikun2n_relay*.h`), configuration options (`src/conffile_defs.c`) and build
   identity (`src/mikun2n_build_version.h`).
+- Supernode TCP frame bounds and connection deadlines, registration-bound relay
+  sources and configured federation peers (`src/sn_utils.c`, `include/n2n_typedefs.h`).
+- Wire decoder bounds for wire-supplied authentication token lengths and for the
+  backup-supernode array count (`src/wire.c`).
 - Build and test tooling (`Makefile`, `tools/Makefile`, `tools/tests-*.c`,
   `scripts/build-mikun2n-windows.sh`).
 - Simplified Chinese translations of the README, this notice and selected documents
