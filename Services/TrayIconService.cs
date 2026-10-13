@@ -1,7 +1,6 @@
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Runtime.InteropServices;
 using Forms = System.Windows.Forms;
+using WpfApplication = System.Windows.Application;
 using MikuN2N.Models;
 
 namespace MikuN2N.Services;
@@ -100,34 +99,9 @@ public sealed class TrayIconService : IDisposable
 
     private static Icon CreateIcon()
     {
-        using var bitmap = new Bitmap(32, 32);
-        using var graphics = Graphics.FromImage(bitmap);
-        graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        graphics.Clear(Color.Transparent);
-        using var fill = new SolidBrush(Color.FromArgb(54, 183, 180));
-        using var path = new GraphicsPath();
-        const float radius = 8;
-        path.AddArc(1, 1, radius * 2, radius * 2, 180, 90);
-        path.AddArc(31 - radius * 2, 1, radius * 2, radius * 2, 270, 90);
-        path.AddArc(31 - radius * 2, 31 - radius * 2, radius * 2, radius * 2, 0, 90);
-        path.AddArc(1, 31 - radius * 2, radius * 2, radius * 2, 90, 90);
-        path.CloseFigure();
-        graphics.FillPath(fill, path);
-        using var font = new Font("Segoe UI", 16, FontStyle.Bold, GraphicsUnit.Pixel);
-        using var text = new SolidBrush(Color.White);
-        var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        graphics.DrawString("M", font, text, new RectangleF(0, 0, 32, 31), format);
-        var handle = bitmap.GetHicon();
-        try
-        {
-            return (Icon)Icon.FromHandle(handle).Clone();
-        }
-        finally
-        {
-            DestroyIcon(handle);
-        }
+        var resource = WpfApplication.GetResourceStream(AppIconService.IconUri)
+            ?? throw new InvalidOperationException("The application icon resource is missing.");
+        using var stream = resource.Stream;
+        return new Icon(stream, Forms.SystemInformation.SmallIconSize);
     }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyIcon(IntPtr handle);
 }

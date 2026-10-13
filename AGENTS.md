@@ -48,7 +48,7 @@ XAML 能编译只说明语法正确：界面改动按下面「界面主题」一
 | `CrashLogService.cs` | 记录进程级未处理异常 |
 | `ThemeManager.cs` | 运行时套用浅色/深色调色板（资源字典）并设置 DWM 沉浸式深色属性；跟随"系统"主题时轮询注册表（3s），不订阅系统事件 |
 | `TrayIconService.cs` | WinForms `NotifyIcon` 与右键菜单（WPF + WinForms 混用，csproj 里的 `UseWindowsForms` 就是为它开的）；"最小化到托盘还是退出"由 `MainWindow` 按 `ClosePreference` 决定 |
-| `AppIconService.cs` | 运行时用 `DrawingVisual` → `RenderTargetBitmap` 生成图标，并设置进程 AppUserModelID 以正确分组任务栏 |
+| `AppIconService.cs` | 从 WPF 资源 `Assets/AppIcon.ico` 加载窗口图标（托盘图标也读同一份），并设置进程 AppUserModelID 以正确分组任务栏。图标源是 `Assets/AppIcon.svg`，改动后用 `node tools/build-app-icon.js` 重新生成 `.ico`，并同步 `App.xaml` 里窗口内使用的矢量副本 `LogoImage` |
 | `BuildIdentity.cs` | 从程序集元数据（informational version，回退 assembly version）解析显示版本，供主界面/设置/托盘提示读取 |
 | `EasterEggManager.cs` + `EasterEggVisualController.cs` | 自包含的彩蛋（设置里的老虎机 → 飞虫/蜘蛛追逐动画 → 彩虹 jackpot），与连通性逻辑无关，推理核心行为时可直接跳过 |
 | `TestBuildProfile.cs` | 私有测试包内嵌的配置（批次、节点、上传地址、证书指纹、STUN 观察者）；读不到该资源时返回 null，普通构建因此不创建任何诊断会话 |

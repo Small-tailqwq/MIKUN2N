@@ -39,10 +39,8 @@
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="Auto" />
           </Grid.ColumnDefinitions>
-          <Border Width="48" Height="48" CornerRadius="15" Background="{StaticResource LogoGradient}" Margin="0,0,14,0">
-            <TextBlock Text="M" FontSize="27" FontWeight="Bold" Foreground="White"
-                       HorizontalAlignment="Center" VerticalAlignment="Center" />
-          </Border>
+          <Image Width="52" Height="52" Source="{StaticResource LogoImage}" Margin="-2,0,12,0"
+                 RenderOptions.BitmapScalingMode="HighQuality" />
           <StackPanel Grid.Column="1" VerticalAlignment="Center">
             <TextBlock Text="MikuN2N" FontSize="28" FontWeight="Bold" />
             <TextBlock Text="和朋友像在同一个局域网一样联机" FontSize="13" Margin="1,3,0,0"

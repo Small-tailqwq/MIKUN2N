@@ -244,10 +244,8 @@
                   <ColumnDefinition Width="58" />
                   <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <Border Width="46" Height="46" CornerRadius="14" Background="{StaticResource LogoGradient}">
-                  <TextBlock Text="M" Foreground="White" FontSize="25" FontWeight="Bold"
-                             HorizontalAlignment="Center" VerticalAlignment="Center" />
-                </Border>
+                <Image Width="50" Height="50" Source="{StaticResource LogoImage}"
+                       HorizontalAlignment="Left" VerticalAlignment="Top" />
                 <StackPanel Grid.Column="1">
                   <StackPanel Orientation="Horizontal">
                     <TextBlock Text="Miku " FontSize="21" FontWeight="Bold" />
