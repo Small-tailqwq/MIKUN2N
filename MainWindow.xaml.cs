@@ -25,22 +25,6 @@ namespace MikuN2N;
 
 public partial class MainWindow : Window
 {
-    private static readonly Brush Gray = new SolidColorBrush(Color.FromRgb(170, 177, 192));
-    private static readonly Brush Blue = new SolidColorBrush(Color.FromRgb(67, 132, 235));
-    private static readonly Brush Amber = new SolidColorBrush(Color.FromRgb(230, 158, 52));
-    private static readonly Brush Green = new SolidColorBrush(Color.FromRgb(44, 180, 125));
-    private static readonly Brush Red = new SolidColorBrush(Color.FromRgb(226, 82, 89));
-    private static readonly Brush Nat1 = new SolidColorBrush(Color.FromRgb(44, 180, 125));
-    private static readonly Brush Nat2 = new SolidColorBrush(Color.FromRgb(53, 184, 197));
-    private static readonly Brush Nat12 = new SolidColorBrush(Color.FromRgb(42, 177, 158));
-    private static readonly Brush Nat3 = new SolidColorBrush(Color.FromRgb(230, 158, 52));
-    private static readonly Brush Nat4 = new SolidColorBrush(Color.FromRgb(226, 82, 89));
-    private static readonly Brush Nat1Soft = new SolidColorBrush(Color.FromArgb(42, 44, 180, 125));
-    private static readonly Brush Nat2Soft = new SolidColorBrush(Color.FromArgb(42, 53, 184, 197));
-    private static readonly Brush Nat12Soft = new SolidColorBrush(Color.FromArgb(42, 42, 177, 158));
-    private static readonly Brush Nat3Soft = new SolidColorBrush(Color.FromArgb(42, 230, 158, 52));
-    private static readonly Brush Nat4Soft = new SolidColorBrush(Color.FromArgb(42, 226, 82, 89));
-
     /// <summary>Lines kept in the on-screen log; the full log is on disk.</summary>
     private const int MaxLogLines = 1500;
     private const string DefaultStatusDetail = "填写昵称后点击连接，即可加入朋友们的虚拟局域网。";
@@ -1141,14 +1125,15 @@ public partial class MainWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
 
-        (StatusIndicator.Background, StatusGlyph.Text) = snapshot.State switch
+        (var statusBrush, StatusGlyph.Text) = snapshot.State switch
         {
-            ConnectionState.Connecting => (Blue, "…"),
-            ConnectionState.Reconnecting => (Amber, "↻"),
-            ConnectionState.Connected => (Green, "✓"),
-            ConnectionState.Error => (Red, "!"),
-            _ => (Gray, "○")
+            ConnectionState.Connecting => ("StatusConnecting", "…"),
+            ConnectionState.Reconnecting => ("StatusReconnecting", "↻"),
+            ConnectionState.Connected => ("StatusConnected", "✓"),
+            ConnectionState.Error => ("StatusError", "!"),
+            _ => ("StatusIdle", "○")
         };
+        StatusIndicator.SetResourceReference(Border.BackgroundProperty, statusBrush);
 
         if (snapshot.State == ConnectionState.Reconnecting)
         {
@@ -1448,20 +1433,20 @@ public partial class MainWindow : Window
             legend.Border.Opacity = selected.Count == 0 ? 0.62 : 1;
         }
 
-        (NatTypeBadge.Background, NatTypeBadge.BorderBrush, NatTypeText.Foreground, NatHealthDot.Foreground) =
-            natType switch
-            {
-                "NAT1" => (Nat1Soft, Nat1, Nat1, Nat1),
-                "NAT2" => (Nat2Soft, Nat2, Nat2, Nat2),
-                "NAT1/2" => (Nat12Soft, Nat12, Nat12, Nat12),
-                "NAT3" => (Nat3Soft, Nat3, Nat3, Nat3),
-                "NAT4" => (Nat4Soft, Nat4, Nat4, Nat4),
-                _ => (FindResource("SurfaceAlt") as Brush ?? Gray,
-                      FindResource("Border") as Brush ?? Gray,
-                      FindResource("TextMuted") as Brush ?? Gray,
-                      FindResource("TextMuted") as Brush ?? Gray)
-            };
-
+        var (natSoft, natStrong) = natType switch
+        {
+            "NAT1" => ("Nat1Soft", "Nat1"),
+            "NAT2" => ("Nat2Soft", "Nat2"),
+            "NAT1/2" => ("Nat12Soft", "Nat12"),
+            "NAT3" => ("Nat3Soft", "Nat3"),
+            "NAT4" => ("Nat4Soft", "Nat4"),
+            _ => ("SurfaceAlt", "Border")
+        };
+        var natText = natStrong == "Border" ? "TextMuted" : natStrong;
+        NatTypeBadge.SetResourceReference(Border.BackgroundProperty, natSoft);
+        NatTypeBadge.SetResourceReference(Border.BorderBrushProperty, natStrong);
+        NatTypeText.SetResourceReference(TextBlock.ForegroundProperty, natText);
+        NatHealthDot.SetResourceReference(TextBlock.ForegroundProperty, natText);
     }
 
     private void EasterEggs_JackpotActivated(string result) =>

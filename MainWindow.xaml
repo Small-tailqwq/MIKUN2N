@@ -77,9 +77,9 @@
                 <RowDefinition Height="Auto" />
               </Grid.RowDefinitions>
               <Border x:Name="StatusIndicator" Grid.RowSpan="2" Width="66" Height="66"
-                      CornerRadius="33" Background="#AAB1C0" HorizontalAlignment="Left"
+                      CornerRadius="33" Background="{DynamicResource StatusIdle}" HorizontalAlignment="Left"
                       VerticalAlignment="Center">
-                <TextBlock x:Name="StatusGlyph" Text="○" FontSize="32" Foreground="White"
+                <TextBlock x:Name="StatusGlyph" Text="○" FontSize="32" Foreground="{DynamicResource OnStatus}"
                            HorizontalAlignment="Center" VerticalAlignment="Center" />
               </Border>
               <StackPanel Grid.Column="1">
@@ -149,37 +149,37 @@
                         <StackPanel MaxWidth="300">
                           <StackPanel Orientation="Horizontal">
                             <Border x:Name="Nat1LegendBorder" Width="54" CornerRadius="7"
-                                    Background="#2CB47D" BorderBrush="Transparent" BorderThickness="1"
+                                    Background="{DynamicResource Nat1}" BorderBrush="Transparent" BorderThickness="1"
                                     Margin="0,0,4,0">
                               <Grid>
-                                <Border x:Name="Nat1MutedOverlay" Background="#92778088" CornerRadius="6" />
-                                <TextBlock Text="NAT1" Foreground="White" FontWeight="Bold"
+                                <Border x:Name="Nat1MutedOverlay" Background="{DynamicResource NatMutedOverlay}" CornerRadius="6" />
+                                <TextBlock Text="NAT1" Foreground="{DynamicResource OnStatus}" FontWeight="Bold"
                                            HorizontalAlignment="Center" Margin="7,5" />
                               </Grid>
                             </Border>
                             <Border x:Name="Nat2LegendBorder" Width="54" CornerRadius="7"
-                                    Background="#35B8C5" BorderBrush="Transparent" BorderThickness="1"
+                                    Background="{DynamicResource Nat2}" BorderBrush="Transparent" BorderThickness="1"
                                     Margin="0,0,4,0">
                               <Grid>
-                                <Border x:Name="Nat2MutedOverlay" Background="#92778088" CornerRadius="6" />
-                                <TextBlock Text="NAT2" Foreground="White" FontWeight="Bold"
+                                <Border x:Name="Nat2MutedOverlay" Background="{DynamicResource NatMutedOverlay}" CornerRadius="6" />
+                                <TextBlock Text="NAT2" Foreground="{DynamicResource OnStatus}" FontWeight="Bold"
                                            HorizontalAlignment="Center" Margin="7,5" />
                               </Grid>
                             </Border>
                             <Border x:Name="Nat3LegendBorder" Width="54" CornerRadius="7"
-                                    Background="#E69E34" BorderBrush="Transparent" BorderThickness="1"
+                                    Background="{DynamicResource Nat3}" BorderBrush="Transparent" BorderThickness="1"
                                     Margin="0,0,4,0">
                               <Grid>
-                                <Border x:Name="Nat3MutedOverlay" Background="#92778088" CornerRadius="6" />
-                                <TextBlock Text="NAT3" Foreground="White" FontWeight="Bold"
+                                <Border x:Name="Nat3MutedOverlay" Background="{DynamicResource NatMutedOverlay}" CornerRadius="6" />
+                                <TextBlock Text="NAT3" Foreground="{DynamicResource OnStatus}" FontWeight="Bold"
                                            HorizontalAlignment="Center" Margin="7,5" />
                               </Grid>
                             </Border>
                             <Border x:Name="Nat4LegendBorder" Width="54" CornerRadius="7"
-                                    Background="#E25259" BorderBrush="Transparent" BorderThickness="1">
+                                    Background="{DynamicResource Nat4}" BorderBrush="Transparent" BorderThickness="1">
                               <Grid>
-                                <Border x:Name="Nat4MutedOverlay" Background="#92778088" CornerRadius="6" />
-                                <TextBlock Text="NAT4" Foreground="White" FontWeight="Bold"
+                                <Border x:Name="Nat4MutedOverlay" Background="{DynamicResource NatMutedOverlay}" CornerRadius="6" />
+                                <TextBlock Text="NAT4" Foreground="{DynamicResource OnStatus}" FontWeight="Bold"
                                            HorizontalAlignment="Center" Margin="7,5" />
                               </Grid>
                             </Border>

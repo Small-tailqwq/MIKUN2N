@@ -1,0 +1,71 @@
+<!-- Theme palette; Light.xaml and Dark.xaml must define the same keys. ThemeManager swaps
+     one for the other at runtime, so consume these with DynamicResource. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <SolidColorBrush x:Key="WindowBackground" Color="#F3F6FA" />
+  <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
+  <SolidColorBrush x:Key="SurfaceAlt" Color="#F8FAFD" />
+  <SolidColorBrush x:Key="SurfaceElevated" Color="#FFFFFF" />
+  <SolidColorBrush x:Key="Border" Color="#DFE5EE" />
+  <SolidColorBrush x:Key="TextPrimary" Color="#172033" />
+  <SolidColorBrush x:Key="TextSecondary" Color="#697489" />
+  <SolidColorBrush x:Key="TextMuted" Color="#929CAF" />
+  <SolidColorBrush x:Key="Accent" Color="#1CAEA4" />
+  <SolidColorBrush x:Key="AccentHover" Color="#17968D" />
+  <SolidColorBrush x:Key="AccentSoft" Color="#DFF6F4" />
+  <!-- Text on AccentSoft/SuccessSoft badges; the plain accent is too light to read there. -->
+  <SolidColorBrush x:Key="AccentText" Color="#0B6F68" />
+  <!-- Text and glyphs on Accent fills and the accent gradients; white reads at about 2.3:1 there. -->
+  <SolidColorBrush x:Key="OnAccent" Color="#102A2E" />
+  <SolidColorBrush x:Key="ButtonHover" Color="#E9EEF5" />
+  <SolidColorBrush x:Key="ButtonPressed" Color="#DCE4F0" />
+  <SolidColorBrush x:Key="RowHover" Color="#F0FAF8" />
+  <SolidColorBrush x:Key="Success" Color="#2CB47D" />
+  <SolidColorBrush x:Key="SuccessSoft" Color="#E5F7EF" />
+  <SolidColorBrush x:Key="SuccessText" Color="#1B7A53" />
+  <SolidColorBrush x:Key="Warning" Color="#D99728" />
+  <SolidColorBrush x:Key="WarningSoft" Color="#FFF4D9" />
+  <SolidColorBrush x:Key="Danger" Color="#E25259" />
+  <SolidColorBrush x:Key="InputBackground" Color="#FFFFFF" />
+  <SolidColorBrush x:Key="LogBackground" Color="#151B29" />
+  <SolidColorBrush x:Key="LogText" Color="#D7DEEF" />
+  <SolidColorBrush x:Key="Overlay" Color="#12000000" />
+  <SolidColorBrush x:Key="ScrollTrack" Color="#0F697489" />
+  <SolidColorBrush x:Key="ScrollThumb" Color="#78929CAF" />
+  <!-- Main-window connection indicator; OnStatus is the glyph drawn on it. -->
+  <SolidColorBrush x:Key="StatusIdle" Color="#AAB1C0" />
+  <SolidColorBrush x:Key="StatusConnecting" Color="#4384EB" />
+  <SolidColorBrush x:Key="StatusReconnecting" Color="#E69E34" />
+  <SolidColorBrush x:Key="StatusConnected" Color="#2CB47D" />
+  <SolidColorBrush x:Key="StatusError" Color="#E25259" />
+  <SolidColorBrush x:Key="OnStatus" Color="#FFFFFF" />
+  <!-- NAT badge and tooltip legend. Soft variants tint the badge; the overlay greys out legend chips that are not the current type. -->
+  <SolidColorBrush x:Key="Nat1" Color="#2CB47D" />
+  <SolidColorBrush x:Key="Nat2" Color="#35B8C5" />
+  <SolidColorBrush x:Key="Nat12" Color="#2AB19E" />
+  <SolidColorBrush x:Key="Nat3" Color="#E69E34" />
+  <SolidColorBrush x:Key="Nat4" Color="#E25259" />
+  <SolidColorBrush x:Key="Nat1Soft" Color="#2A2CB47D" />
+  <SolidColorBrush x:Key="Nat2Soft" Color="#2A35B8C5" />
+  <SolidColorBrush x:Key="Nat12Soft" Color="#2A2AB19E" />
+  <SolidColorBrush x:Key="Nat3Soft" Color="#2AE69E34" />
+  <SolidColorBrush x:Key="Nat4Soft" Color="#2AE25259" />
+  <SolidColorBrush x:Key="NatMutedOverlay" Color="#92778088" />
+
+  <LinearGradientBrush x:Key="AccentGradient" StartPoint="0,0" EndPoint="0,1">
+    <GradientStop Color="#41CFC5" Offset="0" />
+    <GradientStop Color="#2BAEA4" Offset="1" />
+  </LinearGradientBrush>
+  <LinearGradientBrush x:Key="AccentGradientHover" StartPoint="0,0" EndPoint="0,1">
+    <GradientStop Color="#4FDAD0" Offset="0" />
+    <GradientStop Color="#33BCB1" Offset="1" />
+  </LinearGradientBrush>
+  <LinearGradientBrush x:Key="AccentGradientPressed" StartPoint="0,0" EndPoint="0,1">
+    <GradientStop Color="#2FA89F" Offset="0" />
+    <GradientStop Color="#21958C" Offset="1" />
+  </LinearGradientBrush>
+  <LinearGradientBrush x:Key="LogoGradient" StartPoint="0,0" EndPoint="1,1">
+    <GradientStop Color="#53DCD2" Offset="0" />
+    <GradientStop Color="#23A39A" Offset="1" />
+  </LinearGradientBrush>
+</ResourceDictionary>

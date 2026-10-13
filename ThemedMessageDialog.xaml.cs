@@ -1,8 +1,7 @@
 using System.Windows;
-using System.Windows.Media;
+using System.Windows.Controls;
 using MikuN2N.Services;
 using Application = System.Windows.Application;
-using Color = System.Windows.Media.Color;
 
 namespace MikuN2N;
 
@@ -48,7 +47,7 @@ public partial class ThemedMessageDialog : Window
         // White on the bright dark-theme accent is hard to read; match the primary button.
         if (brush == "Accent")
         {
-            IconGlyph.Foreground = new SolidColorBrush(Color.FromRgb(0x10, 0x2A, 0x2E));
+            IconGlyph.SetResourceReference(TextBlock.ForegroundProperty, "OnAccent");
         }
     }
 
