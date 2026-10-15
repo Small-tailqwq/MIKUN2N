@@ -1,16 +1,19 @@
 param(
     [string]$Baseline = 'ac89d00',
     [string]$OutputDirectory = '',
-    [string]$PackagePath = ''
+    [string]$PackagePath = '',
+    [switch]$VersionOnly,
+    [string]$TemporaryRoot = ([IO.Path]::GetTempPath())
 )
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 if (-not $OutputDirectory) {
-    $OutputDirectory = Join-Path $repositoryRoot 'artifacts/0.5.8-11/update-legacy'
+    $testId = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $OutputDirectory = Join-Path $repositoryRoot "artifacts/update-tests/legacy-$testId"
 }
 $evidenceRoot = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mikun2n-legacy-update-' + [guid]::NewGuid().ToString('N'))
+$testRoot = Join-Path ([IO.Path]::GetFullPath($TemporaryRoot)) ('mikun2n-legacy-update-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 $utf8 = [Text.UTF8Encoding]::new($false)
 $gitInfo = [Diagnostics.ProcessStartInfo]::new('git')
@@ -54,11 +57,15 @@ $details = [ordered]@{
     originalBinaryEndToEnd = $false
     realClientOrTunnelStarted = $false
     realHttpRequests = $false
+    versionOnly = [bool]$VersionOnly
+    fixtureVersion = '0.5.8-11'
+    productionProjectVersionChanged = $false
 }
 $details | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidenceRoot 'legacy-validation.json') -Encoding utf8
 $log = Join-Path $evidenceRoot 'legacy-tests.log'
 "Baseline=$Baseline SourceSHA256=$sourceHash TestRoot=$testRoot`nOnly production-source change: $($details.injection)" | Set-Content -LiteralPath $log -Encoding utf8
-& dotnet run --project (Join-Path $testRoot 'LegacyUpdaterTests.csproj') -- $testRoot $PackagePath 2>&1 |
+$testArguments = @($testRoot, $(if ($VersionOnly) { '--version-only' } else { $PackagePath }))
+& dotnet run --project (Join-Path $testRoot 'LegacyUpdaterTests.csproj') -- $testArguments 2>&1 |
     Tee-Object -FilePath $log -Append
 if ($LASTEXITCODE -ne 0) { throw "Legacy updater tests failed ($LASTEXITCODE); see $log" }
 $details['passed'] = $true

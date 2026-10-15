@@ -36,9 +36,9 @@ MikuN2N 是一个 Windows 客户端，让你和朋友通过自建的虚拟以太
 dotnet build
 ```
 
-输出目录：`bin/Debug/net9.0-windows/`。版本号由 `MikuN2N.csproj` 里的 `BaseVersion` 和 `BuildNumber` 组成，形如 `0.5.8-1`。每交付一个新包，序号加一；同一次交付重新编译时序号不变；`BaseVersion` 变化时序号重置为 1。反馈问题时，请附上界面里或 `build-identity.txt` 中的版本号。
+输出目录：`bin/Debug/net9.0-windows/`。`MikuN2N.csproj` 的 `BaseVersion` 和 `BuildNumber` 标识已确认的正式版本基线；日常修改和测试不变，用户验收并明确决定发布后才选择下一正式版本。测试包另带提交、时间或测试标识。反馈问题时，请附上界面或 `build-identity.txt` 中的完整标识。
 
-每次交付对应一个提交和一个同名 tag（`git diff 0.5.8-1..0.5.8-2` 就是这一版的全部改动）。修改版原生 edge 也包括在内：它位于 `native/n3n-3.4.4/`，建立在一个未经修改的上游 3.4.4 基线提交之上，所以 `git log -- native/` 能列出每一次原生改动，与基线提交比较就得到完整的补丁集。客户端的离线回归测试在 `tools/offline-tests`，用 `dotnet run --project tools/offline-tests -- <空的临时目录>` 运行；原生侧的检查是 `native/n3n-3.4.4` 里的 `tests-wire` 和 `tools/tests-ipv6.c`。这些测试覆盖协议和会话逻辑。
+获批正式发布时才创建对应源码 tag（`git diff 0.5.8-1..0.5.8-2` 可查看版本差异）；本地测试交付不创建 tag。修改版原生 edge 位于 `native/n3n-3.4.4/`，建立在未修改的上游 3.4.4 基线提交之上，`git log -- native/` 可列出原生改动。客户端离线回归测试在 `tools/offline-tests`；原生检查是 `native/n3n-3.4.4` 中的 `tests-wire` 和 `tools/tests-ipv6.c`。
 
 修改版原生源码位于 `native/n3n-3.4.4/`，发布包里以 `Runtime/n3n-3.4.4-source.zip` 的形式附带。重新发布原生构建之前，先运行 `tools/sync-native-version.ps1`，按项目版本生成原生构建标识。然后在 Git Bash 中、确保 MinGW-w64 GCC 和 make 在 PATH 上，于原生源码根目录运行 `sh scripts/build-mikun2n-windows.sh`。直接用随包附带的源码包重新编译，会保留包内原有的构建标识。构建使用 GNU C17，并在调试信息中替换掉构建机上的路径。把生成的 `apps/n3n-edge.exe` 复制为 `Runtime/n3n-edge.exe`，再用 `tools/package-native-source.py --source native/n3n-3.4.4 --archive Runtime/n3n-3.4.4-source.zip --report <validation.json>` 重新生成源码包，并同时更新各组件的哈希。源码包与 `native/` 不能逐字节对上时，`tools/package-release.ps1` 会拒绝打包。
 
@@ -47,7 +47,7 @@ dotnet build
 使用 PowerShell 7、Python 3.9+ 和 .NET 9 SDK，同时生成两个 Windows x64 包：
 
 ```powershell
-./tools/package-release.ps1 -Output dist
+./tools/package-release.ps1 -ExpectedVersion '<已批准的版本>' -Output dist
 ```
 
 自包含包 `MikuN2N-<版本>-win-x64.zip` 内含 .NET；较小的 `MikuN2N-<版本>-win-x64-framework-dependent.zip` 需要玩家电脑安装 **.NET 9 桌面运行时 x64**。两版程序都使用单文件，并带上相同的修改版 edge、对应源码、许可证、声明和 TAP 安装器。脚本还生成 `SHA256SUMS` 与 `update.json`，可用 `-Notes '...'` 写入更新说明。详见[打包与更新说明](docs/UPDATES.zh.md)。

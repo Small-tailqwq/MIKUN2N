@@ -1,16 +1,18 @@
 <#
 .SYNOPSIS
-Builds both Windows x64 release packages and their static update manifest.
+Builds uniquely identified local test packages, or explicitly approved release packages.
 
 .DESCRIPTION
-Publishes self-contained and framework-dependent single-file builds, verifies the
-corresponding native source and licenses, and writes two ZIPs, SHA256SUMS and
-update.json into -Output. Run with PowerShell 7 and the .NET 9 SDK on Windows.
+Default runs keep the source version and add a test identity. Pass -ExpectedVersion
+only after release approval to emit canonical release assets and update.json.
+Existing artifacts are never overwritten. -PlanOnly checks identities without building.
 #>
 param(
-    [string]$Output = 'dist',
+    [string]$Output = '',
     [string]$ExpectedVersion = '',
-    [string]$Notes = ''
+    [string]$Notes = '',
+    [string]$TestId = '',
+    [switch]$PlanOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,16 +27,39 @@ if ($version -notmatch '^\d+\.\d+\.\d+-\d+$') { throw 'Invalid project release v
 if ($ExpectedVersion -and $ExpectedVersion -ne $version) {
     throw "Tag $ExpectedVersion does not match project version $version"
 }
+$release = -not [string]::IsNullOrWhiteSpace($ExpectedVersion)
+if ($release -and $TestId) { throw 'TestId is only for local test packages' }
+$revision = (& git -C $root rev-parse --short=12 HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Cannot identify the source commit' }
+$dirty = [bool](& git -C $root status --porcelain --untracked-files=no)
+$runId = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ') + '-g' + $revision + $(if ($dirty) { '-dirty' }) + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+if (-not $release -and -not $TestId) { $TestId = $runId }
+if ($TestId -and $TestId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$') { throw 'TestId must be a short filename-safe identifier' }
+$identity = if ($release) { $version } else { "$version+test.$TestId" }
+if (-not $Output) { $Output = if ($release) { 'dist' } else { "artifacts/test-packages/$TestId" } }
 $repository = ($xml.SelectSingleNode('/Project/PropertyGroup/UpdateRepository')).InnerText
-if ($repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'UpdateRepository must be a GitHub owner/name' }
+if ($release -and $repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'UpdateRepository must be a GitHub owner/name' }
 $pageUrl = "https://github.com/$repository/releases/tag/$version"
 $downloadUrl = "https://github.com/$repository/releases/download/$version"
 $outputDirectory = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($Output)) { $Output } else { Join-Path $root $Output }))
+$names = foreach ($runtime in @('self-contained', 'framework-dependent')) {
+    $suffix = if ($runtime -eq 'framework-dependent') { '-framework-dependent' } else { '' }
+    $testSuffix = if ($release) { '' } else { "-test-$TestId" }
+    "MikuN2N-$version$testSuffix-win-x64$suffix.zip"
+}
+$metadataName = if ($release) { 'update.json' } else { 'test-build.json' }
+foreach ($name in @($names) + @('SHA256SUMS', $metadataName)) {
+    if (Test-Path -LiteralPath (Join-Path $outputDirectory $name)) { throw "Refusing to overwrite existing artifact: $name" }
+}
+$reportDirectory = Join-Path $root "artifacts/package-checks/$runId"
+$plan = [ordered]@{ mode = $(if ($release) { 'release' } else { 'test' }); sourceVersion = $version; informationalVersion = $identity; sourceCommit = $revision; sourceDirty = $dirty; testId = $TestId; output = $outputDirectory; packages = @($names); metadata = $metadataName; reports = $reportDirectory; updateRepository = $(if ($release) { $repository } else { 'none' }) }
+if ($PlanOnly) { $plan | ConvertTo-Json -Depth 4; return }
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
+New-Item -ItemType Directory -Force -Path $reportDirectory | Out-Null
 
 # GPLv3 requires the shipped archive to be the corresponding source of the shipped edge;
 # the tracked native tree is that source, so refuse to package an archive that drifted.
-$nativeReport = Join-Path $root "artifacts/$version/native-source-validation.json"
+$nativeReport = Join-Path $reportDirectory 'native-source-validation.json'
 python (Join-Path $PSScriptRoot 'package-native-source.py') --validate-only `
     --source (Join-Path $root 'native/n3n-3.4.4') `
     --archive (Join-Path $root 'Runtime/n3n-3.4.4-source.zip') --report $nativeReport
@@ -80,8 +105,8 @@ function Test-Package([string]$Publish) {
         }
     }
     $productVersion = (Get-Item -LiteralPath (Join-Path $Publish 'MikuN2N.exe')).VersionInfo.ProductVersion
-    if ($productVersion -ne $version) { throw "MikuN2N.exe reports $productVersion, expected $version" }
-    if ((Get-Content -LiteralPath (Join-Path $Publish 'build-identity.txt') -Raw).Trim() -ne $version) {
+    if ($productVersion -ne $identity) { throw "MikuN2N.exe reports $productVersion, expected $identity" }
+    if ((Get-Content -LiteralPath (Join-Path $Publish 'build-identity.txt') -Raw).Trim() -ne $identity) {
         throw 'Published build identity does not match project version'
     }
     foreach ($file in Get-ChildItem -LiteralPath $Publish -File -Recurse) {
@@ -107,45 +132,34 @@ $packages = @()
 $checksums = @()
 $sizeReports = @()
 foreach ($runtime in @('self-contained', 'framework-dependent')) {
-    $publish = [IO.Path]::GetFullPath((Join-Path $root "publish/release-$version-$runtime"))
-    # Resolve and bound the deletion to this checkout's publish tree before removing anything.
-    $publishRoot = [IO.Path]::GetFullPath((Join-Path $root 'publish')) + [IO.Path]::DirectorySeparatorChar
-    if (-not $publish.StartsWith($publishRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Publish directory escapes checkout' }
-    if ((Test-Path -LiteralPath $publishRoot) -and (Get-Item -LiteralPath $publishRoot).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
-        throw 'Refusing to publish through a redirected publish root'
-    }
-    if (Test-Path -LiteralPath $publish) {
-        $resolved = (Resolve-Path -LiteralPath $publish).Path
-        if ($resolved -ne $publish -or (Get-Item -LiteralPath $publish).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
-            throw 'Refusing to remove a redirected publish directory'
-        }
-        if (Get-ChildItem -LiteralPath $publish -Directory -Recurse | Where-Object { $_.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) }) {
-            throw 'Refusing to remove a publish directory containing redirected subdirectories'
-        }
-        Remove-Item -LiteralPath $publish -Recurse -Force
-    }
+    $publish = [IO.Path]::GetFullPath((Join-Path $root "publish/runs/$runId/$runtime"))
+    if (Test-Path -LiteralPath $publish) { throw 'Publish run directory already exists' }
     $selfContained = ($runtime -eq 'self-contained').ToString().ToLowerInvariant()
+    $updateRepository = if ($release) { $repository } else { 'none' }
     dotnet publish $project -c Release -r win-x64 --self-contained $selfContained `
         -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-        -p:EnableCompressionInSingleFile=false -p:UpdateRuntime=$runtime -o $publish
+        -p:EnableCompressionInSingleFile=false -p:UpdateRuntime=$runtime `
+        -p:InformationalVersion=$identity -p:UpdateRepository=$updateRepository -o $publish
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish ($runtime) failed with exit code $LASTEXITCODE" }
     Get-ChildItem -LiteralPath $publish -Filter '*.pdb' -File -Recurse | Remove-Item -Force
     Test-Package $publish
 
     $suffix = if ($runtime -eq 'framework-dependent') { '-framework-dependent' } else { '' }
-    $zipName = "MikuN2N-$version-win-x64$suffix.zip"
+    $testSuffix = if ($release) { '' } else { "-test-$TestId" }
+    $zipName = "MikuN2N-$version$testSuffix-win-x64$suffix.zip"
     $zipPath = Join-Path $outputDirectory $zipName
-    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+    if (Test-Path -LiteralPath $zipPath) { throw "Refusing to overwrite existing artifact: $zipName" }
     [IO.Compression.ZipFile]::CreateFromDirectory($publish, $zipPath, [IO.Compression.CompressionLevel]::SmallestSize, $false)
     $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $checksums += "$hash  $zipName"
-    $packages += [ordered]@{
+    $packageInfo = [ordered]@{
         runtime = $runtime
         name = $zipName
-        url = "$downloadUrl/$zipName"
         size = (Get-Item -LiteralPath $zipPath).Length
         sha256 = $hash
     }
+    if ($release) { $packageInfo['url'] = "$downloadUrl/$zipName" }
+    $packages += $packageInfo
     $archive = [IO.Compression.ZipFile]::OpenRead($zipPath)
     try {
         $entries = @($archive.Entries | ForEach-Object {
@@ -162,11 +176,17 @@ foreach ($runtime in @('self-contained', 'framework-dependent')) {
     } finally { $archive.Dispose() }
     Write-Host "Packaged $zipName ($((Get-Item -LiteralPath $zipPath).Length) bytes)"
 }
-$manifest = [ordered]@{ schema = 1; version = $version; notes = $Notes; pageUrl = $pageUrl; packages = $packages }
 [IO.File]::WriteAllText((Join-Path $outputDirectory 'SHA256SUMS'), ($checksums -join "`n") + "`n")
-[IO.File]::WriteAllText((Join-Path $outputDirectory 'update.json'), ($manifest | ConvertTo-Json -Depth 5) + "`n")
+if ($release) {
+    $manifest = [ordered]@{ schema = 1; version = $version; notes = $Notes; pageUrl = $pageUrl; packages = $packages }
+} else {
+    $manifest = [ordered]@{ mode = 'test'; sourceVersion = $version; informationalVersion = $identity; sourceCommit = $revision; sourceDirty = $dirty; testId = $TestId; packages = $packages }
+}
+[IO.File]::WriteAllText((Join-Path $outputDirectory $metadataName), ($manifest | ConvertTo-Json -Depth 5) + "`n")
 $sizeReport = [ordered]@{
+    mode = $plan.mode
     version = $version
+    informationalVersion = $identity
     sdk = (& dotnet --version)
     configuration = 'Release'
     runtimeIdentifier = 'win-x64'
@@ -175,5 +195,5 @@ $sizeReport = [ordered]@{
     zipCompression = 'SmallestSize'
     packages = $sizeReports
 }
-[IO.File]::WriteAllText((Join-Path $root "artifacts/$version/package-size-report.json"), ($sizeReport | ConvertTo-Json -Depth 6) + "`n")
-Write-Host 'Wrote SHA256SUMS and update.json'
+[IO.File]::WriteAllText((Join-Path $reportDirectory 'package-size-report.json'), ($sizeReport | ConvertTo-Json -Depth 6) + "`n")
+Write-Host "Wrote SHA256SUMS and $metadataName; reports: $reportDirectory"

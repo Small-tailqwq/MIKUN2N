@@ -16,18 +16,28 @@
 在 Windows 上准备 PowerShell 7、Python 3.9+ 和 .NET 9 SDK：
 
 ```powershell
-./tools/package-release.ps1 -Output dist -Notes '更新说明'
+./tools/package-release.ps1
 ```
 
-版本来自 `MikuN2N.csproj` 的 `BaseVersion` 和 `BuildNumber`。脚本将两版发布到各自的干净目录，逐字节核对源码归档与 `native/n3n-3.4.4/`，检查包内容白名单与组件字节，排除个人构建路径，然后生成：
+日常测试不修改 `BaseVersion` 和 `BuildNumber`。默认命令在 `artifacts/test-packages/<测试标识>/` 生成带独立标识的包，程序集信息版本为 `<基线>+test.<测试标识>`，另带 `SHA256SUMS` 和 `test-build.json`。默认标识包含 UTC 时间、提交、未提交状态与短随机后缀，也可显式传 `-TestId`。测试包关闭真实更新检查，不生成 `update.json` 或公开下载地址。已有产物会被拒绝覆盖；`-PlanOnly` 可只查看标识与路径，不构建。
+
+只有用户验收并明确批准发布后，才统一商定的源码版本并运行：
+
+```powershell
+./tools/package-release.ps1 -ExpectedVersion '<已批准的版本>' -Output dist -Notes '更新说明'
+```
+
+这个显式发布模式会核对项目版本，将两版构建到新的运行目录，验证对应原生源码与许可证，然后生成：
 
 - 上表中的两个 ZIP。
 - `SHA256SUMS`，每个 ZIP 对应一行 SHA-256。
 - `update.json`，包含下文的静态更新信息。
 
-体积与各文件压缩后大小另存于本地 `artifacts/<版本>/package-size-report.json`，不放进发布 ZIP。Release 构建保留简体中文卫星资源及默认英文回退，不分发外部 PDB，ZIP 使用 `SmallestSize`。不启用 WPF 裁剪或 AOT。单文件内部程序集压缩保持关闭：实测虽然 EXE 变小，最终 ZIP 却略大，还会增加启动时的解压工作。参见 Microsoft 的[单文件压缩说明](https://learn.microsoft.com/en-us/dotnet/core/deploying/single-file/overview#compress-assemblies-in-single-file-apps)。
+体积与源码核对记录存入 `artifacts/package-checks/<运行标识>/`，不放进 ZIP。Release 构建保留简体中文卫星资源与默认英文回退，不分发外部 PDB，ZIP 使用 `SmallestSize`。不启用 WPF 裁剪或 AOT；内部程序集压缩因实测 ZIP 略大而保持关闭。参见 Microsoft 的[单文件压缩说明](https://learn.microsoft.com/en-us/dotnet/core/deploying/single-file/overview#compress-assemblies-in-single-file-apps)。
 
-[Actions 工作流](../.github/workflows/release.yml)在推送版本 tag 时调用相同脚本，构建前检查 tag 与项目版本一致，上传上述四个文件，并创建草稿 Release。检查草稿后正式发布，自动更新才能发现它。手动运行工作流只上传工作流产物。本地构建不会创建 tag 或发布 Release。
+[Actions 工作流](../.github/workflows/release.yml)仅在推送版本 tag 时选择发布模式，核对项目版本后将四个文件附到草稿 Release。审阅并正式发布后，自动更新才能发现它。手动运行工作流使用测试模式，只上传工作流产物。本地构建不会创建 tag 或发布 Release。
+
+更新器比较版本时会忽略 `+test...` 元数据。需要测试更高版本时，仅对隔离夹具构建传入临时 `BuildNumber`，包也放在公开发布目录之外。原始 `-10` 源码回放夹具已在自己的临时工程里使用合成的 `0.5.8-11`；`Test-LegacyUpdater.ps1 -VersionOnly` 只核对版本比较与夹具 EXE 的实际版本，不进行 HTTP、替换或 UI 操作。这两种方式都不修改正式版本或既有产物。
 
 两版都保留 `LICENSE.txt`、全部 `Runtime/LICENSE-*.txt` 与声明、`Runtime/n3n-3.4.4-source.zip` 内的原生修改声明，以及现有 TAP 源码提供承诺；分发二进制时应一同保留。公开发布还通过对应 tag 的源码树提供 MikuN2N 本体的对应源码。参见[第三方声明](../Runtime/THIRD-PARTY-NOTICES.txt)与[原生构建说明](../Runtime/BUILD.zh.md)。
 

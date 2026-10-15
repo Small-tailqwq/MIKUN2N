@@ -16,18 +16,28 @@ Both contain the single-file `MikuN2N.exe`, build identity, modified edge, corre
 On Windows with PowerShell 7, Python 3.9+ and the .NET 9 SDK:
 
 ```powershell
-./tools/package-release.ps1 -Output dist -Notes 'Release notes'
+./tools/package-release.ps1
 ```
 
-The version comes from `BaseVersion` and `BuildNumber` in `MikuN2N.csproj`. The script publishes both flavors into separate clean directories, validates the corresponding source archive against `native/n3n-3.4.4/`, checks the package allowlist and component bytes, rejects personal build paths and writes:
+Everyday tests keep `BaseVersion` and `BuildNumber` unchanged. The default command creates uniquely named test packages under `artifacts/test-packages/<test-id>/`, with informational version `<baseline>+test.<test-id>`, `SHA256SUMS` and `test-build.json`. The default ID contains UTC time, source commit, dirty state and a short random suffix; an explicit `-TestId` is also supported. Test builds disable real update checks and do not emit `update.json` or public download URLs. Existing artifacts are refused rather than replaced. Use `-PlanOnly` to inspect identities and paths without building.
+
+Only after user acceptance and explicit release approval, update the agreed source version and run:
+
+```powershell
+./tools/package-release.ps1 -ExpectedVersion '<approved-version>' -Output dist -Notes 'Release notes'
+```
+
+This explicit release mode verifies the project version, publishes both flavors into fresh run directories, validates the corresponding native source and licenses, and writes:
 
 - The two ZIPs listed above.
 - `SHA256SUMS`, with one SHA-256 line for each ZIP.
 - `update.json`, containing the static discovery information below.
 
-Size and per-file compressed-size evidence is saved locally as `artifacts/<version>/package-size-report.json`, outside the release ZIPs. Release builds keep Simplified Chinese satellite resources and neutral English fallback, omit external PDBs, and use ZIP `SmallestSize`. No WPF trimming or AOT is enabled. Inner single-file assembly compression stays disabled: although it reduced the test EXE, the resulting ZIP was slightly larger and would add decompression work at startup. See Microsoft's [single-file compression guidance](https://learn.microsoft.com/en-us/dotnet/core/deploying/single-file/overview#compress-assemblies-in-single-file-apps).
+Size and source-check evidence is saved under `artifacts/package-checks/<run-id>/`, outside the ZIPs. Release builds keep Simplified Chinese satellite resources and neutral English fallback, omit external PDBs, and use ZIP `SmallestSize`. No WPF trimming or AOT is enabled. Inner single-file compression stays disabled because its measured ZIP was slightly larger. See Microsoft's [single-file compression guidance](https://learn.microsoft.com/en-us/dotnet/core/deploying/single-file/overview#compress-assemblies-in-single-file-apps).
 
-The [Actions workflow](../.github/workflows/release.yml) calls the same script on version tags. It checks the tag against the project version before building, uploads all four assets, then creates a draft Release. Publish a reviewed draft as a regular Release to make it available to automatic discovery. Manual workflow runs only upload workflow artifacts. Local builds do not create tags or publish releases.
+The [Actions workflow](../.github/workflows/release.yml) selects release mode only for a pushed version tag, checks it against the project version, then attaches the four assets to a draft Release. Publish a reviewed draft to enable automatic discovery. Manual workflow runs select test mode and only upload workflow artifacts. Local builds never create tags or publish releases.
+
+The updater ignores `+test...` metadata when comparing versions. To test a higher version, override `BuildNumber` only for an isolated fixture build and keep its package outside the public release directory. The immutable `-10` replay harness already puts synthetic `0.5.8-11` in its temporary project; `Test-LegacyUpdater.ps1 -VersionOnly` checks that comparison and actual fixture EXE version without HTTP, replacement or UI. Neither approach edits the production version or existing artifacts.
 
 Both packages retain `LICENSE.txt`, every `Runtime/LICENSE-*.txt` and notice, the native modification statement inside `Runtime/n3n-3.4.4-source.zip`, and the existing TAP source offer. Keep these with the binaries. A public release also provides MikuN2N's own corresponding source through its matching tagged tree. See [third-party notices](../Runtime/THIRD-PARTY-NOTICES.txt) and [native build instructions](../Runtime/BUILD.md).
 

@@ -37,7 +37,7 @@ MikuN2N 是 Windows WPF（.NET 9、C#）客户端，管理本地修改版 n3n ed
 
 修改原生补丁、重建 edge 或调试打洞时，读 [mikun2n-edge-patch](.agents/skills/mikun2n-edge-patch/SKILL.md)。改动记录由 `Runtime/changes/` 分版本双语日志维护；当前行为以源码和最新直接契约为准。
 
-只有交付包需要更新构建号；同一次交付的编译重试不加号。公开发布包用 `tools/package-release.ps1`，保留许可证、第三方声明、校验文件及与二进制对应的源码归档。具体步骤见 [Runtime/BUILD.md](Runtime/BUILD.md)。原生变更同步修改声明、源码归档及 SHA-256。
+日常修改、构建和测试不改正式版本。只有用户验收并明确决定发布后，才统一版本和 tag；不把测试包交付视为发布批准。测试产物用提交、时间或测试标识区分，使用独立目录，不覆盖既有产物。升级测试需要更高版本时，只在临时构建参数或夹具中设置。`tools/package-release.ps1` 默认产出带测试标识的包，正式包须显式传入已批准的 `-ExpectedVersion`。保留许可证、第三方声明、校验文件及对应源码，细节见 [docs/UPDATES.md](docs/UPDATES.md)。原生变更仍同步修改声明、源码归档及 SHA-256。
 
 ## 文档与决策记录
 

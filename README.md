@@ -36,18 +36,18 @@ Requires Windows and the .NET 9 SDK:
 dotnet build
 ```
 
-Output: `bin/Debug/net9.0-windows/`. `BaseVersion` and `BuildNumber` in `MikuN2N.csproj` produce versions such as `0.5.8-1`. Increment the number for each newly delivered package; retain it for rebuilds of that delivery and reset it to 1 when the base version changes. Record the version from the UI or `build-identity.txt` when reporting a problem.
+Output: `bin/Debug/net9.0-windows/`. `BaseVersion` and `BuildNumber` in `MikuN2N.csproj` identify the agreed version baseline. Keep them unchanged during everyday edits and tests; choose the next release version only after user acceptance and an explicit release decision. Test packages add a commit/time/test identity. Report that identity from the UI or `build-identity.txt` with any problem.
 
-Each delivery gets one commit plus a matching tag (`git diff 0.5.8-1..0.5.8-2` is the whole version's change); this covers the patched native edge too, which lives in `native/n3n-3.4.4/` on top of an unmodified upstream 3.4.4 baseline commit, so `git log -- native/` lists every native change and diffing against that baseline gives the complete patch set. Client-side offline regression tests live in `tools/offline-tests` and run with `dotnet run --project tools/offline-tests -- <empty temp directory>`; the native checks are `tests-wire` and `tools/tests-ipv6.c` in `native/n3n-3.4.4`. These cover protocol and session logic.
+An approved release gets a matching source tag (`git diff 0.5.8-1..0.5.8-2` shows its changes); local test delivery does not create a tag. The patched native edge lives in `native/n3n-3.4.4/` on top of an unmodified upstream 3.4.4 baseline commit, so `git log -- native/` lists every native change. Client-side offline regression tests live in `tools/offline-tests`; the native checks are `tests-wire` and `tools/tests-ipv6.c` in `native/n3n-3.4.4`.
 
 The patched native source is `native/n3n-3.4.4/`, and release packages carry it as `Runtime/n3n-3.4.4-source.zip`. Before a new native release build, run `tools/sync-native-version.ps1` to generate its build identity from the project version. Then run `sh scripts/build-mikun2n-windows.sh` from the native source root in Git Bash with MinGW-w64 GCC and make on PATH. Rebuilding the supplied archive directly retains its included identity. This uses GNU C17 and maps build paths in debug information. Copy `apps/n3n-edge.exe` to `Runtime/n3n-edge.exe`, then regenerate the source archive with `tools/package-native-source.py --source native/n3n-3.4.4 --archive Runtime/n3n-3.4.4-source.zip --report <validation.json>` and update the component hashes together. `tools/package-release.ps1` refuses to package an archive that does not match `native/` byte for byte.
 
 ## Publish
 
-Build both Windows x64 packages with PowerShell 7, Python 3.9+ and the .NET 9 SDK:
+After user acceptance and release approval, set the agreed project version and build both Windows x64 packages with PowerShell 7, Python 3.9+ and the .NET 9 SDK:
 
 ```powershell
-./tools/package-release.ps1 -Output dist
+./tools/package-release.ps1 -ExpectedVersion '<approved-version>' -Output dist
 ```
 
 The self-contained `MikuN2N-<version>-win-x64.zip` includes .NET. The smaller `MikuN2N-<version>-win-x64-framework-dependent.zip` requires the **.NET 9 Desktop Runtime x64** on the player's PC. Both use a single-file application and carry the same patched edge, corresponding source, licenses, notices and TAP installer. The script also writes `SHA256SUMS` and `update.json`; optional `-Notes '...'` adds update notes. See [package and update details](docs/UPDATES.md).

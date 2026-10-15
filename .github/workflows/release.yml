@@ -50,7 +50,7 @@ jobs:
       - name: Build package
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || '' }}
         run: ./tools/package-release.ps1 -Output dist -ExpectedVersion $env:RELEASE_TAG
 
       - name: Upload workflow artifact
@@ -61,9 +61,10 @@ jobs:
             dist/MikuN2N-*-win-x64*.zip
             dist/SHA256SUMS
             dist/update.json
+            dist/test-build.json
 
       - name: Create draft release
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

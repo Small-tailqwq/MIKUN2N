@@ -12,7 +12,7 @@
     <AssemblyName>MikuN2N</AssemblyName>
     <RootNamespace>MikuN2N</RootNamespace>
     <BaseVersion>0.5.8</BaseVersion>
-    <BuildNumber>11</BuildNumber>
+    <BuildNumber>10</BuildNumber>
     <Version>$(BaseVersion)-$(BuildNumber)</Version>
     <AssemblyVersion>$(BaseVersion).0</AssemblyVersion>
     <FileVersion>$(BaseVersion).$(BuildNumber)</FileVersion>
