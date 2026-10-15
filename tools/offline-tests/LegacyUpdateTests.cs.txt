@@ -1,0 +1,191 @@
+using System.Diagnostics;
+using System.IO.Compression;
+using System.Net;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using MikuN2N.Services;
+
+if (args is ["--hold", var ready])
+{
+    File.WriteAllText(ready, "ready");
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+    return;
+}
+var root = Path.GetFullPath(args[0]);
+const string version = "0.5.8-11";
+const string sc = "MikuN2N-0.5.8-11-win-x64.zip";
+const string fdd = "MikuN2N-0.5.8-11-win-x64-framework-dependent.zip";
+const string prefix = "https://github.com/fixture/updater/releases/download/0.5.8-11/";
+var zipPath = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1]) ? Path.GetFullPath(args[1]) : Path.Combine(root, "fixture.zip");
+if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
+{
+    using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
+    zip.CreateEntryFromFile(Environment.ProcessPath!, "MikuN2N.exe");
+    using var writer = new StreamWriter(zip.CreateEntry("Runtime/n3n-edge.exe").Open());
+    writer.Write("fixture only; never execute");
+}
+var bytes = File.ReadAllBytes(zipPath);
+var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+var withDigest = false;
+var apiStatus = HttpStatusCode.OK;
+var isDraft = false;
+var isPrerelease = false;
+var missingChecksum = false;
+var lastMatch = false;
+OfflineTransport.Route = request =>
+{
+    Check(request.Headers.Authorization is null, "no token sent");
+    if (request.RequestUri!.Host == "api.github.com")
+    {
+        Check(request.RequestUri.AbsolutePath == "/repos/fixture/updater/releases/latest", "exact -10 API latest path");
+        if (apiStatus != HttpStatusCode.OK) return new(apiStatus);
+        var assets = new List<object>
+        {
+            new { name = sc, browser_download_url = prefix + sc, size = bytes.Length, digest = withDigest ? "sha256:" + hash : null },
+            new { name = fdd, browser_download_url = prefix + fdd, size = bytes.Length, digest = withDigest ? "sha256:" + hash : null },
+            new { name = "update.json", browser_download_url = prefix + "update.json", size = 0, digest = (string?)null }
+        };
+        if (!missingChecksum) assets.Add(new { name = "SHA256SUMS", browser_download_url = prefix + "SHA256SUMS", size = 0, digest = (string?)null });
+        if (lastMatch) assets.Add(new { name = "MikuN2N-extra-win-x64.zip", browser_download_url = prefix + "MikuN2N-extra-win-x64.zip", size = bytes.Length, digest = "sha256:" + hash });
+        var json = JsonSerializer.Serialize(new { tag_name = version, body = "fixture", html_url = "https://github.com/fixture/updater/releases/tag/0.5.8-11", draft = isDraft, prerelease = isPrerelease, assets });
+        return new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+    }
+    if (request.RequestUri.AbsolutePath.EndsWith("SHA256SUMS"))
+        return new(HttpStatusCode.OK) { Content = new StringContent($"{hash}  {sc}\n{hash} *{fdd}\n") };
+    Check(request.RequestUri.AbsolutePath.EndsWith(sc), "legacy downloads SC only");
+    return new(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) };
+};
+var service = new UpdateService();
+async Task<UpdateRelease?> Fetch() => await (Task<UpdateRelease?>)typeof(UpdateService)
+    .GetMethod("FetchLatestAsync", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(service, new object[] { CancellationToken.None })!;
+foreach (var digest in new[] { false, true })
+{
+    withDigest = digest;
+    var release = await Fetch();
+    Check(release is { AssetName: sc, Version: version } && release.Sha256 == hash, "formal release selects SC with FDD last and verifies checksum metadata");
+    var downloaded = Path.Combine(root, digest ? "digest.zip" : "sums.zip");
+    await (Task)typeof(UpdateService).GetMethod("DownloadAsync", BindingFlags.NonPublic | BindingFlags.Instance)!
+        .Invoke(service, new object[] { release!, downloaded, CancellationToken.None })!;
+    var staged = UpdateService.ExtractPackage(downloaded, Path.Combine(root, digest ? "digest-files" : "sums-files"), version);
+    var install = Path.Combine(root, digest ? "digest-install" : "sums-install");
+    Directory.CreateDirectory(install);
+    File.WriteAllText(Path.Combine(install, "MikuN2N.exe"), "old fixture");
+    UpdateService.ReplaceFiles(staged, install);
+    Check(FileVersionInfo.GetVersionInfo(Path.Combine(install, "MikuN2N.exe")).ProductVersion!.StartsWith(version), "staged EXE version and installed file");
+    Check(File.ReadAllText(Path.Combine(install, "MikuN2N.exe.update-old")) == "old fixture", "old file retained");
+    Console.WriteLine("PASS: immutable -10 algorithm discovers formal SC release, " + (digest ? "digest" : "SHA256SUMS") + ", downloads, checks hash, verifies EXE and replaces isolated install");
+}
+var wrongHash = (await Fetch())! with { Sha256 = new string('0', 64) };
+var hashRejected = false;
+try
+{
+    await (Task)typeof(UpdateService).GetMethod("DownloadAsync", BindingFlags.NonPublic | BindingFlags.Instance)!
+        .Invoke(service, new object[] { wrongHash, Path.Combine(root, "wrong-hash.zip"), CancellationToken.None })!;
+}
+catch (UpdateService.UpdateException) { hashRejected = true; }
+Check(hashRejected, "legacy rejects corrupt checksum");
+var versionRejected = false;
+try { UpdateService.ExtractPackage(zipPath, Path.Combine(root, "wrong-version"), "99.0.0-1"); }
+catch (UpdateService.UpdateException) { versionRejected = true; }
+Check(versionRejected, "legacy rejects actual EXE version mismatch");
+var slip = Path.Combine(root, "slip.zip");
+using (var zip = ZipFile.Open(slip, ZipArchiveMode.Create)) zip.CreateEntry("../escape.txt");
+var slipRejected = false;
+try { UpdateService.ExtractPackage(slip, Path.Combine(root, "slip-files"), version); }
+catch (UpdateService.UpdateException) { slipRejected = true; }
+Check(slipRejected && !File.Exists(Path.Combine(root, "escape.txt")), "legacy zip traversal rejected");
+Console.WriteLine("PASS: -10 corrupt SHA256, actual EXE version mismatch and zip traversal rejected");
+Check(!Regex.IsMatch(fdd, @"^MikuN2N-.+-win-x64\.zip$", RegexOptions.IgnoreCase), "legacy regex excludes FDD");
+lastMatch = true;
+Check((await Fetch())!.AssetName == "MikuN2N-extra-win-x64.zip", "legacy algorithm selects the last regex match");
+lastMatch = false;
+foreach (var code in new[] { HttpStatusCode.Forbidden, HttpStatusCode.TooManyRequests })
+{
+    apiStatus = code;
+    var rejected = false;
+    try { await Fetch(); } catch (UpdateService.UpdateException) { rejected = true; }
+    Check(rejected, "legacy rate limit cannot be repaired by static manifest");
+}
+apiStatus = HttpStatusCode.NotFound;
+Check(await Fetch() is null, "404 latest returns no release");
+apiStatus = HttpStatusCode.OK;
+isDraft = true;
+Check(await Fetch() is null, "draft excluded");
+isDraft = false;
+isPrerelease = true;
+Check(await Fetch() is null, "prerelease excluded");
+isPrerelease = false;
+withDigest = false;
+missingChecksum = true;
+var missingRejected = false;
+try { await Fetch(); } catch (UpdateService.UpdateException) { missingRejected = true; }
+Check(missingRejected, "missing checksum fails closed");
+Console.WriteLine("PASS: exact latest API, last regex match, FDD excluded, 403/429 fail, 404/draft/prerelease excluded, checksum required");
+
+var runningInstall = Path.Combine(root, "running-console");
+var replacement = Path.Combine(root, "running-replacement");
+Directory.CreateDirectory(runningInstall);
+Directory.CreateDirectory(replacement);
+foreach (var file in Directory.GetFiles(AppContext.BaseDirectory)) File.Copy(file, Path.Combine(runningInstall, Path.GetFileName(file)));
+var runningExe = Path.Combine(runningInstall, "MikuN2N.exe");
+File.Copy(Environment.ProcessPath!, runningExe, overwrite: true);
+File.WriteAllText(Path.Combine(replacement, "MikuN2N.exe"), "replacement fixture");
+var readyFile = Path.Combine(runningInstall, "ready");
+using var child = Process.Start(new ProcessStartInfo(runningExe)
+{
+    UseShellExecute = false, CreateNoWindow = true, ArgumentList = { "--hold", readyFile }
+})!;
+try
+{
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+    while (!File.Exists(readyFile))
+    {
+        Check(!child.HasExited, "console fixture starts");
+        await Task.Delay(25, timeout.Token);
+    }
+    UpdateService.ReplaceFiles(replacement, runningInstall);
+    Check(!child.HasExited && File.ReadAllText(runningExe) == "replacement fixture" && File.Exists(runningExe + ".update-old"), "legacy moves running EXE aside and copies replacement");
+}
+finally
+{
+    if (!child.HasExited) child.Kill();
+    await child.WaitForExitAsync();
+}
+var failedStage = Path.Combine(root, "failed-stage");
+Directory.CreateDirectory(failedStage);
+File.WriteAllText(Path.Combine(failedStage, "first.txt"), "new");
+File.WriteAllText(Path.Combine(failedStage, "blocked.txt"), "new");
+File.WriteAllText(Path.Combine(runningInstall, "first.txt"), "old");
+Directory.CreateDirectory(Path.Combine(runningInstall, "blocked.txt"));
+var rollback = false;
+try { UpdateService.ReplaceFiles(failedStage, runningInstall); }
+catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { rollback = true; }
+Check(rollback && File.ReadAllText(Path.Combine(runningInstall, "first.txt")) == "old", "legacy process-local rollback restores earlier files");
+Console.WriteLine("PASS: -10 ReplaceFiles renames an actually running isolated MikuN2N.exe console image; failed swap rolls earlier files back");
+Console.WriteLine("LIMIT: source replay with one HTTP seam; not original WPF binary end-to-end, not crash-safe, no real client/edge/network started");
+
+static void Check(bool condition, string message)
+{
+    if (!condition) throw new InvalidOperationException(message);
+}
+
+internal static class OfflineTransport
+{
+    internal static Func<HttpRequestMessage, HttpResponseMessage> Route = _ => throw new InvalidOperationException("unexpected HTTP");
+    internal static readonly HttpClient Client = new(new Handler());
+    private sealed class Handler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(Route(request));
+    }
+}
+namespace MikuN2N.Services
+{
+    internal static class BuildIdentity { internal const string Version = "0.5.8-10"; }
+    internal static class CrashLogService
+    {
+        internal static void Record(string source, Exception? exception, bool fatal) => Console.WriteLine($"LOG: {source}: {exception?.Message}");
+    }
+}

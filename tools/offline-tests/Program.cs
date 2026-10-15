@@ -8,6 +8,18 @@ using System.Threading.Channels;
 using MikuN2N.Models;
 using MikuN2N.Services;
 
+if (args is ["--update-hold", var readyPath])
+{
+    File.WriteAllText(readyPath, "ready");
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+    return;
+}
+if (args is ["--update-only", var updateTestRoot])
+{
+    await UpdateHttpTests.RunAsync(updateTestRoot);
+    return;
+}
+
 static void Check(bool condition, string detail)
 {
     if (!condition) throw new InvalidOperationException(detail);
