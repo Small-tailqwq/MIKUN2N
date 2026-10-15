@@ -44,25 +44,19 @@ dotnet build
 
 ## 打包
 
-框架依赖包（需要另装 .NET 9 桌面运行时）：
+使用 PowerShell 7、Python 3.9+ 和 .NET 9 SDK，同时生成两个 Windows x64 包：
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist/MikuN2N
+./tools/package-release.ps1 -Output dist
 ```
 
-自包含包：
-
-```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/win-x64
-```
-
-两条命令都会写出 `build-identity.txt`，并带上显式列出的运行时文件：修改版 edge、对应源码、各许可证、组件声明和 TAP 安装程序。每次发布请使用全新的输出目录。旧版 edge 二进制和各种备份不会被打包。
+自包含包 `MikuN2N-<版本>-win-x64.zip` 内含 .NET；较小的 `MikuN2N-<版本>-win-x64-framework-dependent.zip` 需要玩家电脑安装 **.NET 9 桌面运行时 x64**。两版程序都使用单文件，并带上相同的修改版 edge、对应源码、许可证、声明和 TAP 安装器。脚本还生成 `SHA256SUMS` 与 `update.json`，可用 `-Notes '...'` 写入更新说明。详见[打包与更新说明](docs/UPDATES.zh.md)。
 
 ## 发布与程序内更新
 
-`tools/package-release.ps1` 生成自包含构建，检查其中带有修改版 edge、对应源码和全部许可证（并且没有夹带构建机上的账户路径），然后写出 `dist/MikuN2N-<版本>-win-x64.zip` 和 `dist/SHA256SUMS`。推送 `0.5.8-6` 这样的 tag，会在[发布工作流](.github/workflows/release.yml)中运行同一个脚本，并把这两个文件挂到一个**草稿** GitHub Release 上；只有正式发布（不是预发布）之后，客户端才能看到它。
+推送与项目版本一致的 tag，会在[发布工作流](.github/workflows/release.yml)中运行同一个脚本，并把两个 ZIP、`SHA256SUMS` 与 `update.json` 挂到一个**草稿** GitHub Release 上；检查后再正式发布。脚本核对包内容、组件字节与原生源码一致性，并检查构建机账户路径是否被意外带入。
 
-客户端向 `api.github.com` 查询 `MikuN2N.csproj` 中 `UpdateRepository` 所指仓库的最新 Release。fork 可以用 `-p:UpdateRepository=owner/name` 指向自己的仓库；`-p:UpdateRepository=none` 则构建出永不检查更新的客户端。发现新版本后，客户端在后台下载，用该文件的 SHA-256（GitHub 提供的文件摘要或 `SHA256SUMS`）校验，解压后还要确认其中 `MikuN2N.exe` 的版本与 tag 一致，这些都通过后才会询问玩家。安装时先断开连接，再原地替换文件，失败则整体回滚，最后重启到新版本。开发版以及所在目录没有写权限时，会改为引导玩家打开 Release 页面。
+客户端优先从 GitHub 最新 Release 下载静态 `update.json`，并保留 GitHub API 兼容回退。更新时保持当前运行时类型，校验包的 SHA-256 与程序版本，后台下载完成后再提示安装。安装时断开连接，原地替换文件，失败则回滚，最后重启。哈希用于核对下载内容与发布元数据一致，不能替代独立的发布者签名。fork 配置与旧版客户端的限制见 [UPDATES.zh.md](docs/UPDATES.zh.md)。
 
 源码包既能构建 Windows 版 edge，也能构建 Linux 版 supernode。服务端的构建和安装脚本在 [supernode/](supernode/README.zh.md)。服务端需要手动部署；本项目不提供任何服务器或账号凭据。
 

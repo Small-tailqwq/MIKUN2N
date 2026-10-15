@@ -40,7 +40,9 @@ its own license.
 
 3. .NET, WPF and Windows Forms
 
-- Runtime: .NET 9 self-contained Windows runtime, embedded in MikuN2N.exe
+- Self-contained package: .NET 9 Windows runtime embedded in MikuN2N.exe
+- Framework-dependent package: Microsoft apphost and application code only; the
+  .NET 9 Desktop Runtime x64 is installed separately, not redistributed in this ZIP
 - Packages: Microsoft.NETCore.App.Runtime.win-x64 and
   Microsoft.WindowsDesktop.App.Runtime.win-x64 (both MIT licensed)
 - License: MIT

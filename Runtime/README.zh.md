@@ -26,6 +26,8 @@
 
 已有配置好的网卡时，使用程序不必再运行 TAP 安装器；公开发布打包脚本会包含安装器及许可证。
 
+自包含包和框架依赖包都完整保留本目录，包括原生源码归档与全部声明。框架依赖版需要另外安装 .NET 9 桌面运行时 x64；程序仍附带 Microsoft apphost，因此也保留 .NET 许可证文件。包名与更新兼容性见源码仓库的 [UPDATES.zh.md](https://github.com/Small-tailqwq/MikuN2N/blob/master/docs/UPDATES.zh.md)。
+
 旧版 n2n `edge.exe` 无法提供可复现的对应源码，不得分发。用户自行放置的 `Runtime/edge.exe` 仍可在缺少 `n3n-edge.exe` 时作为本地回退。
 
 分发 n3n 必须提供对应源码及 GPLv3 许可证；分发 TAP 安装器必须附带许可证，并履行[第三方声明](THIRD-PARTY-NOTICES.txt)中的源码提供承诺。该声明也列出了各组件的哈希。

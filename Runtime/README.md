@@ -26,6 +26,8 @@ This directory contains MikuN2N's runtime components, including a locally modifi
 
 The TAP installer is optional for using an already configured adapter; the public release packaging script includes it and its license.
 
+Both self-contained and framework-dependent packages include this directory unchanged, including the native source archive and all notices. The framework-dependent application needs the .NET 9 Desktop Runtime x64 installed separately; its Microsoft apphost still accompanies the program, so .NET license files remain included. Package names and update compatibility are described in [UPDATES.md](https://github.com/Small-tailqwq/MikuN2N/blob/master/docs/UPDATES.md) in the source repository.
+
 The legacy n2n `edge.exe` has no reproducible corresponding source and must not be distributed. A user-supplied `Runtime/edge.exe` remains a local fallback when `n3n-edge.exe` is missing.
 
 Distributing n3n requires the corresponding source and GPLv3 license. Distributing the TAP installer requires its license and the source offer in the [third-party notices](THIRD-PARTY-NOTICES.txt), which also list component hashes.

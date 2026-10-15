@@ -12,7 +12,7 @@
     <AssemblyName>MikuN2N</AssemblyName>
     <RootNamespace>MikuN2N</RootNamespace>
     <BaseVersion>0.5.8</BaseVersion>
-    <BuildNumber>10</BuildNumber>
+    <BuildNumber>11</BuildNumber>
     <Version>$(BaseVersion)-$(BuildNumber)</Version>
     <AssemblyVersion>$(BaseVersion).0</AssemblyVersion>
     <FileVersion>$(BaseVersion).$(BuildNumber)</FileVersion>
@@ -22,17 +22,25 @@
     <!-- GitHub "owner/name" whose releases the in-app updater follows. Forks point this at
          their own repository; "none" builds a client that never checks for updates. -->
     <UpdateRepository Condition="'$(UpdateRepository)' == ''">Small-tailqwq/MikuN2N</UpdateRepository>
+    <UpdateRuntime Condition="'$(UpdateRuntime)' == '' and '$(SelfContained)' == 'false'">framework-dependent</UpdateRuntime>
+    <UpdateRuntime Condition="'$(UpdateRuntime)' == ''">self-contained</UpdateRuntime>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- The UI is Simplified Chinese; neutral framework resources provide English fallback. -->
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <ItemGroup>
     <AssemblyMetadata Include="UpdateRepository" Value="$(UpdateRepository)" />
+    <AssemblyMetadata Include="UpdateRuntime" Value="$(UpdateRuntime)" />
     <EmbeddedResource Include="Assets\Brand\MikuN2N.ico" LogicalName="MikuN2N.AppIcon" />
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="tools\offline-tests\**\*.cs" />
-    <EmbeddedResource Remove="tools\offline-tests\**\*" />
-    <None Remove="tools\offline-tests\bin\**\*;tools\offline-tests\obj\**\*" />
+    <Compile Remove="tools\**\*.cs" />
+    <EmbeddedResource Remove="tools\**\*" />
+    <None Remove="tools\**\bin\**\*;tools\**\obj\**\*" />
     <Compile Remove="native\**" />
     <None Remove="native\**" />
     <Content Include="Runtime\n3n-edge.exe;Runtime\n3n-3.4.4-source.zip;Runtime\LICENSE-n2n.txt;Runtime\LICENSE-tap-windows.txt;Runtime\LICENSE-dotnet.txt;Runtime\THIRD-PARTY-NOTICES.txt;Runtime\THIRD-PARTY-NOTICES-dotnet.txt;Runtime\README.txt;Runtime\tap-windows-installer.exe;Runtime\README*.md;Runtime\BUILD*.md;Runtime\changes\*.md">

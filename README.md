@@ -44,25 +44,19 @@ The patched native source is `native/n3n-3.4.4/`, and release packages carry it 
 
 ## Publish
 
-Framework-dependent package (requires the .NET 9 Desktop Runtime):
+Build both Windows x64 packages with PowerShell 7, Python 3.9+ and the .NET 9 SDK:
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist/MikuN2N
+./tools/package-release.ps1 -Output dist
 ```
 
-Self-contained package:
-
-```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/win-x64
-```
-
-Both commands write `build-identity.txt` and include the explicitly listed runtime files: the patched edge, corresponding source, licenses, component notices and TAP installer. Use a fresh output directory for each release. Legacy edge binaries and backups are excluded.
+The self-contained `MikuN2N-<version>-win-x64.zip` includes .NET. The smaller `MikuN2N-<version>-win-x64-framework-dependent.zip` requires the **.NET 9 Desktop Runtime x64** on the player's PC. Both use a single-file application and carry the same patched edge, corresponding source, licenses, notices and TAP installer. The script also writes `SHA256SUMS` and `update.json`; optional `-Notes '...'` adds update notes. See [package and update details](docs/UPDATES.md).
 
 ## Releases and in-app updates
 
-`tools/package-release.ps1` publishes the self-contained build, verifies that it carries the patched edge, its corresponding source and every bundled license (and none of the build machine's account paths), and writes `dist/MikuN2N-<version>-win-x64.zip` plus `dist/SHA256SUMS`. Pushing a tag such as `0.5.8-6` runs the same script in [the release workflow](.github/workflows/release.yml) and attaches both files to a **draft** GitHub release; clients only see it after it is published as a regular (non-prerelease) release.
+Pushing a tag matching the project version runs the same script in [the release workflow](.github/workflows/release.yml) and attaches both ZIPs, `SHA256SUMS` and `update.json` to a **draft** GitHub Release. Review it before publishing as a regular release. The script checks package contents, component bytes, native source consistency and accidental build-machine account paths.
 
-The client asks `api.github.com` for the latest release of the repository named by `UpdateRepository` in `MikuN2N.csproj`. Forks set their own repository with `-p:UpdateRepository=owner/name`; `-p:UpdateRepository=none` builds a client that never checks. A newer package is downloaded in the background, verified against the asset's SHA-256 (GitHub's asset digest or `SHA256SUMS`), unpacked, and its `MikuN2N.exe` version must match the tag. Only then is the player asked. Installing stops the connection, swaps the files in place with rollback on failure and restarts the new version. Development builds and folders without write access are pointed to the release page instead.
+Update discovery first downloads the static `update.json` from GitHub's latest release, with the GitHub API as a compatibility fallback. The client keeps its runtime flavor, verifies the package SHA-256 and executable version, and offers installation after the download is ready. Installing stops the connection, swaps files with rollback on failure and restarts. Hashes verify integrity against release metadata; they are not an independent publisher signature. Fork and legacy-client behavior is explained in [UPDATES.md](docs/UPDATES.md).
 
 The source archive supports both the Windows edge and the Linux supernode. Server build and install scripts are in [supernode/](supernode/README.md). Deployment is manual; no server or credentials are supplied by this project.
 
