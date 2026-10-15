@@ -38,8 +38,6 @@ public static partial class NodeAddress
         return true;
     }
 
-    public static bool IsValid(string? value) => TryNormalize(value, out _, out _);
-
     public static bool TryValidateCommunity(string? value, out string error)
     {
         var community = value?.Trim() ?? string.Empty;

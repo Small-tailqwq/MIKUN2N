@@ -47,9 +47,6 @@ public sealed class PeerDiscoveryService : IAsyncDisposable
     public event EventHandler<RelayPolicyRequest>? RelayPolicyRequested;
     public event EventHandler<PeerAssistEnvelope>? AssistMessageReceived;
 
-    public string LocalNodeId => _nodeId;
-    public string LocalVirtualIp => _localAddress.ToString();
-
     public void UpdateLocalAssistCapability(bool supported) => _supportsPeerAssist = supported;
 
     public bool SupportsPeerAssist(string nodeId) => _peers.TryGetValue(nodeId, out var peer) &&

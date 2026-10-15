@@ -1,51 +1,42 @@
 ---
 name: mikun2n-edge-patch
-description: 修改 MikuN2N 的 n3n edge/supernode 补丁、重建 Runtime/n3n-edge.exe 或调试打洞失败时使用。涵盖 patched 源码树与 MinGW 工具链位置、n3n 与 natpunch 两侧的重建步骤、补丁清单与 GPLv3 源码归档的同步义务，以及打洞算法参考实现（tools/natpunch/）与联邦文档的入口。
+description: 修改 MikuN2N 的 n3n edge/supernode 补丁、重建 Runtime/n3n-edge.exe 或调试打洞失败时使用。包含构建、对应验证和分发源码同步步骤。
 ---
 
-# MikuN2N 边缘补丁与打洞算法
+# MikuN2N edge 补丁
 
-`Runtime/n3n-edge.exe` 是本地修改版，不是上游原版二进制。这份补丁是项目的核心工程贡献，改动它等于改动产品的关键行为，因此每次改动都要同步分版本双语日志与源码归档。
+源码在 `native/n3n-3.4.4/`，分发二进制在 `Runtime/n3n-edge.exe`。原生改动以 Git diff 审阅；工具链由 `N3N_TOOLCHAIN_BIN`、同目录被忽略的 `SKILL.local.md` 或 `%USERPROFILE%\mingw64\mingw64\bin` 定位。缺少工具链时报告无法构建的限制。按本次任务的授权范围操作，不自动提交、打 tag 或发布。
 
-## 环境位置
+## 构建与验证
 
-patched 源码树在本仓库的 `native/n3n-3.4.4/`。它的历史从一个未修改的上游 n3n 3.4.4 基线提交
-（标题 `native: import upstream n3n 3.4.4 ...`）开始，之后每个原生版本一个提交；原生改动与客户端
-改动共用同一个版本提交和 tag。看某一版的原生改动用 `git diff <上一版>..<这一版> -- native/`，
-看相对上游的完整补丁集就和基线提交做 diff，不要解压 `Runtime/n3n-3.4.4-source.zip` 逐文件比对。
+构建前运行 `tools/sync-native-version.ps1` 同步标识，再在原生目录执行：
 
-工具链在仓库外，路径因机器而异，不要写进受版本控制的文件。本机路径记在同目录的
-`SKILL.local.md`（已被 `.gitignore` 覆盖，不随仓库分发）；没有这份文件时先问用户，或按下表推断。
+```powershell
+$ToolchainBin = if ($env:N3N_TOOLCHAIN_BIN) { $env:N3N_TOOLCHAIN_BIN } else { "$env:USERPROFILE\mingw64\mingw64\bin" }
+$env:Path = "$ToolchainBin;$env:Path"
+cd native/n3n-3.4.4
+./scripts/hack_fakeautoconf.sh
+make -j4
+```
 
-| 变量 | 含义 | 默认推断 |
-|---|---|---|
-| `$ToolchainBin` | MinGW-w64 的 `bin` 目录（默认不在 PATH 上） | `%USERPROFILE%\mingw64\mingw64\bin` |
+Windows `config.mak` 保留 `-std=gnu17`，否则旧 `src/win32/getopt.c` 无法用 GCC 的 C23 默认模式编译。
 
-- 打洞算法参考实现：`tools/natpunch/`（Windows UDP NAT4 打洞实验工具 v7.x，C 源码 + 协调服务器 + 日志分析），edge 侧的 bank 模型、cone 逃逸、fast/volatile 判定都从它移植或对齐
-- 打包产物：`Runtime/n3n-edge.exe`、`Runtime/n3n-3.4.4-source.zip`、`Runtime/README.md` / `README.zh.md`、`Runtime/changes/`
+按实际改动运行对应测试：IPv6 尺寸发现、分片或重组用 `tools/tests-ipv6.exe`；wire 编解码用 `tests-wire`。连接行为在已授权的相关双端场景验证。检查通过且没有新问题时停止；不能运行的部分如实报告，不重复跑无关测试。
 
-## 打补丁并重建 n3n-edge.exe
+## 交付原生改动
 
-1. 在 `native/n3n-3.4.4/` 里改代码，用 `git diff -- native/` 复核改动范围。
-2. 前置工具链并构建（先按上表解析 `$ToolchainBin`；构建前先运行 `tools/sync-native-version.ps1` 同步构建标识）：
+需要交付二进制时，将构建产物复制到 `Runtime/n3n-edge.exe`，并同步：
 
-   ```powershell
-   $ToolchainBin  = if ($env:N3N_TOOLCHAIN_BIN) { $env:N3N_TOOLCHAIN_BIN } else { "$env:USERPROFILE\mingw64\mingw64\bin" }
-   $env:Path = "$ToolchainBin;$env:Path"
-   cd native/n3n-3.4.4
-   ./scripts/hack_fakeautoconf.sh
-   make -j4
-   ```
+1. `Runtime/changes/<版本>.md` 与 `.zh.md`：问题、改动、兼容影响和实际验证；同一交付更新同一版本日志。
+2. `native/n3n-3.4.4/MIKUN2N-MODIFICATIONS.md`：版本与日期。
+3. 源码归档：`python tools/package-native-source.py --source native/n3n-3.4.4 --archive Runtime/n3n-3.4.4-source.zip --report artifacts/<版本>/native-source-validation.json`。
+4. `Runtime/THIRD-PARTY-NOTICES.txt` 中归档的 SHA-256。修改声明后再生成归档，使它与发布二进制同源。
 
-   Windows 目标需要在 `config.mak` 的 `CFLAGS` 里保留 `-std=gnu17`（当前为 `-g -O2 -std=gnu17`），否则随包的旧 `src/win32/getopt.c` 在当前 GCC 的 C23 默认标准下编译失败。
-   构建完先跑离线回归：`tools/tests-ipv6.exe`（方向性尺寸、短 ACK 绑定、分片乱序/重复/过期/重叠、错误会话与端点拒绝、大探测丢失后保活仍在、EMSGSIZE 与瞬态失败）与 `tests-wire`（wire 编解码）。它们通过只说明协议层正确，不代替双端实机。
-3. 把新二进制拷到 `Runtime/n3n-edge.exe`，在 `Runtime/changes/<版本>.md` 与 `<版本>.zh.md` 记录问题、改动、兼容影响、实际验证和未验证边界；同一交付更新该版本，新版本另建文件。记录真实理由和已知备选方案，不编造历史结论。遵循 `Runtime/changes/README.md`；运行时概览只更新入口，不追加补丁正文。
-4. 重新打包源码：`python tools/package-native-source.py --source native/n3n-3.4.4 --archive Runtime/n3n-3.4.4-source.zip --report artifacts/<版本>/native-source-validation.json`。它只收 `git ls-files` 里的源码（排除生成文件与构建产物），并逐字节核对归档与工作树；再把新归档的 SHA-256 写进 `Runtime/THIRD-PARTY-NOTICES.txt`，并更新 `native/n3n-3.4.4/MIKUN2N-MODIFICATIONS.md` 的版本与日期（改了它要重新打包）。GPLv3 要求归档与发布的二进制同源，`tools/package-release.ps1` 打包前会重跑这项核对，不一致就拒绝发布。
-5. 客户端侧的配套改动（管理方法、界面文案、设置项）在 MikuN2N 仓库里完成，并实际运行程序验证连接行为。
+公开发布步骤见 `Runtime/BUILD.md`。版本日志由 `Runtime/changes/` 唯一维护，其他指引只链接；历史参数以最新契约和源码核实。
 
-## 重建 natpunch 参考客户端
+## natpunch 参考实现
 
-参考实现改动独立于 edge 补丁，但结论通常要移植回 edge：
+`tools/natpunch/` 是打洞算法参考实现。只在修改它时构建和测试：
 
 ```powershell
 $env:Path = "$ToolchainBin;$env:Path"
@@ -54,17 +45,4 @@ gcc -std=gnu17 -O2 -Wall -Wextra -o natpunch-v7.3.1.exe natpunch.c -lws2_32
 .\natpunch-v7.3.1.exe --self-test
 ```
 
-升级版本号时把旧版本逐字节归档到 `tools/natpunch/legacy/<版本>/`，并更新 `tools/natpunch/README.md` 的策略说明。
-
-## 改动记录的唯一位置
-
-分版本双语改动日志只维护在 `Runtime/changes/`，随发布包分发。先从 `Runtime/README.md` / `README.zh.md` 进入主题，再读相关版本；其他指引只保留链接。旧编号用 `patch-N` 锚点承接，未标版本的历史条目保留在 `unversioned.md` 及译文中。历史日志可能被后续策略取代，当前行为须结合最新记录、技术契约与源码判断。
-
-## 读什么
-
-- 某项补丁改了什么、为什么：`Runtime/changes/README.md` / `README.zh.md` → 相关版本日志；构建细节见 `Runtime/BUILD.md` / `BUILD.zh.md`
-- 打洞算法的设计与实测策略：`tools/natpunch/README.md`
-- 多 supernode 联邦（含测试节点、部署方式、已知偏差）：`docs/FEDERATION.md`
-- 现场故障排查结论与历代方案：`docs/故障排查.md`、`docs/P2P打洞融合方案.md`、`docs/NATPUNCH-V7阶段总结.md`
-- 某轮交付包含什么、验证到什么程度：`artifacts/<版本>/`（`*-validation.json`、`*-tests*.log`、`使用说明.txt`，不进版本控制）
-- 逐轮实测数据：`docs/V7*.md`、`docs/第*测试.md`、`docs/打洞测试*.md`
+升级参考版本时，按 `tools/natpunch/README.md` 保留旧版 `legacy/`。技术入口：`Runtime/changes/README.md`、`Runtime/BUILD.md`、`tools/natpunch/README.md`、`docs/IPV6-TRANSPORT.md`、`docs/FEDERATION.md`。逐轮实测日志按需查证。
