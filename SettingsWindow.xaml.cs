@@ -435,8 +435,8 @@ public partial class SettingsWindow : Window
         {
             UpdateStage.Checking => ("正在连接 GitHub 检查新版本…", "检查更新", false),
             UpdateStage.UpToDate => ($"当前版本 {BuildIdentity.Version} 已是最新。", "再次检查", true),
-            UpdateStage.Downloading => ($"正在下载 {version}：{_updates.Progress:P0}", "下载中…", false),
-            UpdateStage.Ready => ($"{version} 已下载并校验完成，重启程序即可完成更新。", "重启并更新", true),
+            UpdateStage.Downloading => ($"正在后台下载 {version}：{_updates.Progress:P0}，不影响当前连接。", "下载中…", false),
+            UpdateStage.Ready => ($"{version} 已下载并校验完成，可选择合适的时间重启更新。", "重启并更新", true),
             UpdateStage.Failed => (_updates.Error ?? "检查更新失败。", "重试", true),
             _ => ($"当前版本 {BuildIdentity.Version}，更新来自 GitHub 发布页。", "检查更新", true)
         };
@@ -446,7 +446,7 @@ public partial class SettingsWindow : Window
     {
         if (_updates.Stage != UpdateStage.Ready)
         {
-            _ = _updates.CheckAndPrepareAsync();
+            _ = _updates.CheckAndPrepareAsync(force: true);
             return;
         }
         // Restarting goes through Save so other edits in this window are not lost.

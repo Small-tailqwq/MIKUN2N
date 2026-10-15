@@ -155,7 +155,7 @@ public partial class MainWindow : Window
         });
         _trayIcon.Update(_lastSnapshot, false);
         _updates = ((App)Application.Current).Updates;
-        _updates.StateChanged += (_, _) => Dispatcher.InvokeAsync(TryPromptUpdate);
+        _updates.StateChanged += (_, _) => Dispatcher.InvokeAsync(() => TryPromptUpdate());
         // The first check waits until startup work settles; later ones run once a day.
         _updateTimer = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) =>
         {
@@ -1163,6 +1163,7 @@ public partial class MainWindow : Window
             SetInputsEnabled(!_edgeController.IsRunning);
         }
         UpdateConnectButton();
+        TryPromptUpdate();
 
         if (_easterEggs.IsJackpot)
         {
@@ -1569,7 +1570,7 @@ public partial class MainWindow : Window
         RefreshDiagnosticButtons();
         if (window.InstallUpdateRequested)
         {
-            if (!_edgeController.IsRunning || ThemedMessageDialog.Confirm(this,
+            if ((!_edgeController.IsRunning && !_starting && !_connectionBusy) || ThemedMessageDialog.Confirm(this,
                     "更新时会先断开虚拟局域网，完成后程序会自动重新打开，再点一次连接即可。",
                     "现在更新吗？", "立即更新", "稍后"))
             {
@@ -1582,18 +1583,27 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Asks once per staged version. A hidden window gets a tray balloon instead, and
-    /// the question waits until the player brings the window back.
-    /// </summary>
-    private void TryPromptUpdate()
+    private void UpdateReady_Click(object sender, RoutedEventArgs e)
     {
+        if (!FocusOpenDialog()) TryPromptUpdate(userRequested: true);
+    }
+
+    /// <summary>
+    /// Asks once per staged version while the player is using the main window. The
+    /// ready action remains available after postponing or skipping the question.
+    /// </summary>
+    private void TryPromptUpdate(bool userRequested = false)
+    {
+        var ready = _updates.Stage == UpdateStage.Ready && _updates.Available is not null;
+        UpdateReadyButton.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
+        VersionBadgeBorder.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+        UpdateReadyButton.ToolTip = ready ? $"当前版本 {BuildIdentity.Version}；{_updates.Available!.Version} 已准备好，点击选择更新时间。" : null;
         if (_closeInProgress || _showPeerAssistRequests || _updates.Stage != UpdateStage.Ready || _updates.Available is not { } release ||
-            release.Version == _promptedUpdateVersion || release.Version == _settings.SkippedUpdateVersion)
+            (!userRequested && (release.Version == _promptedUpdateVersion || release.Version == _settings.SkippedUpdateVersion)))
         {
             return;
         }
-        if (!IsVisible || WindowState == WindowState.Minimized)
+        if (!IsVisible || WindowState == WindowState.Minimized || !IsActive)
         {
             if (_updateTipVersion != release.Version)
             {
@@ -1602,8 +1612,10 @@ public partial class MainWindow : Window
             }
             return;
         }
-        // An open settings window shows the same state; ask after it closes.
-        if (OwnedWindows.OfType<Window>().Any(window => window.IsVisible))
+        // Wait for connection work and existing dialogs rather than interrupting them.
+        if (_connectionBusy || _starting || _disconnecting ||
+            _lastSnapshot.State is ConnectionState.Connecting or ConnectionState.Reconnecting ||
+            OwnedWindows.OfType<Window>().Any(window => window.IsVisible))
         {
             return;
         }

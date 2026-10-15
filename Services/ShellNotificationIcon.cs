@@ -7,7 +7,7 @@ namespace MikuN2N.Services;
 
 // Shell notifications support the elevated client. App SDK app notifications do not.
 // Use Shell flags directly because NotifyIcon does not expose quiet-time or realtime flags.
-internal sealed class ShellNotificationIcon : Forms.NativeWindow, IDisposable
+internal sealed class ShellNotificationIcon : Forms.NativeWindow, ITrayNotificationIcon
 {
     private const uint CallbackMessage = 0x8001;
     private const uint Info = 0x10;
@@ -22,6 +22,7 @@ internal sealed class ShellNotificationIcon : Forms.NativeWindow, IDisposable
 
     public event EventHandler? Activated;
     public event EventHandler? NotificationClicked;
+    public event EventHandler? NotificationEnded;
 
     public ShellNotificationIcon(Icon icon, Forms.ContextMenuStrip menu)
     {
@@ -45,23 +46,16 @@ internal sealed class ShellNotificationIcon : Forms.NativeWindow, IDisposable
         Shell_NotifyIcon(1, ref data);
     }
 
-    public void ShowNotification(string title, string text, bool realtime = false)
+    public bool ShowNotification(string title, string text, bool realtime = false)
     {
-        if (_disposed) return;
+        if (_disposed) return false;
         if (!_registered) AddIcon();
         var data = CreateData(Info | (realtime ? Realtime : 0));
         data.InfoTitle = title;
         data.InfoText = text;
         data.InfoFlags = RespectQuietTime;
         // No custom sound, urgency, or forced foreground activation; Shell owns presentation.
-        Shell_NotifyIcon(1, ref data);
-    }
-
-    public void ClearNotification()
-    {
-        if (_disposed || !_registered) return;
-        var data = CreateData(Info);
-        Shell_NotifyIcon(1, ref data);
+        return Shell_NotifyIcon(1, ref data);
     }
 
     private void AddIcon()
@@ -85,6 +79,7 @@ internal sealed class ShellNotificationIcon : Forms.NativeWindow, IDisposable
         {
             _registered = false;
             AddIcon();
+            NotificationEnded?.Invoke(this, EventArgs.Empty);
         }
         else if ((uint)message.Msg == CallbackMessage)
         {
@@ -96,6 +91,11 @@ internal sealed class ShellNotificationIcon : Forms.NativeWindow, IDisposable
                     break;
                 case 0x405: // NIN_BALLOONUSERCLICK
                     NotificationClicked?.Invoke(this, EventArgs.Empty);
+                    NotificationEnded?.Invoke(this, EventArgs.Empty);
+                    break;
+                case 0x403: // NIN_BALLOONHIDE, including quiet-time suppression.
+                case 0x404: // NIN_BALLOONTIMEOUT
+                    NotificationEnded?.Invoke(this, EventArgs.Empty);
                     break;
                 case 0x7b: // WM_CONTEXTMENU; coordinates also cover keyboard activation.
                     SetForegroundWindow(Handle);
