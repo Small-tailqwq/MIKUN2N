@@ -35,7 +35,7 @@
 
 体积与源码核对记录存入 `artifacts/package-checks/<运行标识>/`，不放进 ZIP。Release 构建保留简体中文卫星资源与默认英文回退，不分发外部 PDB，ZIP 使用 `SmallestSize`。不启用 WPF 裁剪或 AOT；内部程序集压缩因实测 ZIP 略大而保持关闭。参见 Microsoft 的[单文件压缩说明](https://learn.microsoft.com/en-us/dotnet/core/deploying/single-file/overview#compress-assemblies-in-single-file-apps)。
 
-[Actions 工作流](../.github/workflows/release.yml)仅在推送版本 tag 时选择发布模式，核对项目版本后将四个文件附到草稿 Release。审阅并正式发布后，自动更新才能发现它。手动运行工作流使用测试模式，只上传工作流产物。本地构建不会创建 tag 或发布 Release。
+[Actions 工作流](../.github/workflows/release.yml)仅在推送版本 tag 时选择发布模式，核对项目版本后将四个文件附到草稿 Release。审阅并正式发布后，自动更新才能发现它。手动运行工作流默认使用测试模式；可用 `source_commit` 固定源码提交，用 `release_version` 在核对项目版本后预览正式命名的包及 `update.json`。手动运行只将包和验证报告上传为工作流产物，不创建 tag 或 Release。构建仅有仓库只读权限，创建草稿 Release 的写权限仅授予独立的 tag 触发作业。本地构建不会创建 tag 或发布 Release。
 
 更新器比较版本时会忽略 `+test...` 元数据。需要测试更高版本时，仅对隔离夹具构建传入临时 `BuildNumber`，包也放在公开发布目录之外。原始 `-10` 源码回放夹具在自己的临时工程里使用明显虚构的夹具版本，不作为项目发行版本；`Test-LegacyUpdater.ps1 -VersionOnly` 只核对版本比较与夹具 EXE 的实际版本，不进行 HTTP、替换或 UI 操作。这两种方式都不修改正式版本或既有产物。
 

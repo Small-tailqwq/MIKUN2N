@@ -9,6 +9,17 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
   workflow_dispatch:
+    inputs:
+      source_commit:
+        description: 'Source commit to build (blank uses this workflow commit)'
+        required: false
+        type: string
+        default: ''
+      release_version:
+        description: 'Canonical version to preview (blank builds test packages; no Release is created)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -34,10 +45,13 @@ jobs:
   package:
     if: github.event_name != 'pull_request'
     permissions:
-      contents: write
+      contents: read
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_commit || github.sha }}
+          persist-credentials: false
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -50,7 +64,7 @@ jobs:
       - name: Build package
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || '' }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version || github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || '' }}
         run: ./tools/package-release.ps1 -Output dist -ExpectedVersion $env:RELEASE_TAG
 
       - name: Upload workflow artifact
@@ -63,11 +77,29 @@ jobs:
             dist/update.json
             dist/test-build.json
 
+      - name: Upload package validation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: MikuN2N-package-validation
+          path: artifacts/package-checks/**/*.json
+
+  draft-release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: package
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: MikuN2N-win-x64-packages
+          path: dist
+
       - name: Create draft release
-        if: github.event_name == 'push' && github.ref_type == 'tag'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           $package = "dist/MikuN2N-$env:TAG-win-x64.zip"
