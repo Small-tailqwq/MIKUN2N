@@ -55,8 +55,13 @@ public partial class MainWindow
         var node = _hasConnectedLayout ? _connectionNode ?? selected : selected;
         RoomNameText.Text = $"小组：{(string.IsNullOrWhiteSpace(node?.Community) ? "—" : node.Community)}";
         var nickname = NicknameBox.Text.Trim();
-        ConnectionIdentityText.Text = $"节点：{node?.Name ?? "—"} · 昵称：{(nickname.Length == 0 ? "—" : nickname)}";
-        ConnectionIdentityText.Visibility = _hasConnectedLayout ? Visibility.Visible : Visibility.Collapsed;
+        ConnectionIdentityText.Text = $"昵称：{(nickname.Length == 0 ? "—" : nickname)}";
+        var server = _lastSnapshot.State == ConnectionState.Connected &&
+                     !string.IsNullOrWhiteSpace(_lastSnapshot.SupernodeText) && _lastSnapshot.SupernodeText != "—"
+            ? _lastSnapshot.SupernodeText
+            : node?.Name ?? "—";
+        SupernodeText.Text = $"节点：{server}";
+        ConnectionSummaryPanel.Visibility = _hasConnectedLayout ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ConnectionLayout_SizeChanged(object sender, SizeChangedEventArgs e) => UpdatePeerListHeight();

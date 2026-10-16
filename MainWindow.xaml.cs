@@ -1118,10 +1118,6 @@ public partial class MainWindow : Window
             ? snapshot.DirectPeerCount.ToString()
             : "—";
         UpdateNatIndicator(snapshot);
-        var showSupernode = snapshot.State == ConnectionState.Connected &&
-                            snapshot.SupernodeText != "—";
-        SupernodeBadge.Visibility = showSupernode ? Visibility.Visible : Visibility.Collapsed;
-        SupernodeText.Text = $"节点：{snapshot.SupernodeText}";
         _uptimeOrigin = snapshot.Uptime is { } uptime ? DateTimeOffset.Now - uptime : null;
         RefreshUptime();
         var displayPeers = snapshot.Peers?.ToList() ?? [];

@@ -18,6 +18,8 @@ internal static class ConnectionLayoutEntry
     [STAThread]
     public static void Main(string[] args)
     {
+        if (args[0] == "--header-review") { HeaderBoundaryReview.Run(args[1], args[2], args[3]); return; }
+        if (args[0] == "--status-review") { StatusCardReview.Run(args[1], args[2]); return; }
         var root = Path.GetFullPath(args[0]);
         var output = Path.GetFullPath(args[1]);
         Directory.CreateDirectory(output);
@@ -40,7 +42,7 @@ internal static class ConnectionLayoutEntry
             var disconnect = (Button)window.FindName("CompactDisconnectButton");
             Check(disconnect.IsVisible && disconnect.IsEnabled && disconnect.Content as string == "断开连接", theme + " compact disconnect is available");
             var identity = ((TextBlock)window.FindName("ConnectionIdentityText")).Text;
-            Check(identity.Contains("测试节点") && identity.Contains("FixtureUser") && ((TextBlock)window.FindName("RoomNameText")).Text.Contains("fixture-group"), theme + " status retains node, nickname and community");
+            Check(((TextBlock)window.FindName("SupernodeText")).Text.Contains("测试节点") && identity.Contains("FixtureUser") && ((TextBlock)window.FindName("RoomNameText")).Text.Contains("fixture-group"), theme + " status retains node, nickname and community");
             Check(((TextBlock)window.FindName("VirtualIpText")).Text == "192.0.2.55" && ((TextBlock)window.FindName("PeerCountText")).Text == "8" &&
                 ((TextBlock)window.FindName("DirectCountText")).Text == "6" && ((TextBlock)window.FindName("UptimeText")).Text == "00:12:34", theme + " layout does not replace connection metrics");
             Check(((DataGrid)window.FindName("PeersGrid")).MaxHeight > 228, theme + " collapsed configuration gives more height to friends");
@@ -66,8 +68,8 @@ internal static class ConnectionLayoutEntry
             var version = (TextBlock)window.FindName("VersionBadgeText");
             var bounds = version.TransformToAncestor(window).TransformBounds(new Rect(version.RenderSize));
             Check(bounds.Right < window.ActualWidth && version.Text == "v" + BuildIdentity.Version, theme + " full version fits minimum width without truncation");
-            Check(version.TextWrapping == TextWrapping.Wrap && version.TextTrimming == TextTrimming.None && version.ActualHeight > 0,
-                theme + " full version wraps rather than clipping or ellipsizing");
+            Check(version.TextWrapping == TextWrapping.NoWrap && version.TextTrimming == TextTrimming.None && version.ActualHeight > 0,
+                theme + " complete version retains its original single-line style");
             ((Button)window.FindName("UpdateReadyButton")).Visibility = Visibility.Visible;
             Pump();
             Check(Shown(window, "VersionBadgeBorder") && ((Button)window.FindName("SettingsButton")).IsVisible,
@@ -113,7 +115,7 @@ internal static class ConnectionLayoutEntry
         var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(image));
         using var file = File.Create(path); png.Save(file);
     }
-    private static void LoadResources(App app, string root)
+    internal static void LoadResources(App app, string root)
     {
         XNamespace p = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
         XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";

@@ -6,11 +6,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <InformationalVersion>0.5.8-10+test.layout-abcdef0-20261016T050000Z</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <StartupObject>ConnectionLayoutEntry</StartupObject>
   </PropertyGroup>
   <ItemGroup>
     <Page Include="../../MainWindow.xaml" Link="MainWindow.xaml" />
     <Page Include="../../Themes/Light.xaml;../../Themes/Dark.xaml" Link="Themes/%(Filename)%(Extension)" />
-    <Compile Include="../../MainWindow.ConnectionLayout.cs;../../Models/ConnectionSnapshot.cs;../../Models/AppSettings.cs;../../Models/SupernodeNode.cs;../../Services/ThemeManager.cs;../../Services/BuildIdentity.cs" />
+    <Compile Include="../../MainWindow.ConnectionLayout.cs;../../MainWindow.StatusAnimation.cs;../../Models/ConnectionSnapshot.cs;../../Models/AppSettings.cs;../../Models/SupernodeNode.cs;../../Services/ThemeManager.cs;../../Services/BuildIdentity.cs" />
   </ItemGroup>
 </Project>

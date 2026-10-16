@@ -15,11 +15,13 @@ public partial class MainWindow : Window
     private bool _connectionBusy = false;
     private bool _closeInProgress = false;
     private readonly SupernodeNode _connectionNode = new() { Name = "测试节点", Server = "node.invalid:3076", Community = "fixture-group" };
+    private ConnectionSnapshot _lastSnapshot = new(ConnectionState.Disconnected, "尚未连接", "夹具");
     internal int DisconnectRequests;
     public MainWindow()
     {
         InitializeComponent();
         SizeChanged += ConnectionLayout_SizeChanged;
+        InitializeStatusAnimation();
         ShowActivated = false; ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.Manual;
         Left = Top = -20000;
@@ -41,8 +43,16 @@ public partial class MainWindow : Window
         StatusDetail.Text = state == ConnectionState.Connected ? "虚拟局域网已就绪。" : "正在等待连接状态。";
         StatusTitle.Text = state switch { ConnectionState.Connected => "已连接", ConnectionState.Reconnecting => "正在恢复连接", ConnectionState.Connecting => "正在连接", ConnectionState.Error => "连接异常", _ => "尚未连接" };
         NodeBox.IsEnabled = NicknameBox.IsEnabled = KeyBox.IsEnabled = state is ConnectionState.Disconnected or ConnectionState.Error;
+        _lastSnapshot = new ConnectionSnapshot(state, "夹具", "夹具", SupernodeText: state == ConnectionState.Connected ? "测试节点 · 20 ms" : "—");
+        UpdateStatusIndicator(state);
         ApplyConnectionLayout(state);
     }
+    internal void SetServer(string server)
+    {
+        _lastSnapshot = _lastSnapshot with { SupernodeText = server };
+        RefreshConnectionIdentity();
+    }
+    internal void SettleStatus() => StopStatusMotion();
     private void ConnectButton_Click(object sender, RoutedEventArgs e)
     {
         DisconnectRequests++;

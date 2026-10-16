@@ -26,6 +26,8 @@
   <SolidColorBrush x:Key="Warning" Color="#D99728" />
   <SolidColorBrush x:Key="WarningSoft" Color="#FFF4D9" />
   <SolidColorBrush x:Key="Danger" Color="#E25259" />
+  <SolidColorBrush x:Key="DisconnectHover" Color="#B4232C" />
+  <SolidColorBrush x:Key="DisconnectPressed" Color="#941D25" />
   <SolidColorBrush x:Key="DangerSoft" Color="#FDECEE" />
   <SolidColorBrush x:Key="DangerText" Color="#A52D36" />
   <SolidColorBrush x:Key="InputBackground" Color="#FFFFFF" />

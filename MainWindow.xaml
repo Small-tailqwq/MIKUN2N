@@ -20,6 +20,45 @@
       <Setter Property="TextTrimming" Value="CharacterEllipsis" />
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
+    <Style x:Key="DisconnectButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="ButtonBorder" CornerRadius="10" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}">
+                <ContentPresenter.Resources><Style TargetType="TextBlock" /></ContentPresenter.Resources>
+              </ContentPresenter>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource DisconnectHover}" />
+                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource DisconnectHover}" />
+                <Setter Property="Foreground" Value="White" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource DisconnectHover}" />
+                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource DisconnectHover}" />
+                <Setter Property="Foreground" Value="White" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource DisconnectPressed}" />
+                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource DisconnectPressed}" />
+                <Setter Property="Foreground" Value="White" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource SurfaceAlt}" />
+                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource Border}" />
+                <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.45" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </Window.Resources>
 
   <Grid Background="{DynamicResource WindowBackground}">
@@ -33,8 +72,7 @@
           <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid x:Name="HeaderGrid" Grid.Row="0" Margin="0,0,0,22">
-          <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+        <Grid Grid.Row="0" Margin="0,0,0,22">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="*" />
@@ -51,18 +89,18 @@
             <Button x:Name="UpdateReadyButton" Content="更新已就绪" Visibility="Collapsed"
                     Style="{StaticResource QuietButton}" Click="UpdateReady_Click" Margin="0,0,8,0"
                     AutomationProperties.Name="查看已准备好的更新" />
+            <Border x:Name="VersionBadgeBorder" Background="{DynamicResource AccentSoft}" CornerRadius="13"
+                    Padding="12,8" Margin="0,0,8,0" VerticalAlignment="Center">
+              <TextBlock x:Name="VersionBadgeText" Text="v开发版"
+                         Foreground="{DynamicResource AccentText}" FontWeight="SemiBold" FontSize="12"
+                         VerticalAlignment="Center" TextAlignment="Center" />
+            </Border>
             <Button x:Name="SettingsButton" Content="⚙  设置" Style="{StaticResource QuietButton}" Click="SettingsButton_Click"
                     AutomationProperties.Name="设置" />
           </StackPanel>
-          <Border x:Name="VersionBadgeBorder" Grid.Row="1" Grid.ColumnSpan="3"
-                  Background="{DynamicResource AccentSoft}" CornerRadius="13" Padding="12,8" Margin="0,10,0,0"
-                  HorizontalAlignment="Left" MaxWidth="{Binding ActualWidth, ElementName=HeaderGrid}">
-            <TextBlock x:Name="VersionBadgeText" Text="v开发版" TextWrapping="Wrap"
-                       Foreground="{DynamicResource AccentText}" FontWeight="SemiBold" FontSize="12" />
-          </Border>
         </Grid>
 
-        <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,0,0,16" Padding="0">
+        <Border x:Name="ConnectionStatusCard" Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,0,0,16" Padding="0">
           <Grid>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
@@ -108,13 +146,16 @@
                     <TextBlock x:Name="StatusDetail" Text="填写昵称，连接朋友分享的节点。"
                                TextWrapping="Wrap" Margin="0,12,0,0" FontSize="13" LineHeight="21"
                                Foreground="{DynamicResource TextSecondary}" />
-                    <TextBlock x:Name="ConnectionIdentityText" Visibility="Collapsed" Margin="0,8,0,0"
-                               FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
-                    <Border x:Name="SupernodeBadge" Margin="0,9,0,0" Visibility="Collapsed"
-                            ToolTip="当前连接的节点服务器；需要中转时由它转发数据。">
-                      <TextBlock x:Name="SupernodeText" Text="节点：—" FontSize="12" TextTrimming="CharacterEllipsis"
-                                 Foreground="{DynamicResource TextSecondary}" />
-                    </Border>
+                    <Grid x:Name="ConnectionSummaryPanel" Margin="0,9,0,0" Visibility="Collapsed">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="1.4*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                      <Border x:Name="SupernodeBadge" ToolTip="当前连接的节点服务器与延迟；需要中转时由它转发数据。">
+                        <TextBlock x:Name="SupernodeText" Text="节点：—" FontSize="12" TextTrimming="CharacterEllipsis"
+                                   Foreground="{DynamicResource TextSecondary}" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                      </Border>
+                      <TextBlock x:Name="ConnectionIdentityText" Grid.Column="1" Margin="16,0,0,0" FontSize="12"
+                                 TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextSecondary}"
+                                 ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                    </Grid>
                   </StackPanel>
                 </Grid>
               </Border>
@@ -219,7 +260,7 @@
                 <Button x:Name="ConnectionDetailsToggle" Grid.Column="1" Content="展开详情" Margin="0,0,8,0"
                         Style="{StaticResource QuietButton}" Click="ConnectionDetailsToggle_Click" />
                 <Button x:Name="CompactDisconnectButton" Grid.Column="2" Content="断开连接" MinWidth="110"
-                        Click="ConnectButton_Click" AutomationProperties.Name="断开当前连接" />
+                        Style="{StaticResource DisconnectButton}" Click="ConnectButton_Click" AutomationProperties.Name="断开当前连接" />
               </Grid>
             </Border>
           </Grid>
