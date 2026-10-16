@@ -8,7 +8,8 @@
     <StartupObject>TrayExitEntry</StartupObject>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../MainWindow.Exit.cs;../../SettingsWindow.xaml.cs" />
+    <Compile Include="../../MainWindow.Exit.cs;../../SettingsWindow.xaml.cs;../../LogUploadConsentDialog.xaml.cs;../../Models/ConnectionSnapshot.cs" />
+    <Page Include="../../LogUploadConsentDialog.xaml" Link="LogUploadConsentDialog.xaml" />
     <Compile Include="../../Models/AppSettings.cs;../../Models/SupernodeNode.cs" />
     <Compile Include="../../Services/ThemeManager.cs;../../Services/NodeAddress.cs;../../Services/BuildIdentity.cs;../../Services/TestBuildProfile.cs;../../Services/DiagnosticUploadConsent.cs;../../Services/EasterEggManager.cs;../../Services/EasterEggVisualController.cs" />
     <Page Include="../../SettingsWindow.xaml" Link="SettingsWindow.xaml" />

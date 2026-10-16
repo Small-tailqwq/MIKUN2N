@@ -74,4 +74,4 @@ jobs:
           $frameworkPackage = "dist/MikuN2N-$env:TAG-win-x64-framework-dependent.zip"
           gh release create $env:TAG $package $frameworkPackage dist/SHA256SUMS dist/update.json --draft --verify-tag `
             --title "MikuN2N $env:TAG" `
-            --notes "Windows x64: self-contained, or framework-dependent (requires .NET 9 Desktop Runtime x64). Both packages include the matching n3n source in Runtime/n3n-3.4.4-source.zip and all licenses; MikuN2N source is the tagged tree."
+            --notes "Windows x64: self-contained, or framework-dependent (requires .NET 9 Desktop Runtime x64). Both packages include the matching n3n source in Runtime/n3n-3.4.4-source.zip and all licenses; MikuN2N source is the tagged tree. Privacy: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:TAG/PRIVACY.md . Removal: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:TAG/UNINSTALL.md . Code signing policy (planned, not enabled): https://github.com/$env:GITHUB_REPOSITORY/blob/$env:TAG/CODE_SIGNING.md"

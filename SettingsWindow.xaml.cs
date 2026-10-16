@@ -46,6 +46,7 @@ public partial class SettingsWindow : Window
     public bool SelectedExperimentalIpv6P2p { get; private set; }
     public bool SelectedExperimentalDiagnosticUpload { get; private set; }
     public bool SelectedAutoCheckUpdates { get; private set; }
+    public bool SelectedAutoConfigureNetwork { get; private set; }
     /// <summary>Set when the player chose to restart into a staged update; the owner runs it after saving.</summary>
     public bool InstallUpdateRequested { get; private set; }
     public DiagnosticUploadPreference SelectedDiagnosticUpload { get; private set; }
@@ -82,6 +83,8 @@ public partial class SettingsWindow : Window
         ExperimentalDiagnosticsBox.Visibility = TestBuildProfile.Current is null ? Visibility.Visible : Visibility.Collapsed;
         ExperimentalDiagnosticsHint.Visibility = ExperimentalDiagnosticsBox.Visibility;
         RefreshDiagnosticCard();
+        SelectedAutoConfigureNetwork = settings.AutoConfigureNetwork;
+        AutoConfigureNetworkBox.IsChecked = settings.AutoConfigureNetwork;
         SelectedAutoCheckUpdates = settings.AutoCheckUpdates;
         AutoCheckUpdatesBox.IsChecked = settings.AutoCheckUpdates;
         _updates = ((App)Application.Current).Updates;
@@ -419,6 +422,7 @@ public partial class SettingsWindow : Window
         }
         SelectedExperimentalIpv6P2p = ExperimentalIpv6Box.IsChecked == true;
         SelectedAutoCheckUpdates = AutoCheckUpdatesBox.IsChecked == true;
+        SelectedAutoConfigureNetwork = AutoConfigureNetworkBox.IsChecked == true;
         SelectedCloseBehavior = CloseTrayButton.IsChecked == true
             ? ClosePreference.MinimizeToTray
             : CloseExitButton.IsChecked == true
@@ -482,6 +486,12 @@ public partial class SettingsWindow : Window
         {
             InstallUpdateRequested = false;
         }
+    }
+
+    private void OpenPolicy_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string file })
+            TryOpen(() => Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, file)) { UseShellExecute = true }));
     }
 
     private void OpenBundledLicense_Click(object sender, RoutedEventArgs e)

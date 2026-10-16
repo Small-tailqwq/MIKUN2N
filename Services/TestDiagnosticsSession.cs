@@ -96,7 +96,7 @@ public sealed class TestDiagnosticsSession : IAsyncDisposable
         Write("session_start", new { version = BuildIdentity.Version, os = RuntimeInformation.OSDescription,
             architecture = RuntimeInformation.ProcessArchitecture.ToString(), runtime = RuntimeInformation.FrameworkDescription,
             utcOffsetMinutes = TimeZoneInfo.Local.GetUtcOffset(DateTime.Now).TotalMinutes,
-            uploadConsent = consent, retentionHours = 24 });
+            uploadConsent = consent, receiverRetentionPolicy = "provider-defined" });
         SetStatus(_storageFailed ? "详细日志写入已暂停；可点击恢复日志。" :
             consent ? "详细日志正在记录 · 等待服务器接收" : "详细日志正在记录 · 仅保存在本机");
         if (consent) StartWorker();

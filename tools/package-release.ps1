@@ -68,7 +68,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $required = @(
-    'MikuN2N.exe', 'LICENSE.txt', 'build-identity.txt',
+    'MikuN2N.exe', 'LICENSE.txt', 'build-identity.txt', 'PRIVACY.md', 'UNINSTALL.md', 'CODE_SIGNING.md',
     'Runtime/n3n-edge.exe', 'Runtime/n3n-3.4.4-source.zip', 'Runtime/tap-windows-installer.exe',
     'Runtime/LICENSE-n2n.txt', 'Runtime/LICENSE-tap-windows.txt', 'Runtime/LICENSE-dotnet.txt',
     'Runtime/THIRD-PARTY-NOTICES.txt', 'Runtime/THIRD-PARTY-NOTICES-dotnet.txt', 'Runtime/README.txt',

@@ -26,6 +26,7 @@ internal static class TrayExitEntry
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args[0] == "--policy-ui") return SettingsPolicyTests.Run(args[1], args[2]);
         var scenario = args[0];
         var root = Path.GetFullPath(args[1]);
         var output = Path.GetFullPath(args[2]);
@@ -142,7 +143,7 @@ internal static class TrayExitEntry
 
     private static object? Field(object instance, string name) => instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(instance);
     private static void Set(object instance, string name, object value) => instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(instance, value);
-    private static void LoadResources(App app, string source)
+    internal static void LoadResources(App app, string source)
     {
         XNamespace p = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
         XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";

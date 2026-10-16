@@ -573,7 +573,8 @@ public sealed partial class EdgeController : IAsyncDisposable
         string? nodeName = null,
         bool experimentalIpv6P2p = false,
         CancellationToken cancellationToken = default,
-        TestDiagnosticsSession? diagnostics = null)
+        TestDiagnosticsSession? diagnostics = null,
+        bool autoConfigureNetwork = true)
     {
         await _lifecycleGate.WaitAsync(cancellationToken);
         try
@@ -602,7 +603,7 @@ public sealed partial class EdgeController : IAsyncDisposable
             var engine = string.Equals(Path.GetFileName(edgePath), "n3n-edge.exe", StringComparison.OrdinalIgnoreCase)
                 ? EdgeEngine.N3n
                 : EdgeEngine.LegacyN2n;
-            var parameters = new ConnectionParameters(server, community, nickname, nodeId, encryptionKey, engine, nodeName, experimentalIpv6P2p, diagnostics);
+            var parameters = new ConnectionParameters(server, community, nickname, nodeId, encryptionKey, engine, nodeName, experimentalIpv6P2p, diagnostics, autoConfigureNetwork);
             diagnostics?.Write("connection_requested", new
             {
                 server, community, nickname, nodeId, engine = engine.ToString(), experimentalIpv6P2p,
@@ -1047,7 +1048,8 @@ public sealed partial class EdgeController : IAsyncDisposable
                 EdgeUdpPort,
                 managementPort,
                 managementPassword,
-                parameters.ExperimentalIpv6P2p)
+                parameters.ExperimentalIpv6P2p,
+                parameters.AutoConfigureNetwork)
             : BuildLegacyConfiguration(
                 // The legacy edge knows nothing about federations; give it the first entry.
                 SplitServers(parameters.Server).FirstOrDefault() ?? parameters.Server,
@@ -1164,6 +1166,7 @@ public sealed partial class EdgeController : IAsyncDisposable
             SupernodeHosts = ResolveSupernodeHosts(parameters.Server),
             ActiveNodeName = parameters.NodeName,
             ExperimentalIpv6P2p = parameters.ExperimentalIpv6P2p,
+            AutoConfigureNetwork = parameters.AutoConfigureNetwork,
             Diagnostics = parameters.Diagnostics,
             ManagementPassword = managementPassword
         };
@@ -1229,7 +1232,7 @@ public sealed partial class EdgeController : IAsyncDisposable
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             process.EnableRaisingEvents = true;
-            if (run.IsN3n)
+            if (run.IsN3n && run.AutoConfigureNetwork)
             {
                 _ = ConfigurePortMappingAsync(run, cancellationToken);
             }
@@ -1473,6 +1476,7 @@ public sealed partial class EdgeController : IAsyncDisposable
 
     private async Task ConfigurePortMappingAsync(EdgeRun run, CancellationToken cancellationToken)
     {
+        if (!run.AutoConfigureNetwork) return;
         UpnpPortMappingService? service = null;
         try
         {
@@ -1866,12 +1870,15 @@ public sealed partial class EdgeController : IAsyncDisposable
                 run.PeerAssist = new PeerAssistCoordinator(this, run, discovery);
                 AppendLog(run, $"MikuN2N：好友发现已启动（{address}，UDP 43121）。");
                 // Shells out to netsh/powershell, so it must not hold up the poll loop.
-                run.TunedAdapterId = _tapAdapterId ?? ResolveTapAdapterId();
-                _ = Task.Run(() => NetworkTuningService.ApplyAsync(
-                    run.TunedAdapterId,
-                    address,
-                    subnetMask,
-                    message => AppendLog(run, message)));
+                if (run.AutoConfigureNetwork)
+                {
+                    run.TunedAdapterId = _tapAdapterId ?? ResolveTapAdapterId();
+                    _ = Task.Run(() => NetworkTuningService.ApplyAsync(
+                        run.TunedAdapterId,
+                        address,
+                        subnetMask,
+                        message => AppendLog(run, message)));
+                }
             }
             catch (SocketException exception)
             {
@@ -2584,7 +2591,8 @@ public sealed partial class EdgeController : IAsyncDisposable
         int edgePort,
         int managementPort,
         string managementPassword,
-        bool experimentalIpv6P2p) =>
+        bool experimentalIpv6P2p,
+        bool autoConfigureNetwork = true) =>
         string.Join('\n',
         ((string?[])
         [
@@ -2613,7 +2621,7 @@ public sealed partial class EdgeController : IAsyncDisposable
             "address_mode=auto",
             adapterId is null ? null : $"name={adapterId}",
             edgeMac is null ? null : $"macaddr={edgeMac}",
-            "metric=1",
+            autoConfigureNetwork ? "metric=1" : "metric=0",
             string.Empty,
             "[management]",
             $"port={managementPort}",
@@ -2828,7 +2836,8 @@ public sealed partial class EdgeController : IAsyncDisposable
         EdgeEngine Engine,
         string? NodeName,
         bool ExperimentalIpv6P2p,
-        TestDiagnosticsSession? Diagnostics);
+        TestDiagnosticsSession? Diagnostics,
+        bool AutoConfigureNetwork);
 
     private enum EdgeEngine
     {
@@ -2911,6 +2920,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         public DateTimeOffset NextNatPollAt { get; set; }
         public bool NatPollWarningLogged { get; set; }
         public bool ExperimentalIpv6P2p { get; init; }
+        public bool AutoConfigureNetwork { get; init; } = true;
         // Replaced by AttachDiagnostics under _stateGate; readers take one snapshot per write.
         public TestDiagnosticsSession? Diagnostics { get; set; }
         public string ManagementPassword { get; init; } = string.Empty;

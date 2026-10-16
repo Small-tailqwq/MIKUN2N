@@ -30,7 +30,7 @@ public partial class LogUploadConsentDialog : Window
         if (persistent)
         {
             ConsentTitleText.Text = "始终允许向此服务器上传诊断日志？";
-            ConsentPolicyText.Text = "仅授权当前节点向此接收地址及证书上传新日志。编辑或切换节点、更换接收地址或证书后须重新授权，不会补传过去拒绝上传的记录。服务器最多保留 24 小时；可随时在设置中撤销授权或在主窗口停止上传。";
+            ConsentPolicyText.Text = "仅授权当前节点向此接收地址及证书上传新日志。编辑或切换节点、更换接收地址或证书后须重新授权，不会补传过去拒绝上传的记录。保留期由 supernode 服务提供商设置，客户端不能保证删除时间；可随时在设置中撤销授权或在主窗口停止上传。";
             AllowButton.Content = "同意并保存始终允许";
         }
         SourceInitialized += (_, _) => ((App)Application.Current).ThemeManager.ApplyWindow(this);

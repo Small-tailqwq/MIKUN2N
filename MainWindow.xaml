@@ -289,9 +289,16 @@
                        Margin="1,6,0,0" FontSize="12" Foreground="{DynamicResource TextSecondary}" />
             <CheckBox x:Name="RememberKeyBox" Grid.Row="4" Grid.Column="2"
                       Content="在这台电脑上安全记住密钥" Margin="1,7,0,0" />
-            <Button x:Name="ConnectButton" Grid.Row="5" Grid.ColumnSpan="3" Margin="0,21,0,0"
-                    Height="50" Content="连接" FontSize="16"
-                    Style="{StaticResource PrimaryButton}" Click="ConnectButton_Click" />
+            <StackPanel Grid.Row="5" Grid.ColumnSpan="3" Margin="0,15,0,0">
+              <TextBlock x:Name="NetworkSetupNoticeText" TextWrapping="Wrap" FontSize="12"
+                         Foreground="{DynamicResource TextSecondary}" />
+              <TextBlock TextWrapping="Wrap" FontSize="12" Margin="0,5,0,0" Foreground="{DynamicResource TextSecondary}">
+                <Run Text="不主动上报资料或日志；更新检查会访问 GitHub。" />
+                <Hyperlink Click="OpenPrivacy_Click" Foreground="{DynamicResource AccentText}">隐私说明</Hyperlink>
+              </TextBlock>
+              <Button x:Name="ConnectButton" Margin="0,12,0,0" Height="50" Content="连接" FontSize="16"
+                      Style="{StaticResource PrimaryButton}" Click="ConnectButton_Click" />
+            </StackPanel>
             <TextBlock x:Name="ConnectErrorText" Grid.Row="6" Grid.ColumnSpan="3" Margin="2,10,0,0"
                        TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Danger}"
                        Visibility="Collapsed" />

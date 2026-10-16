@@ -8,6 +8,12 @@ using System.Threading.Channels;
 using MikuN2N.Models;
 using MikuN2N.Services;
 
+if (args is ["--policy-only", var policyRoot])
+{
+    await DiagnosticPolicyTests.RunAsync(policyRoot);
+    return;
+}
+
 if (args is ["--update-hold", var readyPath])
 {
     File.WriteAllText(readyPath, "ready");

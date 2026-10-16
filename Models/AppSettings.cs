@@ -48,6 +48,7 @@ public sealed class AppSettings
     /// the consent dialog instead of being trusted silently.
     /// </summary>
     public Dictionary<string, string> DiagnosticCertificatePins { get; set; } = [];
+    public bool AutoConfigureNetwork { get; set; } = true;
     public bool AutoCheckUpdates { get; set; } = true;
     public string SkippedUpdateVersion { get; set; } = string.Empty;
 

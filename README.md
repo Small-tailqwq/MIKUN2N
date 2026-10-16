@@ -19,14 +19,14 @@ Native change records are maintained as [bilingual version logs](Runtime/changes
 ## Desktop features
 
 - Node management, tray controls, single-instance protection and recovery after unexpected edge exits.
-- TAP-Windows installation, adapter selection, interface priority and scoped firewall setup.
+- TAP-Windows installation and adapter selection. Automatic firewall, private-network/metric and UPnP setup is enabled by default and can be disabled in Settings before connecting; firewall rules are scoped by ports/subnet, not by executable path.
 - UDP 50001 for the edge, optional UPnP mapping and CGNAT detection.
 - System, light and dark themes; configurable close behavior and log retention.
 - Peer discovery and latency measurement inside the virtual network. Missing or stale samples show “暂无法测量” after ten seconds; a route change clears the old RTT while probes continue. Native IPv6 probe RTT does not substitute for tunnel measurements.
 - Encryption keys passed through process environment variables, never command-line arguments or generated configuration files. Optional key storage uses Windows DPAPI for the current user.
 - Settings and logs stored under `%LocalAppData%/MikuN2N`; settings replacement preserves the previous file until the new file has been written.
 - In-app updates from GitHub Releases (see below), checked daily unless turned off in Settings → General.
-- Optional diagnostics upload to the active node's own supernode (experimental setting, off by default): the node must run the receiver, and every upload still asks for consent and shows the receiver's certificate fingerprint.
+- Optional diagnostics upload to the active node's own supernode (experimental setting, off by default): the node must run the receiver, and upload requires authorization for the receiving node, address and certificate. A saved permission can be revoked, and retention is determined by that provider.
 
 ## Build
 
@@ -79,3 +79,11 @@ MikuN2N's own code, including the native patches and `tools/natpunch`, is licens
 Details are in [Runtime/THIRD-PARTY-NOTICES.txt](Runtime/THIRD-PARTY-NOTICES.txt). Distribute the matching native source archive with every native binary. The legacy n2n `edge.exe` has no reproducible source and is neither tracked nor packaged.
 
 Keep deployment addresses, communities, keys and local settings out of public source and history; put them only in git-ignored `*.local.md` files.
+
+## Privacy and removal
+
+The project does not automatically report personal profiles, usage statistics or diagnostic logs to its developers. Diagnostic upload is optional, off by default and consent-based, for development and troubleshooting. The receiving supernode provider controls retention and deletion; the client cannot guarantee 24-hour deletion. Functional network requests still occur: see [Privacy](PRIVACY.md) and [network changes and removal](UNINSTALL.md). Both documents accompany the ZIP and are available from Settings.
+
+## Code signing policy
+
+[Code signing policy](CODE_SIGNING.md): a SignPath Foundation application is planned, not approved or enabled. The proposed scope is only our own `MikuN2N.exe`; upstream binaries are not re-signed.

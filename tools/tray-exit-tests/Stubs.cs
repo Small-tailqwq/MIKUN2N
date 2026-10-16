@@ -61,10 +61,6 @@ namespace MikuN2N
         public SupernodeNode Result { get; }
         public NodeEditDialog(SupernodeNode? node, IEnumerable<string> names) { Result = node ?? new(); }
     }
-    public sealed class LogUploadConsentDialog : Window
-    {
-        public LogUploadConsentDialog(TestBuildProfile profile, bool persistent, SupernodeNode node) { }
-    }
     public enum MessageKind { Info, Warning, Error, Question }
     public enum DialogChoice { Primary, Secondary, Cancel }
     // Prompt choices are controlled. Real SettingsWindow closing/validation and modal

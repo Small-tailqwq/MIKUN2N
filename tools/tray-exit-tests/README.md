@@ -1,5 +1,9 @@
 # Tray exit regression fixture
 
+Policy UI checks: run the fixture with `--policy-ui <repository-root> <output-directory>`.
+These compile the real Settings and consent windows; main-window XAML is previewed with handlers removed.
+
+
 From the repository root, build `dotnet build tools/tray-exit-tests/TrayExitTests.csproj`.
 Run `dotnet tools/tray-exit-tests/bin/Debug/net9.0-windows/TrayExitTests.dll <scenario> <repository-root> <empty-output-directory>`.
 

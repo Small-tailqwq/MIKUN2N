@@ -374,6 +374,9 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateConnectButton()
     {
+        NetworkSetupNoticeText.Text = _settings.AutoConfigureNetwork
+            ? "连接时会配置防火墙、虚拟网卡和路由器端口；可在设置中关闭。"
+            : "自动网络适配已关闭；如无法联机或找不到房间，可在设置中开启。";
         var running = _edgeController.IsRunning || _starting;
         ConnectButton.Content = _disconnecting
             ? "正在断开…"
@@ -511,7 +514,8 @@ public partial class MainWindow : Window
                 KeyBox.Password,
                 node.Name,
                 experimentalIpv6P2p: _settings.ExperimentalIpv6P2p,
-                diagnostics: _diagnostics);
+                diagnostics: _diagnostics,
+                autoConfigureNetwork: _settings.AutoConfigureNetwork);
         }
         catch (Exception exception)
         {
@@ -1010,6 +1014,7 @@ public partial class MainWindow : Window
             DiagnosticUpload = _settings.DiagnosticUpload,
             DiagnosticUploadTarget = _settings.DiagnosticUploadTarget,
             DiagnosticCertificatePins = _settings.DiagnosticCertificatePins,
+            AutoConfigureNetwork = _settings.AutoConfigureNetwork,
             AutoCheckUpdates = _settings.AutoCheckUpdates,
             SkippedUpdateVersion = _settings.SkippedUpdateVersion
         };
@@ -1519,6 +1524,18 @@ public partial class MainWindow : Window
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
 
+    private void OpenPrivacy_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "PRIVACY.md")) { UseShellExecute = true });
+        }
+        catch (Exception exception)
+        {
+            ThemedMessageDialog.Show(this, $"无法打开隐私说明：{exception.Message}", "打开失败", MessageKind.Warning);
+        }
+    }
+
     /// <summary>Node list tab inside the settings dialog; index follows the XAML tab order.</summary>
     private const int NodesTabIndex = 0;
 
@@ -1554,6 +1571,8 @@ public partial class MainWindow : Window
         var previousNodeUpload = _settings.ExperimentalDiagnosticUpload;
         _settings.ExperimentalDiagnosticUpload = window.SelectedExperimentalDiagnosticUpload;
         _settings.AutoCheckUpdates = window.SelectedAutoCheckUpdates;
+        _settings.AutoConfigureNetwork = window.SelectedAutoConfigureNetwork;
+        UpdateConnectButton();
         var previousUpload = _settings.DiagnosticUpload;
         var previousTarget = _settings.DiagnosticUploadTarget;
         _settings.DiagnosticUpload = window.SelectedDiagnosticUpload;

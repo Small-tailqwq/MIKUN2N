@@ -26,6 +26,7 @@ public sealed class TestBuildProfile
     public string CertificateSha256 { get; set; } = string.Empty;
     public string UploadToken { get; set; } = string.Empty;
     public string Ipv6StunHost { get; set; } = string.Empty;
+    // Legacy private-profile field; it does not enforce a receiver retention policy.
     public int RetentionDays { get; set; } = 1;
 
     [JsonIgnore]
@@ -77,7 +78,7 @@ public sealed class TestBuildProfile
                 uri.Scheme != Uri.UriSchemeHttps || uri.UserInfo.Length != 0 ||
                 uri.Query.Length != 0 || uri.Fragment.Length != 0 || uri.AbsolutePath != "/" ||
                 !Regex.IsMatch(profile.CertificateSha256, @"\A[0-9a-fA-F]{64}\z") ||
-                !Regex.IsMatch(profile.UploadToken, @"\A[0-9a-fA-F]{64}\z") || profile.RetentionDays != 1)
+                !Regex.IsMatch(profile.UploadToken, @"\A[0-9a-fA-F]{64}\z"))
                 throw new InvalidDataException();
             return profile;
         }

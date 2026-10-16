@@ -12,10 +12,10 @@
                Text="注意：这台服务器的证书与上次记录的不一致。可能是服务器重新部署过，也可能是有人冒充。请先向节点提供者确认后再同意。" />
     <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="10" Padding="16">
       <TextBlock TextWrapping="Wrap" LineHeight="24"
-                 Text="日志包含昵称、设备会话编号、IP / MAC 地址、网卡与 NAT 状态、IPv6 探针往返、直连 / 中继变化和错误信息，用于对照双方的连接过程。不会采集游戏数据内容、联机密钥、密码或其他文件。" />
+                 Text="日志包含昵称、设备会话编号、IP / MAC 地址、网卡与 NAT 状态、IPv6 探针往返、直连 / 中继变化和错误信息，可选地用于开发排障和对照双方的连接过程。不会采集游戏数据内容、联机密钥、密码或其他文件。" />
     </Border>
     <TextBlock x:Name="ConsentPolicyText" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" LineHeight="23"
-               Text="同意后仅上传本次连接授权后产生的新日志（含自动重连和日志轮转），由该服务器的管理员查看，最多保留 24 小时。本次选择不会保存为始终允许。你可以随时停止上传；已经接收的日志仍按保留期清理。" />
+               Text="同意后仅上传本次连接授权后产生的新日志（含自动重连和日志轮转），由该服务器的管理员查看。实际保留期由接收日志的 supernode 服务提供商设置，客户端不能保证删除时间。本次选择不会保存为始终允许。你可以随时停止上传；已接收的日志及备份由服务商按其政策处理；如需删除，请联系服务商。" />
     <TextBlock Margin="0,10,0,20" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
                Text="拒绝或关闭此窗口仍可正常联机，日志只保存在本机。" />
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
