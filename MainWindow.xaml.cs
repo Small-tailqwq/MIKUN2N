@@ -47,6 +47,8 @@ public partial class MainWindow : Window
         "尚未连接",
         DefaultStatusDetail);
     private bool _allowClose;
+    private bool _trayExitRequested;
+    private Task? _settingsCompletion;
     private bool _closeInProgress;
     private bool _shownTrayTip;
     private bool _connectionBusy;
@@ -145,14 +147,7 @@ public partial class MainWindow : Window
             ShowFromTray();
             ConnectButton_Click(ConnectButton, new RoutedEventArgs());
         });
-        _trayIcon.ExitRequested += (_, _) => Dispatcher.InvokeAsync(() =>
-        {
-            // Exiting under an open modal dialog would tear the window down beneath it.
-            if (!FocusOpenDialog())
-            {
-                _ = ExitApplicationAsync();
-            }
-        });
+        _trayIcon.ExitRequested += (_, _) => Dispatcher.InvokeAsync(() => _ = RequestTrayExitAsync());
         _trayIcon.Update(_lastSnapshot, false);
         _updates = ((App)Application.Current).Updates;
         _updates.StateChanged += (_, _) => Dispatcher.InvokeAsync(() => TryPromptUpdate());
@@ -1529,6 +1524,21 @@ public partial class MainWindow : Window
 
     private async void OpenSettings(int initialTabIndex = 1)
     {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _settingsCompletion = completion.Task;
+        try
+        {
+            await ShowSettingsAsync(initialTabIndex);
+        }
+        finally
+        {
+            _settingsCompletion = null;
+            completion.TrySetResult();
+        }
+    }
+
+    private async Task ShowSettingsAsync(int initialTabIndex)
+    {
         ShowFromTray();
         var window = new SettingsWindow(_settings, initialTabIndex, _edgeController.IsRunning) { Owner = this };
         if (window.ShowDialog() != true)
@@ -1568,6 +1578,7 @@ public partial class MainWindow : Window
                 "日志上传设置", MessageKind.Warning);
         }
         RefreshDiagnosticButtons();
+        if (_trayExitRequested) return;
         if (window.InstallUpdateRequested)
         {
             if ((!_edgeController.IsRunning && !_starting && !_connectionBusy) || ThemedMessageDialog.Confirm(this,
@@ -1598,7 +1609,7 @@ public partial class MainWindow : Window
         UpdateReadyButton.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
         VersionBadgeBorder.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
         UpdateReadyButton.ToolTip = ready ? $"当前版本 {BuildIdentity.Version}；{_updates.Available!.Version} 已准备好，点击选择更新时间。" : null;
-        if (_closeInProgress || _showPeerAssistRequests || _updates.Stage != UpdateStage.Ready || _updates.Available is not { } release ||
+        if (_closeInProgress || _trayExitRequested || _showPeerAssistRequests || _updates.Stage != UpdateStage.Ready || _updates.Available is not { } release ||
             (!userRequested && (release.Version == _promptedUpdateVersion || release.Version == _settings.SkippedUpdateVersion)))
         {
             return;
@@ -1766,69 +1777,5 @@ public partial class MainWindow : Window
         // changes are not allowed while the Closing event is still on the stack.
         await Dispatcher.Yield(DispatcherPriority.Normal);
         await ExitApplicationAsync();
-    }
-
-    private async Task ExitApplicationAsync(bool installUpdate = false)
-    {
-        if (_closeInProgress)
-        {
-            return;
-        }
-        _closeInProgress = true;
-        // Anything thrown from here would escape an async void handler and take the
-        // process down before n3n-edge is stopped, leaving it orphaned on the TAP
-        // adapter and blocking the next launch.
-        try
-        {
-            // Deliberately do not restore the window here. Exiting from the tray menu
-            // must not pull a minimized window back on screen just to close it.
-            StatusTitle.Text = "正在断开并退出…";
-            IsEnabled = false;
-            _logFlushTimer.Stop();
-            _uptimeTimer.Stop();
-            _updateTimer.Stop();
-            await _edgeController.DisposeAsync();
-            await FinishDiagnosticsAsync();
-            _trayIcon.Dispose();
-        }
-        catch (Exception exception)
-        {
-            CrashLogService.Record("退出流程", exception, fatal: false);
-            EdgeController.KillLaunchedEdgeProcesses();
-        }
-
-        if (installUpdate)
-        {
-            InstallUpdateAndRelaunch();
-        }
-
-        _allowClose = true;
-        Application.Current.Shutdown();
-    }
-
-    /// <summary>
-    /// Runs with n3n-edge already stopped. A failed swap has been rolled back, so the
-    /// relaunch brings back whichever version is on disk either way.
-    /// </summary>
-    private void InstallUpdateAndRelaunch()
-    {
-        try
-        {
-            _updates.InstallStaged();
-        }
-        catch (Exception exception)
-        {
-            CrashLogService.Record("安装更新", exception, fatal: false);
-            ThemedMessageDialog.Show(null, $"更新没有完成，程序已恢复为原来的版本。\n\n{exception.Message}",
-                "更新失败", MessageKind.Warning);
-        }
-        try
-        {
-            UpdateService.Relaunch();
-        }
-        catch (Exception exception)
-        {
-            CrashLogService.Record("更新后重新启动", exception, fatal: false);
-        }
     }
 }

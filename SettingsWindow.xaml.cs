@@ -35,6 +35,7 @@ public partial class SettingsWindow : Window
     private bool _nodesDirty;
     private bool _discardConfirmed;
     private bool _savePromptPending;
+    private TaskCompletionSource<bool>? _exitClose;
     private bool _slotRolling;
     private int _versionClickCount;
     private DateTime _lastVersionClick = DateTime.MinValue;
@@ -117,6 +118,24 @@ public partial class SettingsWindow : Window
         SettingsTabs.SelectedIndex = Math.Clamp(initialTabIndex, 0, SettingsTabs.Items.Count - 1);
         RefreshNodes();
         Closing += SettingsWindow_Closing;
+        Closed += (_, _) => CompleteExitClose(true);
+    }
+
+    internal Task<bool> CloseForExitAsync()
+    {
+        if (_exitClose is not null) return _exitClose.Task;
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _exitClose = completion;
+        Close();
+        if (IsVisible && !_savePromptPending) CompleteExitClose(false);
+        return completion.Task;
+    }
+
+    private void CompleteExitClose(bool closed)
+    {
+        var completion = _exitClose;
+        _exitClose = null;
+        completion?.TrySetResult(closed);
     }
 
     /// <summary>
@@ -137,17 +156,24 @@ public partial class SettingsWindow : Window
             Dispatcher.BeginInvoke(() =>
             {
                 _savePromptPending = false;
-                var choice = ThemedMessageDialog.Choose(this,
-                    "你添加或修改了节点，但还没有保存。不保存的话，这些改动会丢失。",
-                    "保存对节点的修改吗？", "保存", "不保存");
-                if (choice == DialogChoice.Primary)
+                try
                 {
-                    Save_Click(this, new RoutedEventArgs());
+                    var choice = ThemedMessageDialog.Choose(this,
+                        "你添加或修改了节点，但还没有保存。不保存的话，这些改动会丢失。",
+                        "保存对节点的修改吗？", "保存", "不保存");
+                    if (choice == DialogChoice.Primary)
+                    {
+                        Save_Click(this, new RoutedEventArgs());
+                    }
+                    else if (choice == DialogChoice.Secondary)
+                    {
+                        _discardConfirmed = true;
+                        Close();
+                    }
                 }
-                else if (choice == DialogChoice.Secondary)
+                finally
                 {
-                    _discardConfirmed = true;
-                    Close();
+                    CompleteExitClose(!IsVisible);
                 }
             });
             return;
