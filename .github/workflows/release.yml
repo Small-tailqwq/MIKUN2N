@@ -54,12 +54,23 @@ jobs:
           persist-credentials: false
 
       - uses: actions/setup-dotnet@v4
+        id: dotnet
         with:
           dotnet-version: '9.0.x'
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Select installed .NET SDK
+        shell: pwsh
+        env:
+          CI_DOTNET_SDK: ${{ steps.dotnet.outputs.dotnet-version }}
+        run: |
+          $sdkSelection = @{ sdk = @{ version = $env:CI_DOTNET_SDK; rollForward = 'disable' } }
+          $sdkSelectionPath = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) 'global.json'
+          $sdkSelection | ConvertTo-Json | Set-Content -LiteralPath $sdkSelectionPath -Encoding utf8
+          dotnet --version
 
       - name: Build package
         shell: pwsh
