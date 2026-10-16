@@ -49,6 +49,15 @@ runtime/source/license files, and generate ZIP hashes, `SHA256SUMS` and `update.
 from the **final signed package**. Do not publish pre-signing hashes for changed files.
 Current workflows do not implement a SignPath signing step.
 
+For future CI integration, insert signing and Authenticode verification in each
+flavor's `tools/package-release.ps1` loop, after `dotnet publish` and PDB cleanup,
+before `Test-Package`, ZIP creation, hashes, manifests and upload. Require a valid
+signature from the approved publisher on that flavor's final `MikuN2N.exe`; a
+failed signing or verification step must stop release packaging. An asynchronous
+signing service must return the signed EXE to the same package directory before
+these later steps run. Add credentials and service permissions only after the
+maintainer approves the actual signing provider and configuration.
+
 ## Privacy and project description
 
 [Privacy and network activity](PRIVACY.md) describes automatic update requests,
