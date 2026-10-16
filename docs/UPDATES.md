@@ -37,6 +37,14 @@ Size and source-check evidence is saved under `artifacts/package-checks/<run-id>
 
 The [Actions workflow](../.github/workflows/release.yml) selects release mode only for a pushed version tag, checks it against the project version, then attaches the four assets to a draft Release. Publish a reviewed draft to enable automatic discovery. Manual workflow runs default to test mode. Set `source_commit` to build a specific source commit and `release_version` to preview canonical packages and `update.json` after checking that version against the project. Manual runs only upload packages and validation reports as workflow artifacts; they never create tags or Releases. Builds have read-only repository permissions; only a separate tag-triggered job can create a draft Release. Local builds never create tags or publish releases.
 
+Release notes use the [bilingual template](../.github/release-notes-template.md), with Chinese and English changes in `.github/release-notes/<version>.json`. Update both change lists for the next release. The read-only build job renders `dist/release-notes.md` and uploads it as a workflow artifact; the draft job uses that file, attaching only the four distributable assets. Templates come from the workflow revision so a manually selected older source commit can still use the current format. To render notes without compiling:
+
+```powershell
+python tools/render-release-notes.py --version '<approved-version>' --repository 'owner/repo' --source-ref '<exact-source-commit>' --run-url '<successful-CI-run-URL>' --output release-notes.md
+```
+
+For a successful manual preview, reuse its ZIPs, checksums and manifest in a draft targeted at the exact packaged source commit. Do not rebuild or replace those files merely to edit notes. Notes describe that source; a later documentation commit does not change the existing binaries. When signing is enabled, update the template's unsigned status as part of that integration.
+
 The updater ignores `+test...` metadata when comparing versions. To test a higher version, override `BuildNumber` only for an isolated fixture build and keep its package outside the public release directory. The immutable `-10` replay harness uses a deliberately artificial fixture version in its temporary project, never a project release; `Test-LegacyUpdater.ps1 -VersionOnly` checks that comparison and actual fixture EXE version without HTTP, replacement or UI. Neither approach edits the production version or existing artifacts.
 
 Both packages retain `LICENSE.txt`, every `Runtime/LICENSE-*.txt` and notice, the native modification statement inside `Runtime/n3n-3.4.4-source.zip`, and the existing TAP source offer. Keep these with the binaries. A public release also provides MikuN2N's own corresponding source through its matching tagged tree. See [third-party notices](../Runtime/THIRD-PARTY-NOTICES.txt) and [native build instructions](../Runtime/BUILD.md).

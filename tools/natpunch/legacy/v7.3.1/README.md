@@ -20,7 +20,8 @@ v7.3.1 fixes the single-probe-IP blind spot exposed by cross-ISP testing:
   explore at most about `±4096`.
 - The existing prediction and scheduling for `sym`, `volatile` and `fast` stays
   unchanged, and the server protocol is unchanged.
-- The GO log adds the `跨IP不确定性回退`, `near` and `rotating` ranges, and the
+- The GO log marks cross-IP uncertainty fallback (`跨IP不确定性回退`)
+  and the `near` and `rotating` ranges. The
   JSONL adds `cone_escape`, `band_lo` and `band_hi` so it is easy to confirm
   whether that path was hit.
 
@@ -125,8 +126,8 @@ Both ends use the same room number; set the server address to the machine
 running the server above:
 
 ```powershell
-.\natpunch-v7.3.1.exe client vps.example.com 房间号
-.\打洞测试.bat vps.example.com 房间号
+.\natpunch-v7.3.1.exe client vps.example.com room-123
+.\打洞测试.bat vps.example.com room-123
 ```
 
 Optional arguments:
@@ -141,8 +142,8 @@ Optional arguments:
 
 Each run produces:
 
-- `natpunch-v7.3.1-时间-PID.log`: full copy of the console.
-- `natpunch-v7.3-时间-PID.jsonl`: one JSON event per line.
+- `natpunch-v7.3.1-<timestamp>-<PID>.log`: full copy of the console.
+- `natpunch-v7.3-<timestamp>-<PID>.jsonl`: one JSON event per line.
 
 Key events include:
 

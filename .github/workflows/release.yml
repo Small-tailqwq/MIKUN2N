@@ -2,7 +2,7 @@ name: Release package
 
 # Pushing an approved version tag builds both packages and update.json
 # and attaches it to a draft release. Clients only see the release once it is published,
-# so review the draft notes before publishing. Private test builds are never built here.
+# so review the bilingual notes before publishing. Manual runs upload workflow artifacts only.
 on:
   pull_request:
   push:
@@ -78,6 +78,23 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version || github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || '' }}
         run: ./tools/package-release.ps1 -Output dist -ExpectedVersion $env:RELEASE_TAG
 
+      - name: Checkout release note templates
+        if: (github.event_name == 'push' && github.ref_type == 'tag') || inputs.release_version != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-notes-template
+          persist-credentials: false
+
+      - name: Render bilingual release notes
+        if: (github.event_name == 'push' && github.ref_type == 'tag') || inputs.release_version != ''
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version || github.ref_name }}
+        run: |
+          python .release-notes-template/tools/render-release-notes.py --version $env:RELEASE_TAG --repository $env:GITHUB_REPOSITORY --run-url "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --output dist/release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'Release note rendering failed' }
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -87,6 +104,7 @@ jobs:
             dist/SHA256SUMS
             dist/update.json
             dist/test-build.json
+            dist/release-notes.md
 
       - name: Upload package validation evidence
         uses: actions/upload-artifact@v4
@@ -117,4 +135,4 @@ jobs:
           $frameworkPackage = "dist/MikuN2N-$env:TAG-win-x64-framework-dependent.zip"
           gh release create $env:TAG $package $frameworkPackage dist/SHA256SUMS dist/update.json --draft --verify-tag `
             --title "MikuN2N $env:TAG" `
-            --notes "Windows x64: self-contained, or framework-dependent (requires .NET 9 Desktop Runtime x64). Both packages include the matching n3n source in Runtime/n3n-3.4.4-source.zip and all licenses; MikuN2N source is the tagged tree. Privacy: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:TAG/PRIVACY.md . Removal: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:TAG/UNINSTALL.md . Code signing policy (planned, not enabled): https://github.com/$env:GITHUB_REPOSITORY/blob/$env:TAG/CODE_SIGNING.md"
+            --notes-file dist/release-notes.md

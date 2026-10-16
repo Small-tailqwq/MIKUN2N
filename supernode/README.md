@@ -95,7 +95,7 @@ sudo ss -lunp
 
 If registration works but NAT discovery fails, check UDP 21001/21002, both firewalls and the probe unit. If registration fails, check the main UDP port and community configuration. NAT4-to-NAT4 success depends on the observed mapping behavior; relay is an expected outcome for unpredictable networks.
 
-To try IPv6, install a server built from this release and enable the experimental setting on both clients before connecting. The peer label changes to `直连 · IPv6` only while the local IPv6 path is validated. Broadcast discovery and relay still use the existing IPv4 virtual network. IPv6-only server addresses are not supported by this experiment.
+To try IPv6, install a server built from this release and enable the experimental setting on both clients before connecting. The peer label reports a direct IPv6 connection only while the local IPv6 path is validated. Broadcast discovery and relay still use the existing IPv4 virtual network. IPv6-only server addresses are not supported by this experiment.
 
 ## IPv6 mapping observer (optional)
 

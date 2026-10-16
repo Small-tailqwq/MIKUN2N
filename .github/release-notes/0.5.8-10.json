@@ -1,0 +1,18 @@
+{
+  "changes_zh": [
+    "更新检查优先使用静态清单，保留 API 兼容回退；新增框架依赖包，并保留旧版更新器所需的自包含包命名与校验文件。",
+    "更新就绪入口持续可见，托盘通知与中继协助申请排队显示；连接操作期间延后更新弹窗，安装时机由用户选择。",
+    "连接后收起配置区域，补充 IPv6 状态信息，保留完整构建版本显示，并清理重复节点条目。",
+    "自动网络适配可在设置中关闭；诊断上传默认关闭，授权绑定接收节点、地址与证书。",
+    "修正托盘退出流程；精简发布包并保留对应源码、许可证与第三方声明。CI 生成自包含和框架依赖两个 Windows x64 包。"
+  ],
+  "changes_en": [
+    "Try a static update manifest before the API fallback. Add a framework-dependent package while preserving the self-contained filename and checksums needed by the legacy updater.",
+    "Keep the update-ready action visible and queue tray notifications and relay-assistance requests. Defer update dialogs during connection operations and let the user choose when to install.",
+    "Collapse connection settings while connected, show IPv6 status, retain the full build version and remove duplicate node entries.",
+    "Allow automatic network adaptation to be disabled in Settings. Keep diagnostic upload off by default, with authorization bound to the receiving node, address and certificate.",
+    "Fix tray exit handling and reduce package size while retaining corresponding source, licenses and third-party notices. CI produces self-contained and framework-dependent Windows x64 packages."
+  ],
+  "version_note_zh": " 已有 0.5.8-10 客户端仍使用 API，也不会把同版本 0.5.8-10 视为升级；静态清单不能改变旧二进制的这一行为。",
+  "version_note_en": " Existing 0.5.8-10 clients still use the API and will not treat the same 0.5.8-10 version as an upgrade; a static manifest cannot change that old binary's behavior."
+}

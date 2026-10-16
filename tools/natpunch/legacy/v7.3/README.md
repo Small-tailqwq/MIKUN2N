@@ -103,7 +103,7 @@ python3 natpunch-server.py server --bind 0.0.0.0 --port-a 21001 --port-b 21002
 Both ends use the same room name:
 
 ```powershell
-.\natpunch-v7.3.exe client vps.example.com 房间号
+.\natpunch-v7.3.exe client vps.example.com room-123
 ```
 
 Optional arguments:

@@ -37,6 +37,14 @@
 
 [Actions 工作流](../.github/workflows/release.yml)仅在推送版本 tag 时选择发布模式，核对项目版本后将四个文件附到草稿 Release。审阅并正式发布后，自动更新才能发现它。手动运行工作流默认使用测试模式；可用 `source_commit` 固定源码提交，用 `release_version` 在核对项目版本后预览正式命名的包及 `update.json`。手动运行只将包和验证报告上传为工作流产物，不创建 tag 或 Release。构建仅有仓库只读权限，创建草稿 Release 的写权限仅授予独立的 tag 触发作业。本地构建不会创建 tag 或发布 Release。
 
+Release 说明使用[中英双语模板](../.github/release-notes-template.md)，每个版本的中英文改动条目放在 `.github/release-notes/<版本>.json`，发布下一版时同步更新两份条目。只读构建作业生成 `dist/release-notes.md` 并上传为工作流产物；草稿作业使用该文件，只附四个分发资产。模板取自工作流提交，因此手动选择较旧源码时也能沿用当前格式。无需编译即可生成说明：
+
+```powershell
+python tools/render-release-notes.py --version '<已批准的版本>' --repository 'owner/repo' --source-ref '<确切源码提交>' --run-url '<成功的CI运行地址>' --output release-notes.md
+```
+
+手动预览通过后，直接复用其 ZIP、校验文件与清单，附到指向确切打包源码提交的草稿。仅修改说明不必重编译或替换文件；说明描述那次源码，后续文档提交不会改变既有二进制。以后启用签名时，同步更新模板中的未签名状态。
+
 更新器比较版本时会忽略 `+test...` 元数据。需要测试更高版本时，仅对隔离夹具构建传入临时 `BuildNumber`，包也放在公开发布目录之外。原始 `-10` 源码回放夹具在自己的临时工程里使用明显虚构的夹具版本，不作为项目发行版本；`Test-LegacyUpdater.ps1 -VersionOnly` 只核对版本比较与夹具 EXE 的实际版本，不进行 HTTP、替换或 UI 操作。这两种方式都不修改正式版本或既有产物。
 
 两版都保留 `LICENSE.txt`、全部 `Runtime/LICENSE-*.txt` 与声明、`Runtime/n3n-3.4.4-source.zip` 内的原生修改声明，以及现有 TAP 源码提供承诺；分发二进制时应一同保留。公开发布还通过对应 tag 的源码树提供 MikuN2N 本体的对应源码。参见[第三方声明](../Runtime/THIRD-PARTY-NOTICES.txt)与[原生构建说明](../Runtime/BUILD.zh.md)。
