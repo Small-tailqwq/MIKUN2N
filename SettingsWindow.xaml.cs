@@ -488,12 +488,6 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void OpenPolicy_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is Button { Tag: string file })
-            TryOpen(() => Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, file)) { UseShellExecute = true }));
-    }
-
     private void OpenBundledLicense_Click(object sender, RoutedEventArgs e)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Runtime", "THIRD-PARTY-NOTICES.txt");

@@ -82,11 +82,9 @@ internal static class SettingsPolicyTests
             foreach (var attribute in element.Attributes().Where(a => events.Contains(a.Name.LocalName)).ToArray()) attribute.Remove();
         var window = (Window)System.Windows.Markup.XamlReader.Parse(document.ToString());
         MainWindow.FitToWorkArea(window);
-        ((TextBlock)window.FindName("NetworkSetupNoticeText")).Text = "连接时会配置防火墙、虚拟网卡和路由器端口；可在设置中关闭。";
         window.Show(); window.UpdateLayout();
         var button = (Button)window.FindName("ConnectButton");
-        var notice = (TextBlock)window.FindName("NetworkSetupNoticeText");
-        TestState.Check(button.IsVisible && notice.IsVisible && notice.ActualHeight > 0, theme + " main connection notice is laid out above connection action");
+        TestState.Check(button.IsVisible && window.FindName("NetworkSetupNoticeText") is null, theme + " main connection action remains without the removed policy notice");
         Capture(window, Path.Combine(output, theme + "-main-notice.png"));
         window.Close();
     }

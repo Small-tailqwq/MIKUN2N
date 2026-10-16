@@ -72,6 +72,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        SizeChanged += ConnectionLayout_SizeChanged;
         FitToWorkArea(this);
         PeersGrid.ItemsSource = _displayPeers;
         Icon = AppIconService.Icon;
@@ -349,7 +350,7 @@ public partial class MainWindow : Window
         NodeAddressText.ToolTip = node?.Server;
         NodeCommunityText.Text = node is null ? "小组：—" : $"小组：{node.Community}";
         NodeCommunityText.ToolTip = node?.Community;
-        RoomNameText.Text = $"小组：{(string.IsNullOrWhiteSpace(node?.Community) ? "—" : node.Community)}";
+        RefreshConnectionIdentity();
         NoNodeBorder.Visibility = hasNodes ? Visibility.Collapsed : Visibility.Visible;
         NodeBox.Visibility = hasNodes ? Visibility.Visible : Visibility.Collapsed;
         ManageNodesButton.Visibility = hasNodes ? Visibility.Visible : Visibility.Collapsed;
@@ -374,9 +375,6 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateConnectButton()
     {
-        NetworkSetupNoticeText.Text = _settings.AutoConfigureNetwork
-            ? "连接时会配置防火墙、虚拟网卡和路由器端口；可在设置中关闭。"
-            : "自动网络适配已关闭；如无法联机或找不到房间，可在设置中开启。";
         var running = _edgeController.IsRunning || _starting;
         ConnectButton.Content = _disconnecting
             ? "正在断开…"
@@ -394,6 +392,7 @@ public partial class MainWindow : Window
         {
             ConnectButton.SetResourceReference(StyleProperty, "PrimaryButton");
         }
+        RefreshConnectionActions();
     }
 
     private async void ConnectButton_Click(object sender, RoutedEventArgs e)
@@ -486,6 +485,7 @@ public partial class MainWindow : Window
         SetInputsEnabled(false);
         _starting = true;
         _connectedThisSession = false;
+        ApplyConnectionLayout(ConnectionState.Disconnected);
         UpdateConnectButton();
 
         try
@@ -1163,6 +1163,7 @@ public partial class MainWindow : Window
             SetInputsEnabled(!_edgeController.IsRunning);
         }
         UpdateConnectButton();
+        ApplyConnectionLayout(snapshot.State);
         TryPromptUpdate();
 
         if (_easterEggs.IsJackpot)
@@ -1524,18 +1525,6 @@ public partial class MainWindow : Window
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
 
-    private void OpenPrivacy_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "PRIVACY.md")) { UseShellExecute = true });
-        }
-        catch (Exception exception)
-        {
-            ThemedMessageDialog.Show(this, $"无法打开隐私说明：{exception.Message}", "打开失败", MessageKind.Warning);
-        }
-    }
-
     /// <summary>Node list tab inside the settings dialog; index follows the XAML tab order.</summary>
     private const int NodesTabIndex = 0;
 
@@ -1626,7 +1615,7 @@ public partial class MainWindow : Window
     {
         var ready = _updates.Stage == UpdateStage.Ready && _updates.Available is not null;
         UpdateReadyButton.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
-        VersionBadgeBorder.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+        VersionBadgeBorder.Visibility = Visibility.Visible;
         UpdateReadyButton.ToolTip = ready ? $"当前版本 {BuildIdentity.Version}；{_updates.Available!.Version} 已准备好，点击选择更新时间。" : null;
         if (_closeInProgress || _trayExitRequested || _showPeerAssistRequests || _updates.Stage != UpdateStage.Ready || _updates.Available is not { } release ||
             (!userRequested && (release.Version == _promptedUpdateVersion || release.Version == _settings.SkippedUpdateVersion)))

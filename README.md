@@ -82,7 +82,7 @@ Keep deployment addresses, communities, keys and local settings out of public so
 
 ## Privacy and removal
 
-The project does not automatically report personal profiles, usage statistics or diagnostic logs to its developers. Diagnostic upload is optional, off by default and consent-based, for development and troubleshooting. The receiving supernode provider controls retention and deletion; the client cannot guarantee 24-hour deletion. Functional network requests still occur: see [Privacy](PRIVACY.md) and [network changes and removal](UNINSTALL.md). Both documents accompany the ZIP and are available from Settings.
+The project does not automatically report personal profiles, usage statistics or diagnostic logs to its developers. Diagnostic upload is optional, off by default and consent-based, for development and troubleshooting. The receiving supernode provider controls retention and deletion; the client cannot guarantee 24-hour deletion. Functional network requests still occur: see [Privacy](PRIVACY.md) and [network changes and removal](UNINSTALL.md). Both documents accompany the ZIP. About contains a link to the privacy policy on the repository's default branch so the policy can be updated with the project documentation.
 
 ## Code signing policy
 

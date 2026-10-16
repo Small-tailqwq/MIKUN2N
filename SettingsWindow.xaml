@@ -142,16 +142,6 @@
                            TextWrapping="Wrap" Margin="0,7,0,0" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
                 <TextBlock Text="防火墙按端口和虚拟子网放行，并非只允许本程序。"
                            TextWrapping="Wrap" Margin="0,5,0,0" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
-                <Button Content="网络改动与清理说明" Tag="UNINSTALL.md" Click="OpenPolicy_Click" HorizontalAlignment="Left" Margin="0,8,0,0" Style="{StaticResource QuietButton}" />
-              </StackPanel>
-            </Border>
-
-            <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14">
-              <StackPanel>
-                <TextBlock Text="隐私与诊断" FontSize="16" FontWeight="SemiBold" />
-                <TextBlock Text="不主动向开发者收集或上报个人资料、使用统计和诊断日志。日志上传默认关闭，启用并授权后用于开发排障；实际保留期由接收日志的 supernode 服务提供商决定。更新检查会访问 GitHub，IPv6 实验可能使用 Cloudflare 地址探测。"
-                           TextWrapping="Wrap" Margin="0,7,0,0" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
-                <Button Content="完整隐私说明" Tag="PRIVACY.md" Click="OpenPolicy_Click" HorizontalAlignment="Left" Margin="0,8,0,0" Style="{StaticResource QuietButton}" />
               </StackPanel>
             </Border>
 
@@ -356,7 +346,7 @@
             <StackPanel Orientation="Horizontal" Margin="2,14,0,0">
               <Button Content="许可证与第三方声明" Click="OpenBundledLicense_Click" Margin="0,0,10,0" />
               <Button Content="复制版本信息" Click="CopyVersion_Click" />
-              <Button Content="签名政策（拟申请）" Tag="CODE_SIGNING.md" Click="OpenPolicy_Click" Margin="10,0,0,0" />
+              <Button Content="隐私政策" Tag="https://github.com/Small-tailqwq/MIKUN2N/blob/master/PRIVACY.md" Click="OpenLink_Click" Margin="10,0,0,0" />
             </StackPanel>
           </StackPanel>
         </ScrollViewer>
