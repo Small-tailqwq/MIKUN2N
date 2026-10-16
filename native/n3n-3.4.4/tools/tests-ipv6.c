@@ -71,7 +71,56 @@ static size_t deliver(unsigned index, struct n3n_runtime_data *receiver,
     memcpy(output,sent_packets[index].bytes,sent_packets[index].size);
     return mikun2n_ipv6_unwrap(receiver,sender,output,sent_packets[index].size,now);
 }
-int main(void) {
+static int test_status(void) {
+    struct n3n_runtime_data *e = calloc(1, sizeof(*e));
+    assert(e);
+    const uint64_t now = 100000;
+    assert(!strcmp(mikun2n_ipv6_status(e, now).state, "disabled"));
+    e->conf.mikun2n_ipv6 = true;
+    e->mikun2n_ipv6_socket = MIKUN2N_INVALID_SOCKET;
+    assert(!strcmp(mikun2n_ipv6_status(e, now).state, "unavailable"));
+    e->mikun2n_ipv6_socket = 1;
+    e->mikun2n_ipv6_address.family = AF_INET6;
+    e->mikun2n_ipv6_address.port = 50001;
+    e->mikun2n_ipv6_address.addr.v6[0] = 0x26;
+    e->mikun2n_ipv6_bound_ms = now - 1000;
+    mikun2n_ipv6_status_t s = mikun2n_ipv6_status(e, now);
+    assert(!strcmp(s.state, "checking") && !strcmp(s.address_kind, "global") && !strcmp(s.mapping, "unknown"));
+    e->mikun2n_ipv6_bound_ms = now - 40000;
+    assert(!strcmp(mikun2n_ipv6_status(e, now).state, "unverified"));
+    e->mikun2n_ipv6_local_ok_ms = now - 1000;
+    s = mikun2n_ipv6_status(e, now);
+    assert(!strcmp(s.state, "available") && !strcmp(s.mapping, "unknown"));
+    e->mikun2n_ipv6_mapped_address = e->mikun2n_ipv6_address;
+    e->mikun2n_ipv6_mapped_ms = now - 1000;
+    assert(!strcmp(mikun2n_ipv6_status(e, now).mapping, "untranslated"));
+    e->mikun2n_ipv6_mapped_address.port++;
+    assert(!strcmp(mikun2n_ipv6_status(e, now).mapping, "port-translated"));
+    e->mikun2n_ipv6_mapped_address.addr.v6[15] = 1;
+    assert(!strcmp(mikun2n_ipv6_status(e, now).mapping, "address-translated"));
+    e->mikun2n_ipv6_address.addr.v6[0] = 0xfd;
+    s = mikun2n_ipv6_status(e, now);
+    assert(!strcmp(s.address_kind, "ula") && !strcmp(s.mapping, "address-translated"));
+    e->mikun2n_ipv6_mapped_ms = now - IPV6_REPORT_TTL_MS;
+    e->mikun2n_ipv6_local_ok_ms = now - IPV6_REPORT_TTL_MS;
+    s = mikun2n_ipv6_status(e, now);
+    assert(!strcmp(s.state, "unverified") && !strcmp(s.mapping, "unknown"));
+    e->mikun2n_ipv6_local_fail_ms = now - 21000;
+    e->mikun2n_ipv6_local_last_fail_ms = now - 1000;
+    e->mikun2n_ipv6_local_failures = 3;
+    assert(!strcmp(mikun2n_ipv6_status(e, now).state, "unavailable"));
+    e->mikun2n_ipv6_local_failures = 0;
+    e->mikun2n_ipv6_address.addr.v6[0] = 0xfe;
+    assert(!strcmp(mikun2n_ipv6_status(e, now).state, "unavailable"));
+    assert(!sent_count);
+    free(e);
+    puts("PASS: read-only IPv6 status: disabled, no socket, global unverified, fresh proof, direct/port/address translation, ULA, expiry, sustained failure; zero sends");
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if(argc == 2 && !strcmp(argv[1], "--status-only")) return test_status();
+
     uint8_t out[N2N_PKT_BUF_SIZE], original[1342];
     for(unsigned i=0;i<sizeof(original);++i) original[i]=(uint8_t)(i*17);
     setup();

@@ -1999,7 +1999,8 @@ public sealed partial class EdgeController : IAsyncDisposable
             run.NatType,
             run.NatDescription,
             FormatSupernodeText(run, run.ActiveNodeName),
-            run.NetworkHint));
+            run.NetworkHint,
+            Ipv6NetworkStatusReader.Current(run.ExperimentalIpv6P2p, run.IsN3n, run.Ipv6Status, DateTimeOffset.UtcNow)));
     }
 
     private static HashSet<string> ResolveSupernodeHosts(string server) =>
@@ -2099,6 +2100,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         }
 
         var row = rows[0];
+        run.Ipv6Status = Ipv6NetworkStatusReader.Read(row, run.ExperimentalIpv6P2p, DateTimeOffset.UtcNow);
         var type = row.TryGetProperty("type", out var typeValue)
             ? typeValue.GetString()
             : null;
@@ -2906,6 +2908,7 @@ public sealed partial class EdgeController : IAsyncDisposable
         public UpnpPortMappingService? PortMapping { get; set; }
         public string? NetworkHint { get; set; }
         public string? CompatibilityHint { get; set; }
+        public Ipv6NetworkStatus? Ipv6Status { get; set; }
         public string NatType { get; set; } = "检测中";
         public string NatDescription { get; set; } = "正在通过 n3n 数据端口检测 NAT 行为。";
         public string? VirtualIp { get; set; }

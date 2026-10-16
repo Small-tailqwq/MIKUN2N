@@ -19,6 +19,7 @@ internal static class ConnectionLayoutEntry
     public static void Main(string[] args)
     {
         if (args[0] == "--header-review") { HeaderBoundaryReview.Run(args[1], args[2], args[3]); return; }
+        if (args[0] == "--ipv6-card") { Ipv6CardReview.Run(args[1], args[2]); return; }
         if (args[0] == "--status-review") { StatusCardReview.Run(args[1], args[2]); return; }
         var root = Path.GetFullPath(args[0]);
         var output = Path.GetFullPath(args[1]);

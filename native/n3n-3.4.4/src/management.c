@@ -979,6 +979,7 @@ static void jsonrpc_get_edges (char *id, struct n3n_runtime_data *eee, conn_t *c
 static void jsonrpc_get_nat (char *id, struct n3n_runtime_data *eee, conn_t *conn, const char *params) {
     mikun2n_nat_state_t *nat = &eee->mikun2n_nat;
     const char *strategy = "native-first";
+    const mikun2n_ipv6_status_t ipv6 = mikun2n_ipv6_status(eee, mikun2n_ipv6_now_ms());
 
     if(nat->complete && !strcmp(nat->type, "NAT4"))
         strategy = "tier1-cone-escape";
@@ -1005,6 +1006,9 @@ static void jsonrpc_get_nat (char *id, struct n3n_runtime_data *eee, conn_t *con
         "\"cross_probe_attempts\":%u,"
         "\"ipv6_enabled\":%s,"
         "\"ipv6_nat66_supported\":true,"
+        "\"ipv6_status\":\"%s\","
+        "\"ipv6_address_kind\":\"%s\","
+        "\"ipv6_mapping\":\"%s\","
         "\"strategy\":\"%s\"}]",
         nat->type[0] ? nat->type : "detecting",
         nat->mapping[0] ? nat->mapping : "unknown",
@@ -1021,6 +1025,7 @@ static void jsonrpc_get_nat (char *id, struct n3n_runtime_data *eee, conn_t *con
         nat->probe_round,
         nat->cross_probe_attempts,
         eee->conf.mikun2n_ipv6 ? "true" : "false",
+        ipv6.state, ipv6.address_kind, ipv6.mapping,
         strategy
     );
     jsonrpc_result_tail(conn, 200);

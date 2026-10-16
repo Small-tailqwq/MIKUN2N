@@ -140,3 +140,26 @@ and manual resume/revocation during capacity backoff.
 Live validation covers public IPv6/NAT66, Windows adapter selection during
 router failure or Wi-Fi switching, both WPF themes, and sustained
 game traffic. Record interruptions and recovery during interface switches.
+
+## Read-only local network status
+
+Local maintenance builds based on 0.5.8-10 add optional `get_nat` fields:
+
+| Field | Values |
+| --- | --- |
+| `ipv6_status` | `disabled`, `checking`, `unverified`, `available`, `unavailable` |
+| `ipv6_address_kind` | `none`, `global`, `ula` |
+| `ipv6_mapping` | `unknown`, `untranslated`, `port-translated`, `address-translated` |
+
+The existing `ipv6_nat66_supported` flag is a capability, never evidence of
+translation on this network. `available` requires a successful source-bound
+round trip within 30 seconds. Mapping classification additionally requires a
+fresh accepted observer reply on the same bound socket. It compares the
+reported endpoint against the bound endpoint; address translation may be
+NAT66 or NPTv6, which these observations cannot distinguish. This does not
+prove unsolicited inbound reachability or connectivity to every peer.
+
+These getters neither probe nor enumerate interfaces. The client reads them
+through the existing four-second NAT polling and discards reports older than
+12 seconds. No addresses are added to this response. Missing fields from older
+runtimes remain unverified/unsupported; they are not a network failure.

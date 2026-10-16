@@ -7,6 +7,14 @@
 #include <n2n_typedefs.h>
 struct peer_info;
 
+typedef struct {
+    const char *state;
+    const char *address_kind;
+    const char *mapping;
+} mikun2n_ipv6_status_t;
+
+/* Read-only evidence from the existing socket, observer and peer checks. */
+mikun2n_ipv6_status_t mikun2n_ipv6_status (const struct n3n_runtime_data *eee, uint64_t now_ms);
 uint64_t mikun2n_ipv6_now_ms (void);
 int mikun2n_ipv6_public (const n2n_sock_t *address);
 int mikun2n_ipv6_candidate (const n2n_sock_t *address);

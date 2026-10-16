@@ -21,7 +21,8 @@ public sealed record ConnectionSnapshot(
     string NatType = "—",
     string NatDescription = "NAT 行为尚未检测。",
     string SupernodeText = "—",
-    string? NetworkHint = null);
+    string? NetworkHint = null,
+    Ipv6NetworkStatus? Ipv6 = null);
 
 public enum PeerConnectionMode
 {

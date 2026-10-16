@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../Models/ConnectionSnapshot.cs;../../Models/PeerAssistModels.cs" />
+    <Compile Include="../../Models/ConnectionSnapshot.cs;../../Models/Ipv6NetworkStatus.cs;../../Models/PeerAssistModels.cs" />
     <Compile Include="../../Services/TrayIconService.cs;../../Services/ShellNotificationIcon.cs;../../Services/ITrayNotificationIcon.cs" />
   </ItemGroup>
 </Project>

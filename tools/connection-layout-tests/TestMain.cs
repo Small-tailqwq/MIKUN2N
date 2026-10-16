@@ -12,6 +12,7 @@ public sealed class App : Application
 
 public partial class MainWindow : Window
 {
+    private readonly AppSettings _settings = new();
     private bool _connectionBusy = false;
     private bool _closeInProgress = false;
     private readonly SupernodeNode _connectionNode = new() { Name = "测试节点", Server = "node.invalid:3076", Community = "fixture-group" };
@@ -46,6 +47,15 @@ public partial class MainWindow : Window
         _lastSnapshot = new ConnectionSnapshot(state, "夹具", "夹具", SupernodeText: state == ConnectionState.Connected ? "测试节点 · 20 ms" : "—");
         UpdateStatusIndicator(state);
         ApplyConnectionLayout(state);
+    }
+    internal void SetNetwork(bool enabled, Ipv6NetworkStatus? status, string nat = "NAT3")
+    {
+        _settings.ExperimentalIpv6P2p = enabled;
+        _lastSnapshot = _lastSnapshot with { Ipv6 = status, NatType = nat };
+        NatTypeText.Text = nat;
+        NatConditionText.Text = "直连需要双方配合";
+        NatHealthDot.SetResourceReference(TextBlock.ForegroundProperty, "Warning");
+        RefreshIpv6Indicator(_lastSnapshot);
     }
     internal void SetServer(string server)
     {

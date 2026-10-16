@@ -236,6 +236,29 @@ static int ipv6_address_rank (const n2n_sock_t *address) {
     return mikun2n_ipv6_public(address) ? 2 : mikun2n_ipv6_candidate(address) ? 1 : 0;
 }
 
+mikun2n_ipv6_status_t mikun2n_ipv6_status (const struct n3n_runtime_data *eee, uint64_t now_ms) {
+    mikun2n_ipv6_status_t status = {"disabled", "none", "unknown"};
+    if(!eee->conf.mikun2n_ipv6) return status;
+    status.state = "unavailable";
+    if(eee->mikun2n_ipv6_socket == MIKUN2N_INVALID_SOCKET ||
+       !mikun2n_ipv6_candidate(&eee->mikun2n_ipv6_address)) return status;
+    status.address_kind = mikun2n_ipv6_public(&eee->mikun2n_ipv6_address) ? "global" : "ula";
+    status.state = eee->mikun2n_ipv6_bound_ms && now_ms >= eee->mikun2n_ipv6_bound_ms &&
+        now_ms - eee->mikun2n_ipv6_bound_ms < IPV6_LOCAL_WARMUP_MS ? "checking" : "unverified";
+    if(ipv6_local_retry_due(eee, now_ms)) { status.state = "unavailable"; return status; }
+    if(eee->mikun2n_ipv6_local_ok_ms && now_ms >= eee->mikun2n_ipv6_local_ok_ms &&
+       now_ms - eee->mikun2n_ipv6_local_ok_ms < IPV6_REPORT_TTL_MS) status.state = "available";
+    if(eee->mikun2n_ipv6_mapped_ms && now_ms >= eee->mikun2n_ipv6_mapped_ms &&
+       now_ms - eee->mikun2n_ipv6_mapped_ms < IPV6_REPORT_TTL_MS &&
+       mikun2n_ipv6_public(&eee->mikun2n_ipv6_mapped_address)) {
+        status.state = "available";
+        status.mapping = memcmp(eee->mikun2n_ipv6_address.addr.v6,
+                                eee->mikun2n_ipv6_mapped_address.addr.v6, 16) ? "address-translated" :
+            eee->mikun2n_ipv6_address.port != eee->mikun2n_ipv6_mapped_address.port ? "port-translated" : "untranslated";
+    }
+    return status;
+}
+
 static struct peer_info *ipv6_peer (struct n3n_runtime_data *eee, const n2n_mac_t mac) {
     struct peer_info *peer;
     HASH_FIND_PEER(eee->known_peers, mac, peer);

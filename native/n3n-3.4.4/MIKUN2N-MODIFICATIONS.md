@@ -2,9 +2,9 @@
 
 This source tree is a modified version of n3n 3.4.4
 (https://github.com/n42n/n3n, tag `3.4.4`). It was modified by the MikuN2N project
-between July and October 2026; the latest modification belongs to MikuN2N release
-0.5.8-10 (2026-10-13). It is the corresponding source of the `n3n-edge.exe` shipped with
-that release and is distributed under the same license as n3n: GPL-3.0-only (see
+between July and October 2026; the latest modification is a local maintenance
+build based on MikuN2N 0.5.8-10 (2026-10-16), with read-only IPv6 network status
+in the management API. It is the corresponding source of the bundled `n3n-edge.exe` and is distributed under the same license as n3n: GPL-3.0-only (see
 `LICENSES/preferred/GPL-3.0`). The upstream copyright notices are retained unchanged.
 
 Areas changed relative to upstream:

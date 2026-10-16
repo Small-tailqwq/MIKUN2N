@@ -84,6 +84,7 @@ public partial class MainWindow : Window
         VersionBadgeText.Text = $"v{BuildIdentity.Version}";
         VersionBadgeText.ToolTip = $"MikuN2N 构建版本：{BuildIdentity.Version}";
         _settings = _settingsStore.Load();
+        RefreshIpv6Indicator(_lastSnapshot);
         if (!Guid.TryParseExact(_settings.NodeId, "N", out _))
         {
             _settings.NodeId = Guid.NewGuid().ToString("N");
@@ -1479,6 +1480,7 @@ public partial class MainWindow : Window
             _ => "TextMuted"
         };
         NatHealthDot.SetResourceReference(TextBlock.ForegroundProperty, tone);
+        RefreshIpv6Indicator(snapshot);
     }
 
     private void NatHelp_Click(object sender, RoutedEventArgs e)
@@ -1553,6 +1555,7 @@ public partial class MainWindow : Window
         _settings.CloseBehavior = window.SelectedCloseBehavior;
         _settings.LogRetentionDays = window.SelectedLogRetentionDays;
         _settings.ExperimentalIpv6P2p = window.SelectedExperimentalIpv6P2p;
+        UpdateNatIndicator(_lastSnapshot);
         var previousNodeUpload = _settings.ExperimentalDiagnosticUpload;
         _settings.ExperimentalDiagnosticUpload = window.SelectedExperimentalDiagnosticUpload;
         _settings.AutoCheckUpdates = window.SelectedAutoCheckUpdates;

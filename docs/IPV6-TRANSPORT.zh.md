@@ -67,3 +67,22 @@ python tools/offline-tests/test_server.py artifacts/offline-server
 
 实机验证包括公网 IPv6/NAT66、路由器故障或 Wi-Fi 切换时的 Windows
 网卡选择、两套 WPF 主题和持续游戏流量。切换网卡时需记录中断和恢复情况。
+
+## 只读本机网络状态
+
+基于 0.5.8-10 的本地维护构建在 `get_nat` 中增加可选字段：
+
+| 字段 | 取值 |
+| --- | --- |
+| `ipv6_status` | `disabled`、`checking`、`unverified`、`available`、`unavailable` |
+| `ipv6_address_kind` | `none`、`global`、`ula` |
+| `ipv6_mapping` | `unknown`、`untranslated`、`port-translated`、`address-translated` |
+
+既有 `ipv6_nat66_supported` 仅表示能力，不能证明当前网络存在地址转换。
+可用状态需要 30 秒内成功的源地址绑定往返验证。映射类型还需要同一绑定套接字
+收到有效的新鲜观察回复，再比较外部端点和本地端点。地址转换可能是 NAT66 或
+NPTv6，当前观测无法进一步区分，也不证明任意主动传入连接或所有好友均可达。
+
+读取这些字段不会探测或枚举网卡，客户端沿用既有四秒 NAT 查询，丢弃超过
+12 秒的旧报告。响应不新增地址信息。旧运行时缺少字段时保持待验证或状态未报告，
+不将其视为网络故障。
