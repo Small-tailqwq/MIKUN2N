@@ -38,7 +38,7 @@ $project = @'
   <PropertyGroup>
     <OutputType>Exe</OutputType><TargetFramework>net9.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
-    <InformationalVersion>0.5.8-11</InformationalVersion>
+    <InformationalVersion>99.0.0-2</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
   <ItemGroup><AssemblyMetadata Include="UpdateRepository" Value="fixture/updater" /></ItemGroup>
@@ -58,7 +58,7 @@ $details = [ordered]@{
     realClientOrTunnelStarted = $false
     realHttpRequests = $false
     versionOnly = [bool]$VersionOnly
-    fixtureVersion = '0.5.8-11'
+    fixtureVersion = '99.0.0-2'
     productionProjectVersionChanged = $false
 }
 $details | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidenceRoot 'legacy-validation.json') -Encoding utf8

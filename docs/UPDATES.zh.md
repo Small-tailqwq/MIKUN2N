@@ -37,7 +37,7 @@
 
 [Actions 工作流](../.github/workflows/release.yml)仅在推送版本 tag 时选择发布模式，核对项目版本后将四个文件附到草稿 Release。审阅并正式发布后，自动更新才能发现它。手动运行工作流使用测试模式，只上传工作流产物。本地构建不会创建 tag 或发布 Release。
 
-更新器比较版本时会忽略 `+test...` 元数据。需要测试更高版本时，仅对隔离夹具构建传入临时 `BuildNumber`，包也放在公开发布目录之外。原始 `-10` 源码回放夹具已在自己的临时工程里使用合成的 `0.5.8-11`；`Test-LegacyUpdater.ps1 -VersionOnly` 只核对版本比较与夹具 EXE 的实际版本，不进行 HTTP、替换或 UI 操作。这两种方式都不修改正式版本或既有产物。
+更新器比较版本时会忽略 `+test...` 元数据。需要测试更高版本时，仅对隔离夹具构建传入临时 `BuildNumber`，包也放在公开发布目录之外。原始 `-10` 源码回放夹具在自己的临时工程里使用明显虚构的夹具版本，不作为项目发行版本；`Test-LegacyUpdater.ps1 -VersionOnly` 只核对版本比较与夹具 EXE 的实际版本，不进行 HTTP、替换或 UI 操作。这两种方式都不修改正式版本或既有产物。
 
 两版都保留 `LICENSE.txt`、全部 `Runtime/LICENSE-*.txt` 与声明、`Runtime/n3n-3.4.4-source.zip` 内的原生修改声明，以及现有 TAP 源码提供承诺；分发二进制时应一同保留。公开发布还通过对应 tag 的源码树提供 MikuN2N 本体的对应源码。参见[第三方声明](../Runtime/THIRD-PARTY-NOTICES.txt)与[原生构建说明](../Runtime/BUILD.zh.md)。
 
@@ -48,7 +48,7 @@
 | 字段 | 内容 |
 |---|---|
 | `schema` | 整数 `1`。 |
-| `version` | 与项目版本及 Release tag 一致，例如 `0.5.8-11`。 |
+| `version` | 与项目版本及 Release tag 一致，例如 `0.5.8-10`。 |
 | `notes` | 更新说明字符串，可为空。 |
 | `pageUrl` | 同一仓库、对应 tag 的 HTTPS GitHub Release 页面。 |
 | `packages` | `self-contained` 与 `framework-dependent` 两项；每项含 `runtime`、规范 ZIP 文件名 `name`、版本化官方 GitHub 下载地址 `url`、字节数 `size` 与十六进制 `sha256`。 |

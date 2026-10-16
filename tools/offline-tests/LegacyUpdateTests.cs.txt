@@ -15,10 +15,10 @@ if (args is ["--hold", var ready])
     return;
 }
 var root = Path.GetFullPath(args[0]);
-const string version = "0.5.8-11";
-const string sc = "MikuN2N-0.5.8-11-win-x64.zip";
-const string fdd = "MikuN2N-0.5.8-11-win-x64-framework-dependent.zip";
-const string prefix = "https://github.com/fixture/updater/releases/download/0.5.8-11/";
+const string version = "99.0.0-2";
+const string sc = "MikuN2N-99.0.0-2-win-x64.zip";
+const string fdd = "MikuN2N-99.0.0-2-win-x64-framework-dependent.zip";
+const string prefix = "https://github.com/fixture/updater/releases/download/99.0.0-2/";
 if (args.Length > 1 && args[1] == "--version-only")
 {
     Check(AppVersion.TryParse(BuildIdentity.Version, out var current) &&
@@ -28,7 +28,7 @@ if (args.Length > 1 && args[1] == "--version-only")
         "only the temporary harness apphost reports the synthetic higher version");
     Check(AppVersion.TryParse(BuildIdentity.Version + "+test.fixture", out var stamped) &&
           stamped.CompareTo(current) == 0, "test identity does not advertise a higher release version");
-    Console.WriteLine("PASS: version-only fixture compares 0.5.8-10 to synthetic 0.5.8-11; no production version edit, HTTP, replacement or UI.");
+    Console.WriteLine("PASS: version-only fixture compares 0.5.8-10 to synthetic 99.0.0-2; no production version edit, HTTP, replacement or UI.");
     return;
 }
 var zipPath = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1]) ? Path.GetFullPath(args[1]) : Path.Combine(root, "fixture.zip");
@@ -62,7 +62,7 @@ OfflineTransport.Route = request =>
         };
         if (!missingChecksum) assets.Add(new { name = "SHA256SUMS", browser_download_url = prefix + "SHA256SUMS", size = 0, digest = (string?)null });
         if (lastMatch) assets.Add(new { name = "MikuN2N-extra-win-x64.zip", browser_download_url = prefix + "MikuN2N-extra-win-x64.zip", size = bytes.Length, digest = "sha256:" + hash });
-        var json = JsonSerializer.Serialize(new { tag_name = version, body = "fixture", html_url = "https://github.com/fixture/updater/releases/tag/0.5.8-11", draft = isDraft, prerelease = isPrerelease, assets });
+        var json = JsonSerializer.Serialize(new { tag_name = version, body = "fixture", html_url = "https://github.com/fixture/updater/releases/tag/99.0.0-2", draft = isDraft, prerelease = isPrerelease, assets });
         return new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
     }
     if (request.RequestUri.AbsolutePath.EndsWith("SHA256SUMS"))

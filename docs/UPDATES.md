@@ -37,7 +37,7 @@ Size and source-check evidence is saved under `artifacts/package-checks/<run-id>
 
 The [Actions workflow](../.github/workflows/release.yml) selects release mode only for a pushed version tag, checks it against the project version, then attaches the four assets to a draft Release. Publish a reviewed draft to enable automatic discovery. Manual workflow runs select test mode and only upload workflow artifacts. Local builds never create tags or publish releases.
 
-The updater ignores `+test...` metadata when comparing versions. To test a higher version, override `BuildNumber` only for an isolated fixture build and keep its package outside the public release directory. The immutable `-10` replay harness already puts synthetic `0.5.8-11` in its temporary project; `Test-LegacyUpdater.ps1 -VersionOnly` checks that comparison and actual fixture EXE version without HTTP, replacement or UI. Neither approach edits the production version or existing artifacts.
+The updater ignores `+test...` metadata when comparing versions. To test a higher version, override `BuildNumber` only for an isolated fixture build and keep its package outside the public release directory. The immutable `-10` replay harness uses a deliberately artificial fixture version in its temporary project, never a project release; `Test-LegacyUpdater.ps1 -VersionOnly` checks that comparison and actual fixture EXE version without HTTP, replacement or UI. Neither approach edits the production version or existing artifacts.
 
 Both packages retain `LICENSE.txt`, every `Runtime/LICENSE-*.txt` and notice, the native modification statement inside `Runtime/n3n-3.4.4-source.zip`, and the existing TAP source offer. Keep these with the binaries. A public release also provides MikuN2N's own corresponding source through its matching tagged tree. See [third-party notices](../Runtime/THIRD-PARTY-NOTICES.txt) and [native build instructions](../Runtime/BUILD.md).
 
@@ -48,7 +48,7 @@ The first request is `https://github.com/<owner>/<repo>/releases/latest/download
 | Field | Content |
 |---|---|
 | `schema` | Integer `1`. |
-| `version` | Exact project version and release tag, such as `0.5.8-11`. |
+| `version` | Exact project version and release tag, such as `0.5.8-10`. |
 | `notes` | Release notes string; may be empty. |
 | `pageUrl` | Same repository's HTTPS GitHub release page for that tag. |
 | `packages` | Entries for `self-contained` and `framework-dependent`; each has `runtime`, canonical ZIP `name`, versioned official GitHub `url`, byte `size`, and hexadecimal `sha256`. |
